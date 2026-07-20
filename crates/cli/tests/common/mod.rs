@@ -50,8 +50,14 @@ pub fn require_api_key() -> String {
 }
 
 pub fn run(home: &Path, args: &[&str]) -> Output {
+    // Isolate CLI config (`dirs::home_dir()` → `~/.memorylake`).
+    // Unix reads `HOME`; Windows uses the user profile (`USERPROFILE`), not `HOME`.
+    // Clear legacy `HOMEDRIVE`/`HOMEPATH` so they cannot override the temp profile.
     bin()
         .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env_remove("HOMEDRIVE")
+        .env_remove("HOMEPATH")
         .env_remove("MEMORYLAKE_API_KEY")
         .env_remove("MEMORYLAKE_BASE_URL")
         .args(args)
