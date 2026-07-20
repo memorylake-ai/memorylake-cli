@@ -1,0 +1,2 @@
+# Keep defaults; CI enforces `-D warnings`.
+msrv = "1.85.0"
