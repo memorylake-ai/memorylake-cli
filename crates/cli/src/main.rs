@@ -1,10 +1,14 @@
 //! MemoryLake command-line interface.
 
+mod commands;
+
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
-use memorylake_core::Config;
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
+
+use commands::auth::{AuthCommand, run as run_auth};
+use commands::workspace::{WorkspaceCommand, run as run_workspace};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -17,12 +21,31 @@ struct Cli {
     #[arg(short, long, action = ArgAction::Count, global = true)]
     verbose: u8,
 
+    /// Profile to use for API commands.
+    #[arg(long, global = true)]
+    profile: Option<String>,
+
+    /// Override the API base URL for this invocation.
+    #[arg(long, global = true)]
+    base_url: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Manage authentication and profiles.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    /// Manage workspaces.
+    #[command(visible_alias = "ws")]
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
+    },
     /// Print the CLI version.
     Version,
 }
@@ -30,9 +53,10 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
-    let _config = Config::new();
 
     match cli.command {
+        Commands::Auth { command } => run_auth(command, cli.profile, cli.base_url)?,
+        Commands::Workspace { command } => run_workspace(command, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }
