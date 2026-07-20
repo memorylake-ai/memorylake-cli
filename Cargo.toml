@@ -4,6 +4,7 @@ members = ["crates/cli", "crates/core"]
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.96.0"
 license = "MIT"
 repository = "https://github.com/memorylake/memorylake-cli"
 

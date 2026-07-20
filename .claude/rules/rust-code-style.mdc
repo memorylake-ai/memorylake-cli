@@ -1,0 +1,115 @@
+---
+globs: "crates/**/*"
+paths: "crates/**/*"
+alwaysApply: false
+---
+
+# Rust Code Style
+
+Apply when writing or reviewing Rust. Prefer clarity, explicit failure modes, and small APIs over cleverness.
+
+## Tooling (non-negotiable)
+
+- **MSRV: Rust >= 1.96.0** (keep `clippy.toml` / `package.rust-version` in sync).
+- Edition **2024**; format with workspace `rustfmt.toml`; keep Clippy clean (`-D warnings` in CI).
+- Use `cargo fmt` / `cargo clippy --workspace --all-targets -- -D warnings` before finishing.
+- Prefer stable Rust. Do not use APIs newer than the MSRV.
+
+## Naming & structure
+
+- Follow Rust API guidelines: `snake_case` items, `CamelCase` types/traits, `SCREAMING_SNAKE_CASE` consts.
+- One concern per module; re-export a small public surface from `lib.rs`.
+- Prefer `Foo` / `FooError` / `FooConfig` over vague names (`Manager`, `Helper`, `Util`).
+- Keep functions short and single-purpose; extract when nesting or args explode.
+
+```rust
+// ❌ BAD
+fn do_it(x: &str) -> String { ... }
+
+// ✅ GOOD
+fn normalize_path(path: &str) -> String { ... }
+```
+
+## Ownership & APIs
+
+- Accept `&str` / `&[T]` / `&Path` instead of owned types when ownership is not required.
+- Return owned values (`String`, `PathBuf`, structs) when the caller needs to keep them.
+- Prefer `&self` / `&mut self`; take `self` only for builders or consuming transforms.
+- Avoid unnecessary `Clone`; clone at the boundary where ownership must diverge.
+- Use `impl Iterator<Item = T>` / `impl AsRef<Path>` in public APIs when it simplifies callers.
+
+## Error handling
+
+- **Libraries (`memorylake-core`)**: typed errors with `thiserror`; expose `pub type Result<T> = std::result::Result<T, Error>`.
+- **Binaries (`memorylake-cli`)**: `anyhow::Result` at the edges; convert/context when crossing into UX.
+- Never swallow errors (`let _ = ...` on `Result`, empty `catch`). Use `?`, map, or explicit match.
+- Add context at boundaries (`with_context(|| ...)`) so failures explain *what* failed.
+- Prefer `Error` variants over stringly errors; reserve free-form messages for truly opaque cases.
+
+```rust
+// ❌ BAD (library)
+fn load() -> Result<Config, String> { ... }
+
+// ✅ GOOD (library)
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("failed to read config from {path}")]
+    ReadConfig { path: PathBuf, source: std::io::Error },
+}
+```
+
+## Option / Result discipline
+
+- Prefer `?`, `map`, `and_then`, `ok_or_else` over nested `match` when readability wins.
+- Use `expect` / `unwrap` only for invariants that are locally proven (and document why).
+- In library code, avoid panics for expected failures; return `Result` / `Option`.
+
+## Types & data modeling
+
+- Make invalid states unrepresentable (newtypes, enums over boolean flag soup).
+- Derive only what you need: `Debug` widely; `Clone`/`PartialEq` when meaningful; avoid reflexive `Default` if empty is invalid.
+- Prefer `#[must_use]` on results/builders where ignoring the value is a bug.
+- Keep public fields rare; use constructors / accessors when invariants exist.
+
+## Async & concurrency
+
+- Don't add async unless I/O or waiting requires it.
+- Hold locks briefly; never `.await` while holding a `std::sync` lock.
+- Prefer message passing / structured concurrency over shared mutable state.
+- Document thread-safety (`Send`/`Sync` implications) for public types that cross threads.
+
+## Logging & observability
+
+- Use `tracing` (`event!` / `info!` / `debug!`); no ad-hoc `println!` for diagnostics in library code.
+- CLI may print user-facing output; keep machine logs structured and level-gated (`-v` / `RUST_LOG`).
+- Log with useful fields; avoid logging secrets or huge payloads.
+
+## Documentation & comments
+
+- Every public item gets a `///` doc comment; modules get `//!`.
+- Docs explain *why* / contracts / edge cases; code shows *how*.
+- Comment only non-obvious invariants, safety notes, or workarounds—not restating the code.
+
+## `unsafe`
+
+- Default to safe Rust. `unsafe` needs a brief `// SAFETY:` comment stating the invariant upheld.
+- Encapsulate unsafety behind a small safe API; never scatter raw pointer logic.
+
+## Tests
+
+- Unit tests live in `#[cfg(test)] mod tests` next to the code when local.
+- Name tests after behavior: `rejects_empty_token`, not `test1`.
+- Cover error paths and edge cases, not only the happy path.
+- Prefer deterministic tests; avoid sleep/network unless integration-scoped.
+
+## Dependencies & workspace
+
+- Add crates via workspace dependencies when shared; pin thoughtfully, prefer well-maintained crates.
+- Don't pull heavy deps for one-liners you can write clearly in a few lines.
+- Feature-gate optional functionality; keep default features minimal for libraries.
+
+## PR hygiene for Rust changes
+
+- No dead code, unused imports, or `#[allow(...)]` without a one-line justification.
+- Match existing module layout and error/logging patterns before inventing new ones.
+- Prefer incremental, reviewable diffs over drive-by refactors.
