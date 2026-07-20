@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::workspaces::{ListWorkspacesParams, list_workspaces};
 use memorylake_core::{
-    Client, DEFAULT_BASE_URL, DEFAULT_PROFILE, Error as CoreError, Paths, ResolveOverrides,
-    auth_status, login_api_key, logout, resolve, switch_profile,
+    Client, DEFAULT_PROFILE, Error as CoreError, Paths, ResolveOverrides, auth_status,
+    login_api_key, logout, resolve, resolve_profile_base_url, switch_profile,
 };
 
 use interactive::{InteractiveLoginMethod, prompt_api_key, prompt_login_method};
@@ -121,10 +121,12 @@ pub fn run(
             println!("Logged in: {}", if status.logged_in { "yes" } else { "no" });
 
             if status.logged_in {
+                // Validate the same profile `auth_status` displayed (active), not a
+                // global `--profile` override that would drift from the printed summary.
                 let runtime = resolve(
                     &paths,
                     &ResolveOverrides {
-                        profile: global_profile,
+                        profile: status.active_profile.clone(),
                         base_url: global_base_url,
                     },
                 )
@@ -163,12 +165,14 @@ fn run_login(
     base_url: Option<String>,
 ) -> Result<()> {
     let profile = profile.unwrap_or_else(|| DEFAULT_PROFILE.to_string());
-    let probe_url = base_url.as_deref().unwrap_or(DEFAULT_BASE_URL);
+    // Same precedence as runtime resolve: CLI → profile config → env → default.
+    let (probe_url, _) = resolve_profile_base_url(paths, &profile, base_url.as_deref())
+        .context("resolve base URL for login")?;
 
     let method = if api_key.is_some() {
         InteractiveLoginMethod::ApiKey
     } else {
-        prompt_login_method(probe_url)?
+        prompt_login_method(&probe_url)?
     };
 
     match method {
@@ -178,12 +182,13 @@ fn run_login(
                 Some(_) => bail!("API key must not be empty"),
                 None => prompt_api_key()?,
             };
-            let client = Client::new(probe_url, &api_key).context("build API client for login")?;
+            let client = Client::new(&probe_url, &api_key).context("build API client for login")?;
             validate_client(&client).map_err(|err| {
                 anyhow::Error::new(err)
                     .context(format!("could not verify API key against {probe_url}"))
             })?;
-            login_api_key(paths, &profile, &api_key, base_url.as_deref())
+            // Persist the URL we validated so stored config matches the probe.
+            login_api_key(paths, &profile, &api_key, Some(&probe_url))
                 .with_context(|| format!("login for profile `{profile}`"))?;
             println!("Logged in to profile `{profile}` using api_key");
         }

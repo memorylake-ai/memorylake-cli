@@ -78,3 +78,40 @@ fn login_with_unreachable_base_url_does_not_persist() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn login_probes_existing_profile_base_url_without_cli_override() {
+    let home = temp_home();
+    let root = memorylake_root(&home);
+    fs::create_dir_all(&root).expect("create .memorylake");
+    fs::write(
+        root.join("config.toml"),
+        r#"
+active_profile = "default"
+
+[profiles.default]
+base_url = "https://127.0.0.1:1/openapi/memorylake"
+"#,
+    )
+    .expect("write config.toml");
+
+    let args = [
+        "auth",
+        "login",
+        "--api-key",
+        "sk_bogus_key_offline",
+        "--profile",
+        "default",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("https://127.0.0.1:1/openapi/memorylake"),
+        "login should probe the profile base URL; unexpected error: {err}"
+    );
+    assert!(
+        !root.join("credentials.toml").is_file(),
+        "credentials.toml should not be written after failed login"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}

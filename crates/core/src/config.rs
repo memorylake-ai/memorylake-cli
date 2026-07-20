@@ -271,6 +271,23 @@ fn resolve_base_url(
     (DEFAULT_BASE_URL.to_string(), BaseUrlSource::Default)
 }
 
+/// Resolve the base URL for `profile` using the same precedence as [`resolve`]:
+/// CLI override → profile `config.toml` → `MEMORYLAKE_BASE_URL` → default.
+///
+/// Does not require credentials; used by login probing before credentials exist.
+pub fn resolve_profile_base_url(
+    paths: &Paths,
+    profile: &str,
+    cli_base_url: Option<&str>,
+) -> Result<(String, BaseUrlSource)> {
+    let config = load_file_config(paths)?;
+    let profile_base = config
+        .profiles
+        .get(profile)
+        .and_then(|c| c.base_url.as_deref());
+    Ok(resolve_base_url(cli_base_url, profile_base))
+}
+
 fn resolve_api_key_api_method(
     profile: &str,
     profile_api_key: &str,
@@ -639,5 +656,56 @@ mod tests {
     fn mask_api_key_keeps_prefix_and_suffix() {
         assert_eq!(mask_api_key("sk_abcdefghij"), "sk_****ghij");
         assert_eq!(mask_api_key("ab"), "****");
+    }
+
+    #[test]
+    fn resolve_profile_base_url_follows_precedence() {
+        let _guard = env_lock().lock().unwrap();
+        let paths = temp_paths();
+
+        // SAFETY: guarded by env_lock; restored before unlock.
+        unsafe {
+            std::env::remove_var(ENV_BASE_URL);
+        }
+
+        let (url, source) = resolve_profile_base_url(&paths, "default", None).unwrap();
+        assert_eq!(url, DEFAULT_BASE_URL);
+        assert_eq!(source, BaseUrlSource::Default);
+
+        // SAFETY: guarded by env_lock.
+        unsafe {
+            std::env::set_var(ENV_BASE_URL, "https://env.example/openapi/memorylake");
+        }
+        let (url, source) = resolve_profile_base_url(&paths, "default", None).unwrap();
+        assert_eq!(url, "https://env.example/openapi/memorylake");
+        assert_eq!(source, BaseUrlSource::Env);
+
+        let mut config = FileConfig::default();
+        config.profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                base_url: Some("https://profile.example/openapi/memorylake".into()),
+            },
+        );
+        save_file_config(&paths, &config).unwrap();
+
+        let (url, source) = resolve_profile_base_url(&paths, "default", None).unwrap();
+        assert_eq!(url, "https://profile.example/openapi/memorylake");
+        assert_eq!(source, BaseUrlSource::Profile);
+
+        let (url, source) = resolve_profile_base_url(
+            &paths,
+            "default",
+            Some("https://cli.example/openapi/memorylake"),
+        )
+        .unwrap();
+        assert_eq!(url, "https://cli.example/openapi/memorylake");
+        assert_eq!(source, BaseUrlSource::Cli);
+
+        // SAFETY: guarded by env_lock.
+        unsafe {
+            std::env::remove_var(ENV_BASE_URL);
+        }
+        let _ = fs::remove_dir_all(&paths.root);
     }
 }
