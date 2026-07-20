@@ -1,6 +1,7 @@
 //! MemoryLake command-line interface.
 
 mod commands;
+mod interactive;
 
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};

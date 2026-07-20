@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 /// Login method identifier for API-key based auth.
 pub const LOGIN_METHOD_API_KEY: &str = "api_key";
 
+/// Login method identifier for OAuth-based auth.
+pub const LOGIN_METHOD_OAUTH: &str = "oauth";
+
 /// On-disk secret credentials file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialsFile {

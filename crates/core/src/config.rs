@@ -1,6 +1,7 @@
 //! Local configuration under `~/.memorylake`.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,11 +16,53 @@ pub const DEFAULT_BASE_URL: &str = "https://app.memorylake.ai/openapi/memorylake
 /// Default profile name when none is specified.
 pub const DEFAULT_PROFILE: &str = "default";
 
-/// Environment variable that overrides the resolved API key for a process.
+/// Environment variable used as API-key fallback when the profile has none.
 pub const ENV_API_KEY: &str = "MEMORYLAKE_API_KEY";
 
-/// Environment variable that overrides the resolved base URL for a process.
+/// Environment variable used as base-URL fallback when the profile has none.
 pub const ENV_BASE_URL: &str = "MEMORYLAKE_BASE_URL";
+
+/// Where the resolved API key came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiKeySource {
+    /// `credentials.toml` for the selected profile.
+    Profile,
+    /// `MEMORYLAKE_API_KEY` fallback.
+    Env,
+}
+
+impl fmt::Display for ApiKeySource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Profile => write!(f, "profile"),
+            Self::Env => write!(f, "env"),
+        }
+    }
+}
+
+/// Where the resolved base URL came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseUrlSource {
+    /// CLI `--base-url` for this invocation.
+    Cli,
+    /// Explicit `base_url` in `config.toml` for the profile.
+    Profile,
+    /// `MEMORYLAKE_BASE_URL` fallback.
+    Env,
+    /// Built-in default.
+    Default,
+}
+
+impl fmt::Display for BaseUrlSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cli => write!(f, "cli"),
+            Self::Profile => write!(f, "profile"),
+            Self::Env => write!(f, "env"),
+            Self::Default => write!(f, "default"),
+        }
+    }
+}
 
 /// Directory and file paths for MemoryLake CLI state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,8 +119,14 @@ pub struct RuntimeConfig {
     pub profile: String,
     /// Fully resolved API base URL.
     pub base_url: String,
+    /// Where [`Self::base_url`] came from.
+    pub base_url_source: BaseUrlSource,
     /// Fully resolved API key (never log this).
     pub api_key: String,
+    /// Where [`Self::api_key`] came from.
+    pub api_key_source: ApiKeySource,
+    /// Login method for the selected profile (`api_key`, `oauth`, …).
+    pub login_method: String,
 }
 
 /// Optional CLI / caller overrides applied during resolution.
@@ -96,11 +145,15 @@ pub struct AuthStatus {
     pub active_profile: Option<String>,
     /// Resolved base URL for the active profile (or default).
     pub base_url: String,
-    /// Masked API key, if credentials exist.
+    /// Where [`Self::base_url`] came from.
+    pub base_url_source: BaseUrlSource,
+    /// Masked API key, if one was resolved.
     pub api_key_masked: Option<String>,
-    /// Login method stored with the credentials.
+    /// Where the API key came from, when present.
+    pub api_key_source: Option<ApiKeySource>,
+    /// Login method stored with the profile credentials.
     pub login_method: Option<String>,
-    /// Whether an API key is available (profile or env).
+    /// Whether credentials can be resolved for the active profile.
     pub logged_in: bool,
 }
 
@@ -139,10 +192,15 @@ pub fn save_credentials(paths: &Paths, credentials: &CredentialsFile) -> Result<
 
 /// Resolve runtime API settings from files, environment, and overrides.
 ///
-/// Precedence for base URL (highest wins): CLI override → `MEMORYLAKE_BASE_URL` →
-/// profile `base_url` → built-in default.
+/// Profile selection: CLI `--profile` → `active_profile` → not logged in.
 ///
-/// Precedence for API key: `MEMORYLAKE_API_KEY` → profile credentials.
+/// Base URL (highest wins): CLI `--base-url` → explicit profile `base_url` in
+/// `config.toml` → `MEMORYLAKE_BASE_URL` → built-in default.
+///
+/// API key (when profile `login_method` is `api_key`): non-empty key in
+/// `credentials.toml` → `MEMORYLAKE_API_KEY` → missing key error.
+///
+/// Environment variables alone do not create a session; a profile must be selected.
 pub fn resolve(paths: &Paths, overrides: &ResolveOverrides) -> Result<RuntimeConfig> {
     let config = load_file_config(paths)?;
     let credentials = load_credentials(paths)?;
@@ -163,31 +221,72 @@ pub fn resolve(paths: &Paths, overrides: &ResolveOverrides) -> Result<RuntimeCon
     }
 
     let profile_cfg = config.profiles.get(&profile).cloned().unwrap_or_default();
+    let (base_url, base_url_source) = resolve_base_url(
+        overrides.base_url.as_deref(),
+        profile_cfg.base_url.as_deref(),
+    );
 
-    let base_url = overrides
-        .base_url
-        .clone()
-        .or_else(|| std::env::var(ENV_BASE_URL).ok().filter(|s| !s.is_empty()))
-        .or(profile_cfg.base_url)
-        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-
-    let api_key = std::env::var(ENV_API_KEY)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            credentials
-                .profiles
-                .get(&profile)
-                .map(|c| c.api_key.clone())
-        })
+    let cred = credentials
+        .profiles
+        .get(&profile)
         .ok_or_else(|| Error::MissingApiKey {
             name: profile.clone(),
         })?;
 
+    if cred.login_method != LOGIN_METHOD_API_KEY {
+        return Err(Error::UnsupportedLoginMethod {
+            name: profile,
+            method: cred.login_method.clone(),
+        });
+    }
+
+    let (api_key, api_key_source) = resolve_api_key_api_method(&profile, &cred.api_key)?;
+
     Ok(RuntimeConfig {
         profile,
         base_url,
+        base_url_source,
         api_key,
+        api_key_source,
+        login_method: cred.login_method.clone(),
+    })
+}
+
+fn resolve_base_url(
+    cli_base_url: Option<&str>,
+    profile_base_url: Option<&str>,
+) -> (String, BaseUrlSource) {
+    if let Some(url) = cli_base_url.map(str::trim).filter(|s| !s.is_empty()) {
+        return (url.to_string(), BaseUrlSource::Cli);
+    }
+    if let Some(url) = profile_base_url.map(str::trim).filter(|s| !s.is_empty()) {
+        return (url.to_string(), BaseUrlSource::Profile);
+    }
+    if let Ok(url) = std::env::var(ENV_BASE_URL) {
+        let url = url.trim();
+        if !url.is_empty() {
+            return (url.to_string(), BaseUrlSource::Env);
+        }
+    }
+    (DEFAULT_BASE_URL.to_string(), BaseUrlSource::Default)
+}
+
+fn resolve_api_key_api_method(
+    profile: &str,
+    profile_api_key: &str,
+) -> Result<(String, ApiKeySource)> {
+    let profile_key = profile_api_key.trim();
+    if !profile_key.is_empty() {
+        return Ok((profile_key.to_string(), ApiKeySource::Profile));
+    }
+    if let Ok(env_key) = std::env::var(ENV_API_KEY) {
+        let env_key = env_key.trim();
+        if !env_key.is_empty() {
+            return Ok((env_key.to_string(), ApiKeySource::Env));
+        }
+    }
+    Err(Error::MissingApiKey {
+        name: profile.to_string(),
     })
 }
 
@@ -264,42 +363,53 @@ pub fn switch_profile(paths: &Paths, profile: &str) -> Result<()> {
 }
 
 /// Build a display-oriented auth status snapshot.
+///
+/// Env-only credentials without an active profile do not count as logged in.
 pub fn auth_status(paths: &Paths) -> Result<AuthStatus> {
     let config = load_file_config(paths)?;
     let credentials = load_credentials(paths)?;
-
     let active_profile = config.active_profile.clone();
-    let (api_key_masked, login_method, profile_base) = match active_profile.as_deref() {
-        Some(name) => {
-            let cred = credentials.profiles.get(name);
-            let cfg = config.profiles.get(name);
-            (
-                cred.map(|c| mask_api_key(&c.api_key)),
-                cred.map(|c| c.login_method.clone()),
-                cfg.and_then(|c| c.base_url.clone()),
-            )
-        }
-        None => (None, None, None),
+
+    let Some(profile) = active_profile.clone() else {
+        return Ok(AuthStatus {
+            active_profile: None,
+            base_url: DEFAULT_BASE_URL.to_string(),
+            base_url_source: BaseUrlSource::Default,
+            api_key_masked: None,
+            api_key_source: None,
+            login_method: None,
+            logged_in: false,
+        });
     };
 
-    let env_key = std::env::var(ENV_API_KEY).ok().filter(|s| !s.is_empty());
-    let logged_in = api_key_masked.is_some() || env_key.is_some();
+    let profile_cfg = config.profiles.get(&profile).cloned().unwrap_or_default();
+    let (base_url, base_url_source) = resolve_base_url(None, profile_cfg.base_url.as_deref());
+    let login_method = credentials
+        .profiles
+        .get(&profile)
+        .map(|c| c.login_method.clone());
 
-    let base_url = std::env::var(ENV_BASE_URL)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or(profile_base)
-        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-
-    let api_key_masked = api_key_masked.or_else(|| env_key.as_deref().map(mask_api_key));
-
-    Ok(AuthStatus {
-        active_profile,
-        base_url,
-        api_key_masked,
-        login_method: login_method.or_else(|| env_key.map(|_| LOGIN_METHOD_API_KEY.to_string())),
-        logged_in,
-    })
+    match resolve(paths, &ResolveOverrides::default()) {
+        Ok(runtime) => Ok(AuthStatus {
+            active_profile: Some(profile),
+            base_url: runtime.base_url,
+            base_url_source: runtime.base_url_source,
+            api_key_masked: Some(mask_api_key(&runtime.api_key)),
+            api_key_source: Some(runtime.api_key_source),
+            login_method: Some(runtime.login_method),
+            logged_in: true,
+        }),
+        Err(Error::MissingApiKey { .. } | Error::UnsupportedLoginMethod { .. }) => Ok(AuthStatus {
+            active_profile: Some(profile),
+            base_url,
+            base_url_source,
+            api_key_masked: None,
+            api_key_source: None,
+            login_method,
+            logged_in: false,
+        }),
+        Err(err) => Err(err),
+    }
 }
 
 /// Mask an API key for safe display (`sk_****abcd`).
@@ -396,13 +506,17 @@ mod tests {
         assert_eq!(status.active_profile.as_deref(), Some("dev"));
         assert!(status.logged_in);
         assert_eq!(status.login_method.as_deref(), Some("api_key"));
+        assert_eq!(status.api_key_source, Some(ApiKeySource::Profile));
+        assert_eq!(status.base_url_source, BaseUrlSource::Profile);
         assert_eq!(status.base_url, "https://example.test/openapi/memorylake");
 
         switch_profile(&paths, "default").unwrap();
         let runtime = resolve(&paths, &ResolveOverrides::default()).unwrap();
         assert_eq!(runtime.profile, "default");
         assert_eq!(runtime.api_key, "sk_testkey1234");
+        assert_eq!(runtime.api_key_source, ApiKeySource::Profile);
         assert_eq!(runtime.base_url, DEFAULT_BASE_URL);
+        assert_eq!(runtime.base_url_source, BaseUrlSource::Profile);
 
         let removed = logout(&paths, Some("default")).unwrap();
         assert_eq!(removed, "default");
@@ -441,7 +555,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(runtime.base_url, "https://cli.example/openapi/memorylake");
+        assert_eq!(runtime.base_url_source, BaseUrlSource::Cli);
         assert_eq!(runtime.api_key, "sk_profilekey000");
+        assert_eq!(runtime.api_key_source, ApiKeySource::Profile);
 
         // SAFETY: guarded by env_lock; restored before unlock.
         unsafe {
@@ -449,10 +565,45 @@ mod tests {
             std::env::set_var(ENV_API_KEY, "sk_envkey9999");
         }
 
+        // Profile key and profile base_url win over env.
+        let runtime = resolve(&paths, &ResolveOverrides::default()).unwrap();
+        assert_eq!(
+            runtime.base_url,
+            "https://profile.example/openapi/memorylake"
+        );
+        assert_eq!(runtime.base_url_source, BaseUrlSource::Profile);
+        assert_eq!(runtime.api_key, "sk_profilekey000");
+        assert_eq!(runtime.api_key_source, ApiKeySource::Profile);
+
+        // Clear profile base_url → env base URL is used.
+        let mut config = load_file_config(&paths).unwrap();
+        config
+            .profiles
+            .get_mut("default")
+            .expect("default profile")
+            .base_url = None;
+        save_file_config(&paths, &config).unwrap();
+
         let runtime = resolve(&paths, &ResolveOverrides::default()).unwrap();
         assert_eq!(runtime.base_url, "https://env.example/openapi/memorylake");
-        assert_eq!(runtime.api_key, "sk_envkey9999");
+        assert_eq!(runtime.base_url_source, BaseUrlSource::Env);
 
+        // Empty profile api_key → env key fallback.
+        let mut credentials = load_credentials(&paths).unwrap();
+        credentials
+            .profiles
+            .get_mut("default")
+            .expect("default credentials")
+            .api_key
+            .clear();
+        save_credentials(&paths, &credentials).unwrap();
+
+        let runtime = resolve(&paths, &ResolveOverrides::default()).unwrap();
+        assert_eq!(runtime.api_key, "sk_envkey9999");
+        assert_eq!(runtime.api_key_source, ApiKeySource::Env);
+        assert_eq!(runtime.login_method, LOGIN_METHOD_API_KEY);
+
+        // CLI base URL still wins over profile/env.
         let runtime = resolve(
             &paths,
             &ResolveOverrides {
@@ -462,6 +613,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(runtime.base_url, "https://cli.example/openapi/memorylake");
+        assert_eq!(runtime.base_url_source, BaseUrlSource::Cli);
+
+        // Env alone without an active profile is not a session.
+        let mut config = load_file_config(&paths).unwrap();
+        config.active_profile = None;
+        save_file_config(&paths, &config).unwrap();
+        assert!(matches!(
+            resolve(&paths, &ResolveOverrides::default()),
+            Err(Error::NotLoggedIn)
+        ));
+        let status = auth_status(&paths).unwrap();
+        assert!(!status.logged_in);
+        assert!(status.active_profile.is_none());
 
         // SAFETY: guarded by env_lock.
         unsafe {

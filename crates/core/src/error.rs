@@ -37,7 +37,7 @@ pub enum Error {
     },
 
     /// No active profile and none was requested.
-    #[error("not logged in; run `memorylake auth login api_key --api-key <KEY>`")]
+    #[error("not logged in; run `memorylake auth login`")]
     NotLoggedIn,
 
     /// Referenced profile does not exist.
@@ -48,22 +48,39 @@ pub enum Error {
     },
 
     /// Profile exists in config but has no stored API key.
-    #[error("profile `{name}` has no API key; run `memorylake auth login api_key`")]
+    #[error("profile `{name}` has no API key; run `memorylake auth login`")]
     MissingApiKey {
         /// Profile missing credentials.
         name: String,
     },
 
+    /// Profile credentials use a login method that cannot be resolved yet.
+    #[error("profile `{name}` uses unsupported login method `{method}`")]
+    UnsupportedLoginMethod {
+        /// Profile name.
+        name: String,
+        /// Stored login method.
+        method: String,
+    },
+
     /// HTTP transport or protocol failure.
-    #[error("HTTP request failed: {0}")]
+    #[error("{}", format_http_error(.0))]
     Http(#[from] reqwest::Error),
 
-    /// API returned `success: false` or a non-success HTTP status with a body.
-    #[error("API error{code}: {message}")]
+    /// API returned an error or an unexpected HTTP response body.
+    #[error("{message}")]
     Api {
-        /// Optional machine-readable error code from the API.
-        code: String,
-        /// Human-readable error message.
+        /// Human-readable error message (may include HTTP status and body).
         message: String,
     },
+}
+
+fn format_http_error(err: &reqwest::Error) -> String {
+    if err.is_timeout() {
+        return "timed out connecting to MemoryLake API; check your network and base URL".into();
+    }
+    if err.is_connect() {
+        return "could not connect to MemoryLake API; check your network and base URL".into();
+    }
+    format!("request to MemoryLake API failed: {err}")
 }

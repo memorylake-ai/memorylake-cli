@@ -1,5 +1,6 @@
 //! Blocking HTTP client for the MemoryLake OpenAPI.
 
+use reqwest::StatusCode;
 use reqwest::blocking::Client as HttpClient;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Serialize;
@@ -79,7 +80,6 @@ impl Client {
         let mut headers = HeaderMap::new();
         let value = HeaderValue::from_str(&format!("Bearer {}", self.api_key)).map_err(|err| {
             Error::Api {
-                code: String::new(),
                 message: format!("invalid API key header value: {err}"),
             }
         })?;
@@ -88,6 +88,7 @@ impl Client {
     }
 }
 
+/// Successful MemoryLake OpenAPI envelope: `{"success":true,"data":...}`.
 #[derive(Debug, serde::Deserialize)]
 struct ApiEnvelope {
     success: bool,
@@ -99,25 +100,95 @@ struct ApiEnvelope {
     error_code: Option<String>,
 }
 
+/// Auth gateway error shape observed on 401:
+/// `{"error":{"message":"...","type":"authentication_error"}}`.
+#[derive(Debug, serde::Deserialize)]
+struct AuthErrorEnvelope {
+    error: AuthErrorBody,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AuthErrorBody {
+    message: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+}
+
 fn decode_envelope<T>(response: reqwest::blocking::Response) -> Result<T>
 where
     T: DeserializeOwned,
 {
     let status = response.status();
-    let envelope: ApiEnvelope = response.json()?;
+    let url = response.url().clone();
+    let body = response.text().map_err(Error::from)?;
+
+    if let Ok(auth_err) = serde_json::from_str::<AuthErrorEnvelope>(&body) {
+        let server_msg = auth_err
+            .error
+            .message
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| "unauthorized".into());
+        let kind = auth_err
+            .error
+            .kind
+            .filter(|k| !k.trim().is_empty())
+            .unwrap_or_else(|| "authentication_error".into());
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            || kind.contains("auth")
+        {
+            return Err(Error::Api {
+                message: format!(
+                    "API key was rejected by the server ({kind}): {server_msg}\n{}",
+                    format_http_response(status, &body)
+                ),
+            });
+        }
+    }
+
+    let envelope: ApiEnvelope = match serde_json::from_str(&body) {
+        Ok(envelope) => envelope,
+        Err(err) => {
+            return Err(Error::Api {
+                message: format!(
+                    "unexpected response from {url} (expected MemoryLake API envelope with `success`; JSON error: {err})\n{}",
+                    format_http_response(status, &body)
+                ),
+            });
+        }
+    };
 
     if !status.is_success() || !envelope.success {
         let code = envelope
             .error_code
-            .map(|c| format!(" ({c})"))
+            .filter(|c| !c.trim().is_empty())
+            .map(|c| format!(" [{c}]"))
             .unwrap_or_default();
-        let message = envelope.message.unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(Error::Api { code, message });
+        let message = envelope
+            .message
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| "request failed".into());
+        return Err(Error::Api {
+            message: format!("{message}{code}\n{}", format_http_response(status, &body)),
+        });
     }
 
     let data = envelope.data.unwrap_or(Value::Null);
     serde_json::from_value(data).map_err(|source| Error::Api {
-        code: String::new(),
-        message: format!("failed to decode API data: {source}"),
+        message: format!(
+            "unexpected API data from {url}: {source}\n{}",
+            format_http_response(status, &body)
+        ),
     })
+}
+
+fn format_http_response(status: StatusCode, body: &str) -> String {
+    let body = body.trim();
+    let body = if body.is_empty() {
+        "(empty body)".to_string()
+    } else if body.len() > 2_048 {
+        format!("{}…", &body[..2_048])
+    } else {
+        body.to_string()
+    };
+    format!("HTTP {status}\n{body}")
 }

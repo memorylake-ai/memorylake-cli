@@ -50,7 +50,12 @@ CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memoryla
 ## Auth & workspaces
 
 ```bash
-memorylake auth login api_key --api-key sk_... [--profile default] [--base-url URL]
+# Interactive: choose login method (API key or OAuth), then follow prompts
+memorylake auth login
+
+# Non-interactive API key login
+memorylake auth login --api-key sk-... [--profile default] [--base-url URL]
+
 memorylake auth status
 memorylake auth switch <profile>
 memorylake auth refresh
@@ -60,7 +65,20 @@ memorylake workspace list
 memorylake ws create --name "My Workspace" --custom-id my-ws-001
 ```
 
+`auth login` without `--api-key` opens an interactive picker (`api_key` / `oauth`). OAuth is listed but not implemented yet. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
+
 Config and credentials live under `~/.memorylake/` (`config.toml`, `credentials.toml`).
+
+### Credential / base URL resolution
+
+Profile selection: CLI `--profile` → `active_profile` → not logged in. Env vars alone are not a session.
+
+| Setting | Precedence (highest first) |
+| --- | --- |
+| Base URL | CLI `--base-url` → profile `base_url` in `config.toml` → `MEMORYLAKE_BASE_URL` → built-in default |
+| API key (`login_method = api_key`) | profile key in `credentials.toml` → `MEMORYLAKE_API_KEY` |
+
+`auth status` prints `Base URL source` and `API key source` (`profile` / `env` / `cli` / `default`).
 
 ## Lint
 

@@ -9,7 +9,6 @@ fn login_default(home: &std::path::Path, api_key: &str) {
     let args = [
         "auth",
         "login",
-        "api_key",
         "--api-key",
         api_key,
         "--profile",

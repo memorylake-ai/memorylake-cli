@@ -1,60 +1,80 @@
-//! Offline `auth` tests (no network; temp `$HOME` only).
+//! Offline `auth` tests (no valid API key required).
 
 use std::fs;
+use std::path::Path;
 
-use crate::common::{assert_success, run, temp_home};
+use crate::common::{assert_failure, assert_success, run, temp_home};
+
+fn memorylake_root(home: &Path) -> std::path::PathBuf {
+    home.join(".memorylake")
+}
 
 #[test]
-fn login_status_switch_logout_round_trip() {
+fn status_without_login_succeeds() {
     let home = temp_home();
+    let args = ["auth", "status"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("Active profile: (none)"));
+    assert!(stdout.contains("Logged in: no"));
+    assert!(!stdout.contains("Credentials: valid"));
+    let _ = fs::remove_dir_all(&home);
+}
 
+#[test]
+fn switch_unknown_profile_fails() {
+    let home = temp_home();
+    let args = ["auth", "switch", "missing"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("unknown profile") || err.contains("resolve credentials"),
+        "unexpected error output: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn login_without_api_key_fails_without_tty() {
+    let home = temp_home();
+    // Non-interactive CI/tests have no TTY, so interactive login must fail clearly.
+    let args = ["auth", "login"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("TTY") || err.contains("--api-key") || err.contains("interactive"),
+        "unexpected error output: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn login_with_unreachable_base_url_does_not_persist() {
+    let home = temp_home();
     let args = [
         "auth",
         "login",
-        "api_key",
         "--api-key",
-        "sk_testkey1234",
+        "sk_bogus_key_offline",
         "--profile",
         "default",
-    ];
-    let stdout = assert_success(&run(&home, &args), &args);
-    assert!(stdout.contains("Logged in to profile `default`"));
-
-    let args = [
-        "auth",
-        "login",
-        "api_key",
-        "--api-key",
-        "sk_devkey5678",
-        "--profile",
-        "dev",
         "--base-url",
-        "https://example.test/openapi/memorylake",
+        "https://127.0.0.1:1/openapi/memorylake",
     ];
-    assert_success(&run(&home, &args), &args);
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("could not verify API key")
+            || err.contains("could not connect")
+            || err.contains("request to MemoryLake API failed"),
+        "unexpected error output: {err}"
+    );
 
-    let args = ["auth", "status"];
-    let stdout = assert_success(&run(&home, &args), &args);
-    assert!(stdout.contains("Active profile: dev"));
-    assert!(stdout.contains("Logged in: yes"));
-    assert!(stdout.contains("Login method: api_key"));
-    assert!(stdout.contains("https://example.test/openapi/memorylake"));
-
-    let args = ["auth", "switch", "default"];
-    let stdout = assert_success(&run(&home, &args), &args);
-    assert!(stdout.contains("Switched active profile to `default`"));
-
-    let args = ["auth", "status"];
-    let stdout = assert_success(&run(&home, &args), &args);
-    assert!(stdout.contains("Active profile: default"));
-
-    let args = ["auth", "logout", "--profile", "default"];
-    let stdout = assert_success(&run(&home, &args), &args);
-    assert!(stdout.contains("Logged out profile `default`"));
-
-    let args = ["-v", "auth", "status"];
-    let stdout = assert_success(&run(&home, &args), &args);
-    assert!(stdout.contains("Active profile:"));
+    let root = memorylake_root(&home);
+    assert!(
+        !root.join("credentials.toml").is_file(),
+        "credentials.toml should not be written after failed login"
+    );
+    assert!(
+        !root.join("config.toml").is_file(),
+        "config.toml should not be written after failed login"
+    );
 
     let _ = fs::remove_dir_all(&home);
 }
