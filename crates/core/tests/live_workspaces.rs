@@ -1,47 +1,21 @@
 //! Live integration tests against a real MemoryLake environment.
 //!
 //! Requires `MEMORYLAKE_API_KEY` (from the environment or repo-root `.env`).
-//! When the key is missing, these tests skip so CI without secrets still passes.
+//! Missing or empty key fails the tests (no skip).
 
-use std::path::PathBuf;
+mod common;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use memorylake_core::api::workspaces::{
     CreateWorkspaceRequest, ListWorkspacesParams, create_workspace, list_workspaces,
 };
-use memorylake_core::{Client, DEFAULT_BASE_URL, ENV_API_KEY, ENV_BASE_URL};
 
-fn load_dotenv() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidates = [
-        manifest_dir.join("../../.env"),
-        manifest_dir.join(".env"),
-        PathBuf::from(".env"),
-    ];
-    for path in candidates {
-        if path.is_file() {
-            let _ = dotenvy::from_path(&path);
-            break;
-        }
-    }
-}
-
-fn live_client() -> Option<Client> {
-    load_dotenv();
-    let api_key = std::env::var(ENV_API_KEY).ok().filter(|s| !s.is_empty())?;
-    let base_url = std::env::var(ENV_BASE_URL)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-    Some(Client::new(base_url, api_key).expect("build live client"))
-}
+use common::live_client;
 
 #[test]
 fn refresh_list_workspaces_page() {
-    let Some(client) = live_client() else {
-        eprintln!("skipping live test: {ENV_API_KEY} not set");
-        return;
-    };
+    let client = live_client();
 
     let page = list_workspaces(
         &client,
@@ -58,10 +32,7 @@ fn refresh_list_workspaces_page() {
 
 #[test]
 fn create_and_list_workspace() {
-    let Some(client) = live_client() else {
-        eprintln!("skipping live test: {ENV_API_KEY} not set");
-        return;
-    };
+    let client = live_client();
 
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

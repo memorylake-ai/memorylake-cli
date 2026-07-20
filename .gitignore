@@ -17,3 +17,9 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Coverage
+lcov.info
+coverage/
+*.profraw
+*.profdata
