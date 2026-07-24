@@ -59,7 +59,7 @@ fn create_and_list_workspace() {
         &client,
         &ListWorkspacesParams {
             page_size: Some(50),
-            name: Some(name.clone()),
+            name_fuzzy: Some(name.clone()),
             ..ListWorkspacesParams::default()
         },
     )

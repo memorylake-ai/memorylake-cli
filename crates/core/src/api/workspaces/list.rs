@@ -25,8 +25,8 @@ pub struct ListWorkspacesParams {
     pub page_size: Option<u32>,
     /// Continuation token from a previous page.
     pub continuation_token: Option<String>,
-    /// Fuzzy name filter.
-    pub name: Option<String>,
+    /// Fuzzy filter by workspace name (partial match). Sent as `name_fuzzy`.
+    pub name_fuzzy: Option<String>,
 }
 
 /// List workspaces visible to the authenticated caller.
@@ -38,8 +38,8 @@ pub fn list_workspaces(client: &Client, params: &ListWorkspacesParams) -> Result
     if let Some(token) = &params.continuation_token {
         query.push(("continuation_token", token.clone()));
     }
-    if let Some(name) = &params.name {
-        query.push(("name", name.clone()));
+    if let Some(name_fuzzy) = &params.name_fuzzy {
+        query.push(("name_fuzzy", name_fuzzy.clone()));
     }
     client.get_data("/api/v3/workspaces", &query)
 }

@@ -1,5 +1,7 @@
 //! Blocking HTTP client for the MemoryLake OpenAPI.
 
+use std::collections::BTreeMap;
+
 use reqwest::StatusCode;
 use reqwest::blocking::Client as HttpClient;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -43,11 +45,18 @@ impl Client {
         T: DeserializeOwned,
     {
         let url = self.url(path);
-        let mut request = self.http.get(&url).headers(self.auth_headers()?);
+        let mut builder = self.http.get(&url).headers(self.auth_headers()?);
         for (key, value) in query {
-            request = request.query(&[(key, value)]);
+            builder = builder.query(&[(key, value)]);
         }
-        let response = request.send()?;
+        let request = builder.build()?;
+        tracing::trace!(
+            method = %request.method(),
+            url = %request.url(),
+            headers = ?redact_headers(request.headers()),
+            "HTTP request"
+        );
+        let response = self.http.execute(request)?;
         decode_envelope(response)
     }
 
@@ -58,12 +67,20 @@ impl Client {
         B: Serialize,
     {
         let url = self.url(path);
-        let response = self
+        let request = self
             .http
             .post(&url)
             .headers(self.auth_headers()?)
             .json(body)
-            .send()?;
+            .build()?;
+        tracing::trace!(
+            method = %request.method(),
+            url = %request.url(),
+            headers = ?redact_headers(request.headers()),
+            body = %request_body_as_str(&request),
+            "HTTP request"
+        );
+        let response = self.http.execute(request)?;
         decode_envelope(response)
     }
 
@@ -121,6 +138,13 @@ where
     let status = response.status();
     let url = response.url().clone();
     let body = response.text().map_err(Error::from)?;
+
+    tracing::trace!(
+        status = status.as_u16(),
+        url = %url,
+        body = %body,
+        "HTTP response"
+    );
 
     if let Ok(auth_err) = serde_json::from_str::<AuthErrorEnvelope>(&body) {
         let server_msg = auth_err
@@ -191,4 +215,68 @@ fn format_http_response(status: StatusCode, body: &str) -> String {
         body.to_string()
     };
     format!("HTTP {status}\n{body}")
+}
+
+/// Render headers for trace logs, redacting the `Authorization` value.
+fn redact_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let raw = value.to_str().unwrap_or("<non-utf8>");
+            let value_str = if name.as_str().eq_ignore_ascii_case("authorization") {
+                mask_auth_value(raw)
+            } else {
+                raw.to_string()
+            };
+            (name.as_str().to_string(), value_str)
+        })
+        .collect()
+}
+
+/// Mask an Authorization header value while preserving the scheme and the last
+/// 4 characters of the credential, e.g. `Bearer ******wxyz`. Credentials of
+/// 4 chars or fewer are masked entirely so we never expose the whole secret.
+fn mask_auth_value(value: &str) -> String {
+    let (prefix, secret) = match value.split_once(' ') {
+        Some((scheme, rest)) => (format!("{scheme} "), rest),
+        None => (String::new(), value),
+    };
+    let n = secret.chars().count();
+    if n <= 4 {
+        return format!("{prefix}{}", "*".repeat(n));
+    }
+    let tail: String = secret.chars().skip(n - 4).collect();
+    format!("{prefix}******{tail}")
+}
+
+/// Best-effort string view of a request body for trace logs.
+fn request_body_as_str(request: &reqwest::blocking::Request) -> String {
+    match request.body().and_then(|b| b.as_bytes()) {
+        Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_auth_value_keeps_scheme_and_last_four() {
+        assert_eq!(
+            mask_auth_value("Bearer sk-abc123def4567890"),
+            "Bearer ******7890"
+        );
+    }
+
+    #[test]
+    fn mask_auth_value_masks_short_secret_completely() {
+        assert_eq!(mask_auth_value("Bearer abcd"), "Bearer ****");
+        assert_eq!(mask_auth_value("Bearer a"), "Bearer *");
+    }
+
+    #[test]
+    fn mask_auth_value_handles_missing_scheme() {
+        assert_eq!(mask_auth_value("sk-abcdef123456"), "******3456");
+    }
 }

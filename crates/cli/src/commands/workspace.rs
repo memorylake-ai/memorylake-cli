@@ -18,9 +18,9 @@ pub enum WorkspaceCommand {
         /// Continuation token from a previous response.
         #[arg(long)]
         continuation_token: Option<String>,
-        /// Fuzzy filter by workspace name.
-        #[arg(long)]
-        name: Option<String>,
+        /// Fuzzy filter by workspace name (partial match).
+        #[arg(long = "name")]
+        name_fuzzy: Option<String>,
     },
     /// Create a workspace.
     Create {
@@ -51,14 +51,14 @@ pub fn run(
         WorkspaceCommand::List {
             page_size,
             continuation_token,
-            name,
+            name_fuzzy,
         } => {
             let data = list_workspaces(
                 &client,
                 &ListWorkspacesParams {
                     page_size,
                     continuation_token,
-                    name,
+                    name_fuzzy,
                 },
             )
             .context("list workspaces")?;
