@@ -740,6 +740,7 @@ dependencies = [
  "thiserror 2.0.19",
  "toml",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

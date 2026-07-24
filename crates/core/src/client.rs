@@ -279,4 +279,73 @@ mod tests {
     fn mask_auth_value_handles_missing_scheme() {
         assert_eq!(mask_auth_value("sk-abcdef123456"), "******3456");
     }
+
+    #[test]
+    fn redact_headers_masks_authorization_and_preserves_others() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-abcd1234567890"),
+        );
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        let redacted = redact_headers(&headers);
+        assert_eq!(redacted["authorization"], "Bearer ******7890");
+        assert_eq!(redacted["content-type"], "application/json");
+    }
+
+    #[test]
+    fn redact_headers_marks_non_utf8_values() {
+        let mut headers = HeaderMap::new();
+        // 0xC3 is a valid HTTP header byte but not printable ASCII, so
+        // `HeaderValue::to_str` fails and we fall back to the placeholder.
+        let value = HeaderValue::from_bytes(&[0xC3]).unwrap();
+        headers.insert("x-binary", value);
+
+        let redacted = redact_headers(&headers);
+        assert_eq!(redacted["x-binary"], "<non-utf8>");
+    }
+
+    #[test]
+    fn request_body_as_str_returns_json_body_bytes() {
+        let http = reqwest::blocking::Client::new();
+        let request = http
+            .post("http://example.invalid/")
+            .json(&serde_json::json!({"k": "v"}))
+            .build()
+            .unwrap();
+        assert_eq!(request_body_as_str(&request), r#"{"k":"v"}"#);
+    }
+
+    #[test]
+    fn request_body_as_str_empty_when_no_body() {
+        let http = reqwest::blocking::Client::new();
+        let request = http.get("http://example.invalid/").build().unwrap();
+        assert!(request_body_as_str(&request).is_empty());
+    }
+
+    #[test]
+    fn trace_calls_evaluate_at_trace_level() {
+        use std::net::TcpListener;
+        use tracing::subscriber::with_default;
+        use tracing_subscriber::fmt;
+
+        let subscriber = fmt::Subscriber::builder()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+
+        with_default(subscriber, || {
+            // Reserve then release a loopback port so `execute()` fails fast
+            // with connection refused — but only after `trace!` args run.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            drop(listener);
+
+            let client = Client::new(format!("http://{addr}"), "test-key-abcdefghij1234").unwrap();
+
+            let _ = client.get_data::<serde_json::Value>("/x", &[("k", "v".to_string())]);
+            let _ = client.post_data::<serde_json::Value, _>("/x", &serde_json::json!({"a": 1}));
+        });
+    }
 }
