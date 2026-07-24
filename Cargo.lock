@@ -734,6 +734,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "dotenvy",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",

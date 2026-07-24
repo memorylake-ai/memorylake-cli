@@ -3,7 +3,8 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use memorylake_core::api::workspaces::{
-    CreateWorkspaceRequest, ListWorkspacesParams, create_workspace, list_workspaces,
+    CreateWorkspaceRequest, ListWorkspacesParams, create_workspace, get_workspace,
+    get_workspace_by_custom_id, list_workspaces,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
@@ -33,6 +34,14 @@ pub enum WorkspaceCommand {
         /// Optional description.
         #[arg(long)]
         description: Option<String>,
+    },
+    /// Get a single workspace by id.
+    Get {
+        /// Workspace id (or custom_id when `--by-custom-id` is set).
+        id: String,
+        /// Treat the positional argument as a caller-defined custom_id.
+        #[arg(long)]
+        by_custom_id: bool,
     },
 }
 
@@ -78,6 +87,14 @@ pub fn run(
                 },
             )
             .context("create workspace")?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+        WorkspaceCommand::Get { id, by_custom_id } => {
+            let data = if by_custom_id {
+                get_workspace_by_custom_id(&client, &id).context("get workspace by custom_id")?
+            } else {
+                get_workspace(&client, &id).context("get workspace")?
+            };
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
     }
