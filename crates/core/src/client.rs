@@ -1,10 +1,11 @@
 //! Blocking HTTP client for the MemoryLake OpenAPI.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use reqwest::StatusCode;
-use reqwest::blocking::Client as HttpClient;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::blocking::{Body, Client as HttpClient};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -120,6 +121,55 @@ impl Client {
         decode_envelope(response)
     }
 
+    /// Upload one part of a chunked upload to its pre-signed `upload_url` and
+    /// return the `ETag` the storage backend assigned to it.
+    ///
+    /// No `Authorization` header is sent: `upload_url` carries its own
+    /// signature over a fixed header set, and MemoryLake credentials have no
+    /// meaning at the storage backend. The response is raw storage-backend
+    /// output, not a MemoryLake envelope, so it does not go through
+    /// [`decode_envelope`].
+    ///
+    /// `body` is consumed by the attempt; callers that retry must supply a
+    /// fresh one.
+    pub fn put_presigned_part(
+        &self,
+        upload_url: &str,
+        body: Body,
+    ) -> std::result::Result<String, PartUploadError> {
+        // `self.http`'s default headers carry only `Content-Type`; auth is
+        // applied per-request via `auth_headers`, which is deliberately not
+        // called here. Override the JSON default so the part is not mislabeled.
+        let response = self
+            .http
+            .put(upload_url)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(body)
+            .send()?;
+
+        let status = response.status();
+        tracing::trace!(
+            status = status.as_u16(),
+            url = %redact_presigned(upload_url),
+            "part upload response"
+        );
+
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(PartUploadError::Status {
+                status,
+                body: redact_presigned(&body).into_owned(),
+            });
+        }
+
+        response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .ok_or(PartUploadError::MissingETag)
+    }
+
     fn url(&self, path: &str) -> String {
         let path = if path.starts_with('/') {
             path.to_string()
@@ -138,6 +188,58 @@ impl Client {
         })?;
         headers.insert(AUTHORIZATION, value);
         Ok(headers)
+    }
+}
+
+/// Why a single pre-signed part upload attempt failed.
+///
+/// Kept separate from [`Error`] so the upload orchestrator can decide whether
+/// another attempt is worth making before flattening this into a user-facing
+/// message.
+#[derive(Debug, thiserror::Error)]
+pub enum PartUploadError {
+    /// The request never produced a response (connection, timeout, broken pipe).
+    #[error("{0}")]
+    Transport(#[from] reqwest::Error),
+
+    /// The storage backend answered with a non-success status.
+    #[error("storage backend returned HTTP {status}")]
+    Status {
+        /// Status returned by the storage backend.
+        status: StatusCode,
+        /// Response body, with credential-bearing parameters redacted.
+        body: String,
+    },
+
+    /// The upload succeeded but no `ETag` came back, so the part cannot be
+    /// referenced when finalizing.
+    #[error("storage backend accepted the part but returned no ETag header")]
+    MissingETag,
+}
+
+impl PartUploadError {
+    /// Whether re-sending the same part to the same pre-signed URL could
+    /// plausibly succeed.
+    ///
+    /// Expired or otherwise rejected URLs (4xx) are *not* retryable: the
+    /// signature is fixed, so every attempt fails identically. Only a fresh
+    /// upload session can recover, which is the caller's decision to make.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Transport(_) => true,
+            Self::Status { status, .. } => {
+                status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
+            }
+            Self::MissingETag => false,
+        }
+    }
+
+    /// Status returned by the storage backend, when there was a response.
+    pub fn status(&self) -> Option<StatusCode> {
+        match self {
+            Self::Status { status, .. } => Some(*status),
+            _ => None,
+        }
     }
 }
 
@@ -178,7 +280,7 @@ where
     tracing::trace!(
         status = status.as_u16(),
         url = %url,
-        body = %body,
+        body = %redact_presigned(&body),
         "HTTP response"
     );
 
@@ -242,15 +344,78 @@ where
 }
 
 fn format_http_response(status: StatusCode, body: &str) -> String {
-    let body = body.trim();
+    const MAX_BODY: usize = 2_048;
+
+    let body = redact_presigned(body.trim());
     let body = if body.is_empty() {
         "(empty body)".to_string()
-    } else if body.len() > 2_048 {
-        format!("{}…", &body[..2_048])
+    } else if body.len() > MAX_BODY {
+        // Bodies carry user-supplied names, so the cut can land mid-codepoint.
+        let mut end = MAX_BODY;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &body[..end])
     } else {
-        body.to_string()
+        body.into_owned()
     };
     format!("HTTP {status}\n{body}")
+}
+
+/// Query parameters that turn a URL into a replayable capability.
+///
+/// Pre-signed storage URLs reach us in two places: `upload_url` in a
+/// create-upload response, and `x_attrs` entries such as thumbnail links on
+/// ordinary items. Both end up in trace logs and error messages.
+const CREDENTIAL_QUERY_PARAMS: [&str; 3] = [
+    "x-amz-signature",
+    "x-amz-credential",
+    "x-amz-security-token",
+];
+
+/// Blank out the values of credential-bearing query parameters in `text`.
+///
+/// Operates on arbitrary text, not just URLs, because these links arrive
+/// embedded in JSON response bodies. Returns the input untouched when it holds
+/// nothing sensitive.
+fn redact_presigned(text: &str) -> Cow<'_, str> {
+    // ASCII-lowercasing preserves byte length, so indices map back to `text`.
+    let lower = text.to_ascii_lowercase();
+    if !lower.contains("x-amz-") {
+        return Cow::Borrowed(text);
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let Some((start, name)) = CREDENTIAL_QUERY_PARAMS
+            .iter()
+            .filter_map(|param| lower[cursor..].find(param).map(|at| (cursor + at, *param)))
+            .min_by_key(|(at, _)| *at)
+        else {
+            break;
+        };
+
+        let after_name = start + name.len();
+        if !lower[after_name..].starts_with('=') {
+            // A prefix match that is not this parameter; step past it.
+            out.push_str(&text[cursor..after_name]);
+            cursor = after_name;
+            continue;
+        }
+
+        let value_start = after_name + 1;
+        let value_end = text[value_start..]
+            .find(|c: char| c == '&' || c == '"' || c == '\'' || c.is_whitespace())
+            .map(|at| value_start + at)
+            .unwrap_or(text.len());
+
+        out.push_str(&text[cursor..value_start]);
+        out.push_str("REDACTED");
+        cursor = value_end;
+    }
+    out.push_str(&text[cursor..]);
+    Cow::Owned(out)
 }
 
 /// Render headers for trace logs, redacting the `Authorization` value.
@@ -296,6 +461,156 @@ fn request_body_as_str(request: &reqwest::blocking::Request) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::test_support::{json_ok, one_shot_server};
+
+    #[test]
+    fn library_item_id_colon_survives_into_the_request_line() {
+        let (base, server) = one_shot_server(json_ok(
+            r#"{"success":true,"message":"Item deleted successfully"}"#,
+        ));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+
+        client
+            .delete_data::<()>("/api/v1/drives/items/sc-a:inode-b")
+            .expect("delete envelope without data decodes");
+
+        // `encode_segment` leaving `:` alone is only half the story: the URL
+        // parser inside the HTTP stack could still normalize it. Assert on the
+        // bytes that actually go out.
+        let request = server.join().expect("server thread");
+        assert!(
+            request
+                .head
+                .starts_with("DELETE /api/v1/drives/items/sc-a:inode-b "),
+            "colon must reach the wire unencoded:\n{}",
+            request.head
+        );
+        assert!(request.has_header("authorization"));
+    }
+
+    #[test]
+    fn part_upload_sends_no_authorization_and_returns_etag() {
+        let (base, server) = one_shot_server(
+            "HTTP/1.1 200 OK\r\nETag: \"ef370f8d0a3551d387b27728c34c5906\"\r\n\
+             Content-Length: 0\r\n\r\n",
+        );
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let etag = client
+            .put_presigned_part(
+                &format!("{base}/bucket/part?X-Amz-Signature=deadbeef"),
+                Body::from(vec![1u8, 2, 3, 4]),
+            )
+            .expect("part upload succeeds");
+
+        // ETag is passed through verbatim, quotes included: the finalize
+        // endpoint accepts it either way, and echoing what storage returned is
+        // the form least likely to break.
+        assert_eq!(etag, "\"ef370f8d0a3551d387b27728c34c5906\"");
+
+        let request = server.join().expect("server thread");
+        assert!(
+            !request.has_header("authorization"),
+            "pre-signed part upload must not carry credentials:\n{}",
+            request.head
+        );
+        assert!(
+            request
+                .head
+                .starts_with("PUT /bucket/part?X-Amz-Signature=deadbeef ")
+        );
+        assert!(
+            request
+                .head
+                .to_ascii_lowercase()
+                .contains("content-type: application/octet-stream")
+        );
+        assert_eq!(request.body, vec![1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn part_upload_classifies_retryable_statuses() {
+        let (base, server) = one_shot_server(
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 9\r\n\r\nslow down",
+        );
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let err = client
+            .put_presigned_part(&format!("{base}/p"), Body::from(vec![0u8]))
+            .expect_err("503 is an error");
+        assert!(err.is_retryable());
+        assert_eq!(err.status(), Some(StatusCode::SERVICE_UNAVAILABLE));
+        let _ = server.join();
+    }
+
+    #[test]
+    fn part_upload_treats_expired_url_as_terminal() {
+        let (base, server) =
+            one_shot_server("HTTP/1.1 403 Forbidden\r\nContent-Length: 16\r\n\r\nRequest expired.");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let err = client
+            .put_presigned_part(&format!("{base}/p"), Body::from(vec![0u8]))
+            .expect_err("403 is an error");
+        // Retrying a fixed signature cannot help; only a new session can.
+        assert!(!err.is_retryable());
+        assert_eq!(err.status(), Some(StatusCode::FORBIDDEN));
+        let _ = server.join();
+    }
+
+    #[test]
+    fn part_upload_rejects_response_without_etag() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let err = client
+            .put_presigned_part(&format!("{base}/p"), Body::from(vec![0u8]))
+            .expect_err("missing ETag is an error");
+        assert!(matches!(err, PartUploadError::MissingETag));
+        assert!(!err.is_retryable());
+        let _ = server.join();
+    }
+
+    #[test]
+    fn redact_presigned_masks_signature_and_credential() {
+        let url = "https://s3.amazonaws.com/b/k?X-Amz-Algorithm=AWS4-HMAC-SHA256\
+                   &X-Amz-Credential=AKIAEXAMPLE%2F20260806%2Fus-east-1%2Fs3%2Faws4_request\
+                   &X-Amz-Expires=17999&X-Amz-Signature=7278c7e23a69cab27c3256ed08fc9e50";
+        let redacted = redact_presigned(url);
+        assert!(redacted.contains("X-Amz-Credential=REDACTED&"));
+        assert!(redacted.ends_with("X-Amz-Signature=REDACTED"));
+        // Non-credential parameters stay readable so traces remain useful.
+        assert!(redacted.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
+        assert!(redacted.contains("X-Amz-Expires=17999"));
+        assert!(!redacted.contains("AKIAEXAMPLE"));
+    }
+
+    #[test]
+    fn redact_presigned_handles_urls_embedded_in_json() {
+        // Thumbnail links arrive inside `x_attrs` on ordinary list responses.
+        let body = r#"{"x_attrs":{"x_thumbnail_uri":"https://s3/x?X-Amz-Signature=abc123"},"n":1}"#;
+        let redacted = redact_presigned(body);
+        assert_eq!(
+            redacted,
+            r#"{"x_attrs":{"x_thumbnail_uri":"https://s3/x?X-Amz-Signature=REDACTED"},"n":1}"#
+        );
+    }
+
+    #[test]
+    fn redact_presigned_leaves_ordinary_text_borrowed() {
+        let body = r#"{"success":true,"data":{"item_id":"sc-a:inode-b"}}"#;
+        assert!(matches!(redact_presigned(body), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn format_http_response_truncates_on_a_char_boundary() {
+        // Item names are user-supplied, so a byte-indexed cut can land inside a
+        // multi-byte codepoint.
+        let body = format!("{}示例工作表.xlsx", "x".repeat(2_046));
+        let formatted = format_http_response(StatusCode::OK, &body);
+        assert!(formatted.ends_with('…'));
+    }
 
     #[test]
     fn mask_auth_value_keeps_scheme_and_last_four() {

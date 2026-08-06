@@ -25,6 +25,48 @@ pub fn temp_home() -> PathBuf {
     root
 }
 
+/// A name no concurrent test run will collide with.
+///
+/// Live tests share one real workspace, so scratch objects must be
+/// distinguishable per process and per test.
+pub fn unique_name(tag: &str) -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "mlcli-{tag}-{}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    )
+}
+
+/// Create a scratch directory holding a `size`-byte `payload.bin`.
+///
+/// Returns the directory (for the caller to remove) and the file path.
+pub fn scratch_file(tag: &str, size: u64) -> (PathBuf, PathBuf) {
+    use std::io::{BufWriter, Write};
+
+    let dir = std::env::temp_dir().join(unique_name(tag));
+    fs::create_dir_all(&dir).expect("create scratch dir");
+    let path = dir.join("payload.bin");
+
+    let mut writer = BufWriter::new(fs::File::create(&path).expect("create scratch file"));
+    let chunk: Vec<u8> = (0..=255u8).cycle().take(64 * 1024).collect();
+    let mut remaining = size;
+    while remaining > 0 {
+        let take = remaining.min(chunk.len() as u64) as usize;
+        writer
+            .write_all(&chunk[..take])
+            .expect("write scratch file");
+        remaining -= take as u64;
+    }
+    writer.flush().expect("flush scratch file");
+
+    (dir, path)
+}
+
 pub fn load_dotenv() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let candidates = [

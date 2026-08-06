@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::auth::{AuthCommand, run as run_auth};
+use commands::library::{LibraryCommand, run as run_library};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
 
@@ -60,6 +61,12 @@ enum Commands {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Browse and manage Library files and folders.
+    #[command(visible_alias = "lib")]
+    Library {
+        #[command(subcommand)]
+        command: LibraryCommand,
+    },
     /// Print the CLI version.
     Version,
 }
@@ -73,6 +80,7 @@ fn main() -> Result<()> {
         Commands::Actor { command } => run_actor(command, cli.profile, cli.base_url)?,
         Commands::Workspace { command } => run_workspace(command, cli.profile, cli.base_url)?,
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
+        Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }
