@@ -9,16 +9,19 @@
 //!   meta/                # version, --help, …
 //!   auth/{offline,live}.rs
 //!   actor/{offline,live}.rs
+//!   library/{offline,live}.rs
 //!   workspace/{offline,live}.rs
 //!   project/{offline,live}.rs
 //! ```
 //!
 //! Offline tests isolate config under a temporary `$HOME`.
-//! Live API tests require `MEMORYLAKE_API_KEY` (env or repo-root `.env`).
+//! Live API tests require `MEMORYLAKE_API_KEY` (env or repo-root `.env`) and
+//! clean up the objects they create in the real workspace.
 
 mod actor;
 mod auth;
 mod common;
+mod library;
 mod meta;
 mod project;
 mod workspace;

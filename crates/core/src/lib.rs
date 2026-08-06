@@ -6,7 +6,10 @@ pub mod config;
 pub mod credentials;
 pub mod error;
 
-pub use client::Client;
+#[cfg(test)]
+mod test_support;
+
+pub use client::{Client, PartUploadError};
 pub use config::{
     ApiKeySource, AuthStatus, BaseUrlSource, DEFAULT_BASE_URL, DEFAULT_PROFILE, ENV_API_KEY,
     ENV_BASE_URL, FileConfig, Paths, ProfileConfig, ResolveOverrides, RuntimeConfig, auth_status,

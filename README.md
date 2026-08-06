@@ -25,7 +25,7 @@ cargo run -p memorylake-cli -- --help
 cargo test --workspace
 ```
 
-Live API tests (workspaces, actors, projects) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
+Live API tests (workspaces, actors, projects, library) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
 
 ```bash
 cp .env.example .env
@@ -35,6 +35,10 @@ cargo test -p memorylake-core
 
 Without a key, live tests fail. CI provides the key via the `MEMORYLAKE_API_KEY` GitHub secret.
 
+Live tests create real objects. Each one works inside its own uniquely-named
+scratch folder and deletes it when it finishes; a test that fails leaves its
+folder behind on purpose so the state can be inspected.
+
 ## Coverage
 
 ```bash
@@ -43,7 +47,7 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `auth` / `workspace` / `actor` / `project` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`.
+CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `auth` / `workspace` / `actor` / `project` / `library` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`.
 
 CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli) and as a workflow artifact.
 
@@ -135,6 +139,61 @@ memorylake proj delete --workspace ws-1234 proj-5678
 - `proj delete` is **irreversible** and runs without a confirmation prompt. The project's documents and conversations are removed with it.
 - `--by-custom-id` is only available on `project get`; `update` and `delete` address projects by their server-assigned id.
 - `metadata` and `industry_ids` are accepted by the API but not yet exposed on `create` / `update`.
+## Library
+
+The Library is MemoryLake's unified file system. Items are addressed by opaque
+`item_id`; the alias `MY_SPACE` stands for the workspace root and is accepted
+anywhere an id is.
+
+```bash
+memorylake library get MY_SPACE
+memorylake lib list                              # defaults to MY_SPACE
+memorylake lib list <item-id> --page-size 50 [--continuation-token TOKEN]
+
+memorylake lib mkdir "Reports" [--parent <item-id>] [--on-conflict deny]
+memorylake lib upload ./report.pdf [--parent <item-id>] [--name report.pdf]
+memorylake lib delete <item-id>
+```
+
+`library` has the visible alias `lib`. All commands print the API payload as
+pretty JSON.
+
+Paging is manual: `list` returns a `continuation_token`, which you pass back to
+fetch the next page.
+
+### Uploads
+
+`upload` runs the chunked-upload protocol: it opens a session for the file's
+exact size, `PUT`s each part to the pre-signed URL the server issued for it, and
+then finalizes the file. Part sizes are chosen by the server and vary with file
+size, so nothing is assumed locally. Files are streamed part by part rather than
+read into memory, and the file only becomes visible once finalization succeeds.
+
+A part that fails on a transport error, HTTP 5xx, or HTTP 429 is retried a few
+times with exponential backoff. Any other rejection — including the HTTP 403 an
+expired pre-signed URL returns — fails immediately, because a session's
+signatures cannot be refreshed. Re-run the upload in that case.
+
+### Name conflicts
+
+`--on-conflict` controls what happens when the target name is taken:
+
+| Value | Behavior |
+| --- | --- |
+| `rename` | Append a `_N` suffix (server default) |
+| `deny` | Fail with `409 DRIVE_ITEM_CONFLICT` |
+| `overwrite` | Files only: replace content, keeping the same `item_id` |
+| `replace` | Files only: delete and recreate, yielding a new `item_id` |
+
+Folders accept only `rename` and `deny`; the server rejects the others. Under
+`rename` the created item's name differs from the one you asked for, so prefer
+the `name` in the command's output.
+
+### Deletes are irreversible
+
+`library delete` removes the item immediately, with no confirmation prompt.
+Deleting a folder recursively removes everything inside it. The workspace root
+is protected by the server (`403 ACCESS_DENIED`).
 
 ## Lint
 

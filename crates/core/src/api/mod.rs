@@ -1,6 +1,8 @@
-//! MemoryLake v3 API bindings.
+//! MemoryLake API bindings.
 
 pub mod actors;
-pub(crate) mod path;
+pub mod library;
 pub mod projects;
 pub mod workspaces;
+
+pub(crate) mod path;

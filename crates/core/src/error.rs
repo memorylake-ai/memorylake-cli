@@ -63,6 +63,67 @@ pub enum Error {
         method: String,
     },
 
+    /// Local file has no bytes to upload.
+    #[error("cannot upload empty file {path}; the upload API requires at least 1 byte")]
+    EmptyUpload {
+        /// Path of the empty file.
+        path: PathBuf,
+    },
+
+    /// The upload session's part plan does not describe the file being sent.
+    #[error("upload session for {path} returned an unusable part plan: {reason}")]
+    UploadPlan {
+        /// Path being uploaded.
+        path: PathBuf,
+        /// What is wrong with the plan.
+        reason: String,
+    },
+
+    /// The file changed on disk while its upload was in flight.
+    #[error(
+        "{path} changed size during upload (session created for {expected} bytes, file is now {actual}); re-run the upload"
+    )]
+    UploadSizeChanged {
+        /// Path being uploaded.
+        path: PathBuf,
+        /// Size the upload session was created for.
+        expected: u64,
+        /// Size observed mid-upload.
+        actual: u64,
+    },
+
+    /// A pre-signed part URL was refused and cannot be retried.
+    ///
+    /// The signature is fixed for the lifetime of the session, so every further
+    /// attempt fails identically; only a fresh session can recover.
+    #[error(
+        "pre-signed URL for part {number} of {path} was refused (HTTP {status}); upload sessions are short-lived — re-run the upload"
+    )]
+    UploadUrlRefused {
+        /// Path being uploaded.
+        path: PathBuf,
+        /// 1-based part number.
+        number: u32,
+        /// Status returned by the storage backend.
+        status: u16,
+    },
+
+    /// A part exhausted its retry budget.
+    #[error("part {number} of {total} for {path} failed after {attempts} attempt(s)")]
+    PartUpload {
+        /// Path being uploaded.
+        path: PathBuf,
+        /// 1-based part number.
+        number: u32,
+        /// Total parts in the plan.
+        total: u32,
+        /// Attempts made before giving up.
+        attempts: u32,
+        /// Underlying transport or storage failure.
+        #[source]
+        source: crate::client::PartUploadError,
+    },
+
     /// HTTP transport or protocol failure.
     #[error("{}", format_http_error(.0))]
     Http(#[from] reqwest::Error),
