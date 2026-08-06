@@ -8,6 +8,7 @@ use clap::{ArgAction, Parser, Subcommand};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
+use commands::actor::{ActorCommand, run as run_actor};
 use commands::auth::{AuthCommand, run as run_auth};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
 
@@ -41,6 +42,11 @@ enum Commands {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Manage actors and their workspace bindings.
+    Actor {
+        #[command(subcommand)]
+        command: ActorCommand,
+    },
     /// Manage workspaces.
     #[command(visible_alias = "ws")]
     Workspace {
@@ -57,6 +63,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Auth { command } => run_auth(command, cli.profile, cli.base_url)?,
+        Commands::Actor { command } => run_actor(command, cli.profile, cli.base_url)?,
         Commands::Workspace { command } => run_workspace(command, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
