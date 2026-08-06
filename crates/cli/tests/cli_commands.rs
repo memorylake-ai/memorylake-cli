@@ -10,6 +10,7 @@
 //!   auth/{offline,live}.rs
 //!   actor/{offline,live}.rs
 //!   workspace/{offline,live}.rs
+//!   project/{offline,live}.rs
 //! ```
 //!
 //! Offline tests isolate config under a temporary `$HOME`.
@@ -19,4 +20,5 @@ mod actor;
 mod auth;
 mod common;
 mod meta;
+mod project;
 mod workspace;

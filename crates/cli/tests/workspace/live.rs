@@ -3,17 +3,11 @@
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::common::{assert_success, require_api_key, run, temp_home};
+use crate::common::{assert_success, live_base_url, login_args, require_api_key, run, temp_home};
 
 fn login_default(home: &std::path::Path, api_key: &str) {
-    let args = [
-        "auth",
-        "login",
-        "--api-key",
-        api_key,
-        "--profile",
-        "default",
-    ];
+    let base_url = live_base_url();
+    let args = login_args(api_key, "default", base_url.as_deref());
     assert_success(&run(home, &args), &args);
 }
 

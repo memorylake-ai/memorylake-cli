@@ -2,21 +2,17 @@
 
 use std::fs;
 
-use crate::common::{assert_failure, assert_success, require_api_key, run, temp_home};
+use crate::common::{
+    assert_failure, assert_success, live_base_url, login_args, require_api_key, run, temp_home,
+};
 
 #[test]
 fn login_status_switch_refresh_round_trip() {
     let api_key = require_api_key();
     let home = temp_home();
+    let base_url = live_base_url();
 
-    let args = [
-        "auth",
-        "login",
-        "--api-key",
-        api_key.as_str(),
-        "--profile",
-        "default",
-    ];
+    let args = login_args(api_key.as_str(), "default", base_url.as_deref());
     let stdout = assert_success(&run(&home, &args), &args);
     assert!(stdout.contains("Logged in to profile `default`"));
 
@@ -28,14 +24,7 @@ fn login_status_switch_refresh_round_trip() {
     assert!(stdout.contains("Base URL source:"));
     assert!(stdout.contains("Credentials: valid"));
 
-    let args = [
-        "auth",
-        "login",
-        "--api-key",
-        api_key.as_str(),
-        "--profile",
-        "dev",
-    ];
+    let args = login_args(api_key.as_str(), "dev", base_url.as_deref());
     assert_success(&run(&home, &args), &args);
 
     let args = ["auth", "switch", "default"];
@@ -57,15 +46,13 @@ fn login_status_switch_refresh_round_trip() {
 fn login_with_garbage_key_fails_and_does_not_persist() {
     let _api_key = require_api_key();
     let home = temp_home();
+    let base_url = live_base_url();
 
-    let args = [
-        "auth",
-        "login",
-        "--api-key",
+    let args = login_args(
         "sk_definitely_not_a_valid_key_0000",
-        "--profile",
         "default",
-    ];
+        base_url.as_deref(),
+    );
     let err = assert_failure(&run(&home, &args), &args);
     assert!(
         err.contains("API key was rejected")
