@@ -1,38 +1,13 @@
 //! Get a single workspace (`GET /api/v3/workspaces/{id}`).
 
-use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
-
+use crate::api::path::encode_segment;
 use crate::client::Client;
 use crate::error::Result;
 
 use super::types::Workspace;
 
-/// Control chars plus the URL-structural bytes we must escape when placing an
-/// id into a path segment. Deliberately narrow so `ws-...` ids stay readable
-/// in logs while `/`, `?`, spaces, etc. cannot corrupt the URL.
-const PATH_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'"')
-    .add(b'#')
-    .add(b'%')
-    .add(b'/')
-    .add(b'<')
-    .add(b'>')
-    .add(b'?')
-    .add(b'[')
-    .add(b'\\')
-    .add(b']')
-    .add(b'^')
-    .add(b'`')
-    .add(b'{')
-    .add(b'|')
-    .add(b'}');
-
 fn workspace_path(id: &str) -> String {
-    format!(
-        "/api/v3/workspaces/{}",
-        utf8_percent_encode(id, PATH_ENCODE_SET)
-    )
+    format!("/api/v3/workspaces/{}", encode_segment(id))
 }
 
 /// Fetch a workspace by its server-assigned id (`ws-...`).

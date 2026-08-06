@@ -25,7 +25,7 @@ cargo run -p memorylake-cli -- --help
 cargo test --workspace
 ```
 
-Live API tests (workspaces) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
+Live API tests (workspaces, actors) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
 
 ```bash
 cp .env.example .env
@@ -43,7 +43,7 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `auth` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`.
+CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `auth` / `workspace` / `actor` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`.
 
 CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli) and as a workflow artifact.
 
@@ -79,6 +79,37 @@ Profile selection: CLI `--profile` → `active_profile` → not logged in. Env v
 | API key (`login_method = api_key`) | profile key in `credentials.toml` → `MEMORYLAKE_API_KEY` |
 
 `auth status` prints `Base URL source` and `API key source` (`profile` / `env` / `cli` / `default`).
+
+## Actors
+
+Actors are MemoryLake's identity layer — the subject every memory is attributed to. An actor exists account-wide and must be bound to a workspace before it can participate there.
+
+```bash
+memorylake actor create --custom-id user-ext-001 --display-name "Alice Chen" \
+  [--type HUMAN|ASSISTANT] [--description TEXT] [--metadata '{"tier":"premium"}']
+
+memorylake actor list [--page-size 20] [--continuation-token TOKEN] \
+  [--type HUMAN|ASSISTANT] [--name "Alice"]
+
+memorylake actor get act-a1b2c3d4e5f6
+memorylake actor get user-ext-001 --by-custom-id
+
+memorylake actor update act-a1b2c3d4e5f6 --display-name "Alice Chen (VIP)"
+memorylake actor delete act-a1b2c3d4e5f6
+
+# Workspace bindings
+memorylake actor bind   --workspace ws-... --actor act-...
+memorylake actor unbind --workspace ws-... --actor act-...
+memorylake actor list --workspace ws-...
+```
+
+- `--custom-id` is **unique account-wide**, not per workspace.
+- `--type` only accepts the exact values `HUMAN` and `ASSISTANT`; a typo is rejected before any request. Types returned by the server that this build does not know are passed through unchanged.
+- `--metadata` takes a JSON object and is validated locally. On `actor update` it **replaces** the stored metadata wholesale — the server does not merge, so include every key you want to keep.
+- `actor update` changes only the fields you pass, and requires at least one of `--display-name`, `--description`, `--metadata`.
+- `actor list --workspace <id>` returns workspace **bindings** (`actor_id`, `bound_at`, …), a different shape from the actor objects returned without the flag.
+- `actor delete` is **irreversible** and runs without a confirmation prompt. Existing memories survive but can no longer be referenced, and all workspace bindings are removed. `actor unbind` is the reversible alternative: it drops one workspace membership and keeps the actor.
+- `--by-custom-id` is only available on `actor get`.
 
 ## Lint
 

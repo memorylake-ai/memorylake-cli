@@ -8,12 +8,14 @@
 //!   common/              # shared process helpers
 //!   meta/                # version, --help, …
 //!   auth/{offline,live}.rs
+//!   actor/{offline,live}.rs
 //!   workspace/{offline,live}.rs
 //! ```
 //!
 //! Offline tests isolate config under a temporary `$HOME`.
 //! Live API tests require `MEMORYLAKE_API_KEY` (env or repo-root `.env`).
 
+mod actor;
 mod auth;
 mod common;
 mod meta;

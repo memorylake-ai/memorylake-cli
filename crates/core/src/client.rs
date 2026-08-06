@@ -49,15 +49,7 @@ impl Client {
         for (key, value) in query {
             builder = builder.query(&[(key, value)]);
         }
-        let request = builder.build()?;
-        tracing::trace!(
-            method = %request.method(),
-            url = %request.url(),
-            headers = ?redact_headers(request.headers()),
-            "HTTP request"
-        );
-        let response = self.http.execute(request)?;
-        decode_envelope(response)
+        self.send(builder.build()?)
     }
 
     /// Perform a POST with a JSON body and deserialize the API `data` payload.
@@ -73,6 +65,50 @@ impl Client {
             .headers(self.auth_headers()?)
             .json(body)
             .build()?;
+        self.send(request)
+    }
+
+    /// Perform a PATCH with a JSON body and deserialize the API `data` payload.
+    pub fn patch_data<T, B>(&self, path: &str, body: &B) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
+        let url = self.url(path);
+        let request = self
+            .http
+            .patch(&url)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .build()?;
+        self.send(request)
+    }
+
+    /// Perform a DELETE and deserialize the API `data` payload.
+    ///
+    /// Endpoints that answer `{"success": true, "message": ...}` with no `data`
+    /// decode into `()`.
+    pub fn delete_data<T>(&self, path: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let url = self.url(path);
+        let request = self
+            .http
+            .delete(&url)
+            .headers(self.auth_headers()?)
+            .build()?;
+        self.send(request)
+    }
+
+    /// Trace, execute, and decode a prepared request.
+    ///
+    /// Every verb funnels through here so the `Authorization` header is
+    /// redacted in exactly one place and no method can bypass it.
+    fn send<T>(&self, request: reqwest::blocking::Request) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
         tracing::trace!(
             method = %request.method(),
             url = %request.url(),
@@ -346,6 +382,238 @@ mod tests {
 
             let _ = client.get_data::<serde_json::Value>("/x", &[("k", "v".to_string())]);
             let _ = client.post_data::<serde_json::Value, _>("/x", &serde_json::json!({"a": 1}));
+            let _ = client.patch_data::<serde_json::Value, _>("/x", &serde_json::json!({"a": 1}));
+            let _ = client.delete_data::<()>("/x");
         });
+    }
+
+    #[test]
+    fn patch_and_delete_mask_authorization_in_traces() {
+        use std::net::TcpListener;
+        use tracing::subscriber::with_default;
+        use tracing_subscriber::fmt;
+
+        let log = SharedBuf::default();
+        let subscriber = fmt::Subscriber::builder()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .finish();
+
+        with_default(subscriber, || {
+            // Dead loopback port: the request fails after `trace!` has already
+            // rendered its fields, which is exactly what we want to inspect.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            drop(listener);
+
+            let client = Client::new(format!("http://{addr}"), "sk_supersecret_7890").unwrap();
+            let _ = client.patch_data::<serde_json::Value, _>("/x", &serde_json::json!({"a": 1}));
+            let _ = client.delete_data::<()>("/x");
+        });
+
+        let logged = log.contents();
+        assert!(logged.contains("PATCH"), "PATCH not traced: {logged}");
+        assert!(logged.contains("DELETE"), "DELETE not traced: {logged}");
+        assert!(
+            logged.contains("Bearer ******7890"),
+            "authorization not masked: {logged}"
+        );
+        assert!(
+            !logged.contains("sk_supersecret_7890"),
+            "raw API key leaked into trace output: {logged}"
+        );
+    }
+
+    #[test]
+    fn delete_accepts_success_envelope_without_data() {
+        let server = StubServer::new(
+            "200 OK",
+            r#"{"success":true,"message":"Operation completed successfully"}"#,
+        );
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        client
+            .delete_data::<()>("/api/v3/actors/act-1")
+            .expect("empty-data envelope should decode into ()");
+
+        let request = server.received();
+        assert!(
+            request.starts_with("DELETE /api/v3/actors/act-1 "),
+            "unexpected request line: {request}"
+        );
+    }
+
+    #[test]
+    fn patch_sends_json_body_and_decodes_data() {
+        let server = StubServer::new("200 OK", r#"{"success":true,"data":{"id":"act-1"}}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let data: Value = client
+            .patch_data(
+                "/api/v3/actors/act-1",
+                &serde_json::json!({"display_name": "Alice"}),
+            )
+            .expect("patch should decode data");
+        assert_eq!(data["id"], "act-1");
+
+        let request = server.received();
+        assert!(
+            request.starts_with("PATCH /api/v3/actors/act-1 "),
+            "unexpected request line: {request}"
+        );
+        assert!(
+            request.contains(r#"{"display_name":"Alice"}"#),
+            "body not sent: {request}"
+        );
+    }
+
+    #[test]
+    fn empty_data_endpoints_still_fail_on_unsuccessful_envelope() {
+        let server = StubServer::new(
+            "200 OK",
+            r#"{"success":false,"message":"actor not found","error_code":"ACTOR_NOT_FOUND"}"#,
+        );
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let err = client
+            .delete_data::<()>("/api/v3/actors/missing")
+            .expect_err("success:false must not decode as an empty-data success");
+        let message = err.to_string();
+        assert!(message.contains("actor not found"), "{message}");
+        assert!(message.contains("[ACTOR_NOT_FOUND]"), "{message}");
+    }
+
+    #[test]
+    fn payload_endpoints_still_reject_missing_data() {
+        // Accepting an absent `data` for delete must not loosen decoding for
+        // endpoints that are supposed to return a payload.
+        #[derive(Debug, serde::Deserialize)]
+        struct Payload {
+            #[allow(dead_code)] // only its absence is under test
+            id: String,
+        }
+
+        let server = StubServer::new("200 OK", r#"{"success":true}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let err = client
+            .get_data::<Payload>("/api/v3/actors/act-1", &[])
+            .expect_err("a payload endpoint must reject a missing data field");
+        assert!(
+            err.to_string().contains("unexpected API data"),
+            "{}",
+            err.to_string()
+        );
+    }
+
+    /// Shared in-memory sink so a test can assert on rendered trace output.
+    #[derive(Clone, Default)]
+    struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl SharedBuf {
+        fn contents(&self) -> String {
+            let guard = self.0.lock().unwrap_or_else(|err| err.into_inner());
+            String::from_utf8_lossy(&guard).into_owned()
+        }
+    }
+
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut guard = self.0.lock().unwrap_or_else(|err| err.into_inner());
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// One-shot loopback HTTP server: serves a single canned response and hands
+    /// the raw request text back so tests can assert on method, path, and body.
+    struct StubServer {
+        base_url: String,
+        requests: std::sync::mpsc::Receiver<String>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl StubServer {
+        fn new(status_line: &str, body: &str) -> Self {
+            use std::net::TcpListener;
+
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
+            let addr = listener.local_addr().expect("stub server address");
+            let response = format!(
+                "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+
+            let (sender, requests) = std::sync::mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                use std::io::Write;
+
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let request = read_http_request(&mut stream);
+                // Best effort: if the receiver is gone the test already ended.
+                let _ = sender.send(request);
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            });
+
+            Self {
+                base_url: format!("http://{addr}"),
+                requests,
+                handle: Some(handle),
+            }
+        }
+
+        fn received(&self) -> String {
+            self.requests
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("stub server should have received a request")
+        }
+    }
+
+    impl Drop for StubServer {
+        fn drop(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                // Best effort: a panicking server thread already failed the test.
+                let _ = handle.join();
+            }
+        }
+    }
+
+    /// Read one complete HTTP request (head plus `content-length` body).
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+
+        let mut data = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            let read = match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => read,
+            };
+            data.extend_from_slice(&chunk[..read]);
+
+            let Some(head_end) = data.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&data[..head_end]).to_ascii_lowercase();
+            let content_length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if data.len() >= head_end + 4 + content_length {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&data).into_owned()
     }
 }
