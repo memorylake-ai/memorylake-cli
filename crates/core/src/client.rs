@@ -3,9 +3,9 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use reqwest::StatusCode;
 use reqwest::blocking::{Body, Client as HttpClient};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue};
+use reqwest::{StatusCode, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -102,14 +102,37 @@ impl Client {
         self.send(request)
     }
 
-    /// Trace, execute, and decode a prepared request.
+    /// Perform a DELETE whose successful response carries no usable payload.
     ///
-    /// Every verb funnels through here so the `Authorization` header is
-    /// redacted in exactly one place and no method can bypass it.
+    /// Prefer this over `delete_data::<()>` for endpoints documented to answer
+    /// `{"success": true, "data": {}}`: an empty JSON *object* cannot
+    /// deserialize into `()`, so the unit form would reject a perfectly good
+    /// response. This variant validates the envelope — a non-2xx status or
+    /// `success: false` is still an error — and discards whatever `data` holds.
+    pub fn delete_empty(&self, path: &str) -> Result<()> {
+        let url = self.url(path);
+        let request = self
+            .http
+            .delete(&url)
+            .headers(self.auth_headers()?)
+            .build()?;
+        validate_envelope(self.execute(request)?)?;
+        Ok(())
+    }
+
+    /// Trace, execute, and decode a prepared request.
     fn send<T>(&self, request: reqwest::blocking::Request) -> Result<T>
     where
         T: DeserializeOwned,
     {
+        decode_envelope(self.execute(request)?)
+    }
+
+    /// Trace and execute a prepared request.
+    ///
+    /// Every verb funnels through here so the `Authorization` header is
+    /// redacted in exactly one place and no method can bypass it.
+    fn execute(&self, request: reqwest::blocking::Request) -> Result<reqwest::blocking::Response> {
         tracing::trace!(
             method = %request.method(),
             url = %request.url(),
@@ -117,8 +140,7 @@ impl Client {
             body = %request_body_as_str(&request),
             "HTTP request"
         );
-        let response = self.http.execute(request)?;
-        decode_envelope(response)
+        Ok(self.http.execute(request)?)
     }
 
     /// Upload one part of a chunked upload to its pre-signed `upload_url` and
@@ -269,10 +291,19 @@ struct AuthErrorBody {
     kind: Option<String>,
 }
 
-fn decode_envelope<T>(response: reqwest::blocking::Response) -> Result<T>
-where
-    T: DeserializeOwned,
-{
+/// Status, URL, and raw body of a response, retained for error messages.
+struct ResponseContext {
+    status: StatusCode,
+    url: Url,
+    body: String,
+}
+
+/// Validate the MemoryLake envelope and return its `data` payload.
+///
+/// Errors on auth-gateway error bodies, unparseable bodies, non-2xx statuses,
+/// and `success: false`. A missing `data` key yields [`Value::Null`]. Callers
+/// that expect no payload discard the value; [`decode_envelope`] deserializes it.
+fn validate_envelope(response: reqwest::blocking::Response) -> Result<(Value, ResponseContext)> {
     let status = response.status();
     let url = response.url().clone();
     let body = response.text().map_err(Error::from)?;
@@ -335,10 +366,20 @@ where
     }
 
     let data = envelope.data.unwrap_or(Value::Null);
+    Ok((data, ResponseContext { status, url, body }))
+}
+
+/// Validate the envelope and deserialize its `data` payload into `T`.
+fn decode_envelope<T>(response: reqwest::blocking::Response) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let (data, ctx) = validate_envelope(response)?;
     serde_json::from_value(data).map_err(|source| Error::Api {
         message: format!(
-            "unexpected API data from {url}: {source}\n{}",
-            format_http_response(status, &body)
+            "unexpected API data from {}: {source}\n{}",
+            ctx.url,
+            format_http_response(ctx.status, &ctx.body)
         ),
     })
 }
@@ -675,12 +716,51 @@ mod tests {
         assert!(request_body_as_str(&request).is_empty());
     }
 
+    /// Serializes tests that install a scoped `tracing` subscriber.
+    ///
+    /// `tracing` keeps a process-wide max-level hint. When one test's scoped
+    /// subscriber is torn down while another is still running, the second
+    /// test's `trace!` call sites are skipped by the level fast path and it
+    /// observes no output at all. Holding this lock keeps them from racing.
+    fn trace_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    /// Pin a process-wide TRACE dispatcher for the lifetime of the test binary.
+    ///
+    /// `tracing` derives a global max-level hint and a per-callsite interest
+    /// cache from the set of *registered* dispatchers. When the only TRACE
+    /// subscribers are scoped ones, tearing one down drops the hint back to
+    /// OFF and marks the client's `trace!` callsites uninteresting — and a
+    /// test asserting on trace output at that moment records nothing. The
+    /// other tests in this module drive the client with no subscriber at all,
+    /// so this happens often enough to fail under `cargo test`'s default
+    /// parallelism. One permanently registered TRACE dispatcher that discards
+    /// its output keeps the hint pinned; scoped subscribers installed by
+    /// individual tests still take precedence for routing events.
+    fn pin_global_trace_level() {
+        use tracing_subscriber::fmt;
+        static PINNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        PINNED.get_or_init(|| {
+            let subscriber = fmt::Subscriber::builder()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::io::sink)
+                .finish();
+            // A global default may already exist; pinning is best-effort.
+            let _ = tracing::subscriber::set_global_default(subscriber);
+            tracing::callsite::rebuild_interest_cache();
+        });
+    }
+
     #[test]
     fn trace_calls_evaluate_at_trace_level() {
         use std::net::TcpListener;
         use tracing::subscriber::with_default;
         use tracing_subscriber::fmt;
 
+        let _serialized = trace_lock().lock().unwrap_or_else(|err| err.into_inner());
+        pin_global_trace_level();
         let subscriber = fmt::Subscriber::builder()
             .with_max_level(tracing::Level::TRACE)
             .with_test_writer()
@@ -708,6 +788,8 @@ mod tests {
         use tracing::subscriber::with_default;
         use tracing_subscriber::fmt;
 
+        let _serialized = trace_lock().lock().unwrap_or_else(|err| err.into_inner());
+        pin_global_trace_level();
         let log = SharedBuf::default();
         let subscriber = fmt::Subscriber::builder()
             .with_max_level(tracing::Level::TRACE)
@@ -822,6 +904,80 @@ mod tests {
             "{}",
             err.to_string()
         );
+    }
+
+    #[test]
+    fn unit_delete_cannot_decode_an_empty_data_object() {
+        // Why `delete_empty` exists next to `delete_data`. The Agents API
+        // documents deletes as `{"success":true,"data":{}}`, and an empty JSON
+        // object is not a unit value, so the `delete_data::<()>` form rejects a
+        // response the server considers successful.
+        let server = StubServer::new("200 OK", r#"{"success":true,"data":{}}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let err = client
+            .delete_data::<()>("/api/v3/agents/agt-1")
+            .expect_err("`{}` must not decode into `()`");
+        assert!(
+            err.to_string().contains("unexpected API data"),
+            "{}",
+            err.to_string()
+        );
+    }
+
+    #[test]
+    fn delete_empty_accepts_an_empty_data_object() {
+        let server = StubServer::new("200 OK", r#"{"success":true,"data":{}}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        client
+            .delete_empty("/api/v3/agents/agt-1")
+            .expect("an empty data object is a successful delete");
+        assert!(server.received().starts_with("DELETE /api/v3/agents/agt-1"));
+    }
+
+    #[test]
+    fn delete_empty_accepts_an_absent_data_field() {
+        // What the live Agents API actually returns, despite the documented
+        // `data: {}`. Both shapes must count as success.
+        let server = StubServer::new("200 OK", r#"{"success":true}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        client
+            .delete_empty("/api/v3/agents/agt-1")
+            .expect("an absent data field is a successful delete");
+    }
+
+    #[test]
+    fn delete_empty_rejects_an_unsuccessful_envelope() {
+        let server = StubServer::new(
+            "200 OK",
+            r#"{"success":false,"message":"agent is in use","error_code":"CONFLICT"}"#,
+        );
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let message = client
+            .delete_empty("/api/v3/agents/agt-1")
+            .expect_err("success:false must not be swallowed")
+            .to_string();
+        assert!(message.contains("agent is in use"), "{message}");
+        assert!(message.contains("[CONFLICT]"), "{message}");
+    }
+
+    #[test]
+    fn delete_empty_rejects_a_non_success_status() {
+        let server = StubServer::new(
+            "404 Not Found",
+            r#"{"success":false,"message":"agent not found"}"#,
+        );
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let message = client
+            .delete_empty("/api/v3/agents/missing")
+            .expect_err("404 must not be swallowed")
+            .to_string();
+        assert!(message.contains("agent not found"), "{message}");
+        assert!(message.contains("404"), "{message}");
     }
 
     /// Shared in-memory sink so a test can assert on rendered trace output.

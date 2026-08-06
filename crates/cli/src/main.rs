@@ -9,6 +9,7 @@ use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
 use commands::actor::{ActorCommand, run as run_actor};
+use commands::agent::{AgentCommand, run as run_agent};
 use commands::auth::{AuthCommand, run as run_auth};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::project::{ProjectCommand, run as run_project};
@@ -67,6 +68,11 @@ enum Commands {
         #[command(subcommand)]
         command: LibraryCommand,
     },
+    /// Manage agents, their versions, and their workspace bindings.
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
     /// Print the CLI version.
     Version,
 }
@@ -81,6 +87,7 @@ fn main() -> Result<()> {
         Commands::Workspace { command } => run_workspace(command, cli.profile, cli.base_url)?,
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
         Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
+        Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }

@@ -7,9 +7,10 @@
 //!   cli_commands.rs      # this harness
 //!   common/              # shared process helpers
 //!   meta/                # version, --help, …
-//!   auth/{offline,live}.rs
 //!   actor/{offline,live}.rs
 //!   library/{offline,live}.rs
+//!   agent/{offline,live}.rs
+//!   auth/{offline,live}.rs
 //!   workspace/{offline,live}.rs
 //!   project/{offline,live}.rs
 //! ```
@@ -19,6 +20,7 @@
 //! clean up the objects they create in the real workspace.
 
 mod actor;
+mod agent;
 mod auth;
 mod common;
 mod library;
