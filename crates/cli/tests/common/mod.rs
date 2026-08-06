@@ -49,6 +49,36 @@ pub fn require_api_key() -> String {
         .expect("MEMORYLAKE_API_KEY must be set for live CLI tests")
 }
 
+/// Optional `MEMORYLAKE_BASE_URL` for live tests.
+///
+/// [`run`] strips the variable from the child environment so a stray value in
+/// the developer's shell cannot silently retarget a test. Live suites that want
+/// a non-default endpoint must therefore pass it explicitly at login, which
+/// stores it on the temp-`$HOME` profile for the rest of the test.
+pub fn live_base_url() -> Option<String> {
+    load_dotenv();
+    std::env::var("MEMORYLAKE_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Build `auth login` arguments, pinning the endpoint when one was configured.
+///
+/// The CLI stores the URL on the temp-`$HOME` profile, so every later command
+/// in the same test resolves to the same endpoint without repeating the flag.
+pub fn login_args<'a>(
+    api_key: &'a str,
+    profile: &'a str,
+    base_url: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut args = vec!["auth", "login", "--api-key", api_key, "--profile", profile];
+    if let Some(url) = base_url {
+        args.push("--base-url");
+        args.push(url);
+    }
+    args
+}
+
 pub fn run(home: &Path, args: &[&str]) -> Output {
     // Isolate CLI config (`dirs::home_dir()` → `~/.memorylake`).
     // Unix reads `HOME`; Windows uses the user profile (`USERPROFILE`), not `HOME`.

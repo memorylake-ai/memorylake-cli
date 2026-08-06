@@ -25,7 +25,7 @@ cargo run -p memorylake-cli -- --help
 cargo test --workspace
 ```
 
-Live API tests (workspaces, actors) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
+Live API tests (workspaces, actors, projects) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
 
 ```bash
 cp .env.example .env
@@ -43,7 +43,7 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `auth` / `workspace` / `actor` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`.
+CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `auth` / `workspace` / `actor` / `project` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`.
 
 CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli) and as a workflow artifact.
 
@@ -63,6 +63,7 @@ memorylake auth logout
 
 memorylake workspace list
 memorylake ws create --name "My Workspace" --custom-id my-ws-001
+memorylake ws get ws-1234 [--by-custom-id]
 ```
 
 `auth login` without `--api-key` opens an interactive picker (`api_key` / `oauth`). OAuth is listed but not implemented yet. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
@@ -110,6 +111,30 @@ memorylake actor list --workspace ws-...
 - `actor list --workspace <id>` returns workspace **bindings** (`actor_id`, `bound_at`, …), a different shape from the actor objects returned without the flag.
 - `actor delete` is **irreversible** and runs without a confirmation prompt. Existing memories survive but can no longer be referenced, and all workspace bindings are removed. `actor unbind` is the reversible alternative: it drops one workspace membership and keeps the actor.
 - `--by-custom-id` is only available on `actor get`.
+
+## Projects
+
+Projects are knowledge containers inside a workspace — they organize documents, conversations, and extracted facts. Every `project` (alias `proj`) subcommand takes an explicit `--workspace`; there is no default or remembered workspace.
+
+```bash
+memorylake project list --workspace ws-1234 [--page-size 50] \
+  [--continuation-token TOKEN] [--name "partial name"]
+
+memorylake proj create --workspace ws-1234 --name "My Project" \
+  --custom-id my-proj-001 [--description TEXT]
+
+memorylake proj get --workspace ws-1234 proj-5678
+memorylake proj get --workspace ws-1234 my-proj-001 --by-custom-id
+
+memorylake proj update --workspace ws-1234 proj-5678 --name "Renamed"
+memorylake proj delete --workspace ws-1234 proj-5678
+```
+
+- `--custom-id` is unique **within the workspace**, unlike an actor's account-wide custom id.
+- `proj update` sends only the flags you pass; omitted fields are left unchanged. Passing no updatable flag sends an empty update, which the server accepts as a no-op.
+- `proj delete` is **irreversible** and runs without a confirmation prompt. The project's documents and conversations are removed with it.
+- `--by-custom-id` is only available on `project get`; `update` and `delete` address projects by their server-assigned id.
+- `metadata` and `industry_ids` are accepted by the API but not yet exposed on `create` / `update`.
 
 ## Lint
 
