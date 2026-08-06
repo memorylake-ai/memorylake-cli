@@ -25,7 +25,7 @@ cargo run -p memorylake-cli -- --help
 cargo test --workspace
 ```
 
-Live API tests (workspaces, actors, projects, library) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
+Live API tests (workspaces, actors, projects, library, agents) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
 
 ```bash
 cp .env.example .env
@@ -47,7 +47,7 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `auth` / `workspace` / `actor` / `project` / `library` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`.
+CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `actor` / `agent` / `auth` / `library` / `project` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`. The agent live test runs a full create → version → bind → unbind → delete lifecycle and deletes the agent it created, including when an assertion fails partway.
 
 CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli) and as a workflow artifact.
 
@@ -139,6 +139,7 @@ memorylake proj delete --workspace ws-1234 proj-5678
 - `proj delete` is **irreversible** and runs without a confirmation prompt. The project's documents and conversations are removed with it.
 - `--by-custom-id` is only available on `project get`; `update` and `delete` address projects by their server-assigned id.
 - `metadata` and `industry_ids` are accepted by the API but not yet exposed on `create` / `update`.
+
 ## Library
 
 The Library is MemoryLake's unified file system. Items are addressed by opaque
@@ -194,6 +195,89 @@ the `name` in the command's output.
 `library delete` removes the item immediately, with no confirmation prompt.
 Deleting a folder recursively removes everything inside it. The workspace root
 is protected by the server (`403 ACCESS_DENIED`).
+
+## Agents
+
+```bash
+memorylake agent list [--page-size N] [--continuation-token TOKEN] [--name FUZZY]
+memorylake agent create --name "Support" --custom-id support-1 [--description D] \
+                        [--model M] [--system-prompt P] [--config agent.json]
+memorylake agent get <id> [--by-custom-id]
+memorylake agent update <id> [--name NAME] [--description D] [--config identity.json]
+memorylake agent delete <id>
+
+memorylake agent version create <id> [--model M] [--system-prompt P] \
+                                     [--config version.json] [--from-version latest|N]
+memorylake agent version list <id> [--page-size N] [--continuation-token TOKEN]
+memorylake agent version get <id> <version>
+
+memorylake agent bind <agent-id> --workspace <workspace-id>
+memorylake agent unbind <agent-id> --workspace <workspace-id>
+memorylake agent bindings --workspace <workspace-id> [--page-size N] [--name FUZZY]
+```
+
+Creating an agent also generates an Actor identity for it, returned as `actor_id`.
+An agent can only operate inside the workspaces it is bound to.
+
+### Identity vs. configuration
+
+The API splits agent changes in two, and the CLI follows it:
+
+| Change | Command | Effect |
+| --- | --- | --- |
+| `name`, `description`, `metadata` | `agent update` | Updated in place; `metadata` is **replaced**, not merged |
+| `model`, `capabilities`, `policies`, `output`, `subagents`, `skills`, `system_prompt`, `model_settings`, `runtime_bindings` | `agent version create` | Creates a new immutable version |
+
+`agent update` rejects configuration fields up front — from flags or from
+`--config` — and points you at `agent version create` rather than letting the
+server return an opaque error.
+
+### Supplying nested configuration
+
+Scalar fields (`name`, `custom_id`, `description`, `model`, `system_prompt`)
+have dedicated flags. Everything with structure — `metadata`, `capabilities`,
+`policies`, `output`, `subagents`, `skills`, `model_settings`,
+`runtime_bindings` — is supplied through `--config <FILE>`, a JSON object used
+as the request body:
+
+```bash
+cat > agent.json <<'JSON'
+{
+  "name": "Support",
+  "custom_id": "support-1",
+  "model": "claude-sonnet-4-20250514",
+  "system_prompt": "Answer support questions from memory.",
+  "policies": { "max_turns": 8, "deny_tools": ["shell"] },
+  "output": { "mode": "json", "json_schema": { "type": "object" } }
+}
+JSON
+
+memorylake agent create --config agent.json            # everything from the file
+memorylake agent create --config agent.json --model X  # flag overrides the file
+```
+
+Scalar flags override same-named keys in the file. Top-level keys this CLI does
+not know about are forwarded to the API unchanged, so a newer server field works
+without a CLI upgrade.
+
+`agent version create --from-version latest|<N>` fetches that version and applies
+your overrides on top, so bumping one setting does not mean re-sending the whole
+configuration:
+
+```bash
+memorylake agent version create <id> --from-version latest --model claude-sonnet-4-20250514
+```
+
+Overrides replace whole top-level keys; nested objects are not deep-merged.
+Without `--from-version`, only the values you supply are sent and version
+inheritance is left to the server.
+
+### Destructive commands
+
+`agent delete` and `agent unbind` run immediately — there is no confirmation
+prompt and no `--yes` flag. `agent delete` **cannot be undone**: it removes the
+agent, every one of its versions, and all of its workspace bindings. `agent
+unbind` removes only the binding; the agent definition survives.
 
 ## Lint
 

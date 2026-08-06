@@ -21,6 +21,7 @@ fn help_lists_top_level_commands() {
     assert!(stdout.contains("auth"));
     assert!(stdout.contains("workspace"));
     assert!(stdout.contains("project"));
+    assert!(stdout.contains("agent"));
     assert!(stdout.contains("version"));
     let _ = fs::remove_dir_all(&home);
 }
