@@ -25,7 +25,7 @@ cargo run -p memorylake-cli -- --help
 cargo test --workspace
 ```
 
-Live API tests (workspaces, actors, projects, library, agents) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
+Live API tests (workspaces, actors, projects, library, agents, search) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
 
 ```bash
 cp .env.example .env
@@ -47,7 +47,7 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `actor` / `agent` / `auth` / `library` / `project` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`. The agent live test runs a full create → version → bind → unbind → delete lifecycle and deletes the agent it created, including when an assertion fails partway.
+CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `actor` / `agent` / `auth` / `library` / `project` / `search` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`. The agent live test runs a full create → version → bind → unbind → delete lifecycle and deletes the agent it created, including when an assertion fails partway.
 
 CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli) and as a workflow artifact.
 
@@ -278,6 +278,30 @@ inheritance is left to the server.
 prompt and no `--yes` flag. `agent delete` **cannot be undone**: it removes the
 agent, every one of its versions, and all of its workspace bindings. `agent
 unbind` removes only the binding; the agent definition survives.
+
+## Search
+
+Natural-language retrieval across one workspace. Search returns two independent result sets — matched `documents` and matched `facts` — rather than one ranked list.
+
+```bash
+memorylake search --workspace ws-1234 "what were the quarterly revenue figures"
+
+memorylake search --workspace ws-1234 \
+  --projects proj-1,proj-2 \
+  --actors act-a1b2c3 \
+  --types document,fact \
+  --top-k 10 \
+  "quarterly revenue"
+```
+
+- The filter flags each take **one comma-separated value** (`--projects a,b`), not a repeated flag. Surrounding spaces are trimmed, so `--projects "a, b"` works; an empty entry such as `a,,b` or a trailing comma is rejected before any request.
+- `--types` accepts only `document` and `fact`, lowercase. Anything else is rejected locally with the accepted values listed.
+- Omitting a filter searches everything in that dimension — the CLI sends no key at all rather than an empty list.
+- `--top-k` caps results **per source type**. Left unset, the server picks its own default; the CLI does not impose one.
+- There is no pagination: the endpoint has no continuation token.
+- A search that matches nothing succeeds and prints empty collections.
+
+Automated live tests can only prove that a search is accepted and decodes, because this CLI cannot ingest memories — a freshly created workspace has nothing to match. Verify relevance by searching a workspace that already holds content.
 
 ## Lint
 

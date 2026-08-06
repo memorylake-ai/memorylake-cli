@@ -13,6 +13,7 @@
 //!   auth/{offline,live}.rs
 //!   workspace/{offline,live}.rs
 //!   project/{offline,live}.rs
+//!   search/{offline,wire,live}.rs
 //! ```
 //!
 //! Offline tests isolate config under a temporary `$HOME`.
@@ -26,4 +27,5 @@ mod common;
 mod library;
 mod meta;
 mod project;
+mod search;
 mod workspace;
