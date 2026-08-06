@@ -15,3 +15,15 @@ fn list_without_login_fails() {
     );
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn get_without_login_fails() {
+    let home = temp_home();
+    let args = ["workspace", "get", "ws-does-not-matter"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("not logged in") || err.contains("resolve API credentials"),
+        "unexpected error output: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}

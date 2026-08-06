@@ -55,3 +55,51 @@ fn list_and_create() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn get_by_id_and_custom_id() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let custom_id = format!("cli-bin-get-{nanos}");
+    let name = format!("CLI Bin Get {nanos}");
+    let create_args = [
+        "workspace",
+        "create",
+        "--name",
+        name.as_str(),
+        "--custom-id",
+        custom_id.as_str(),
+    ];
+    let stdout = assert_success(&run(&home, &create_args), &create_args);
+    // Pull the assigned id out of the JSON output.
+    let created: serde_json::Value = serde_json::from_str(&stdout).expect("parse create JSON");
+    let id = created
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("create response has id")
+        .to_string();
+
+    let by_id_args = ["ws", "get", id.as_str()];
+    let stdout = assert_success(&run(&home, &by_id_args), &by_id_args);
+    assert!(stdout.contains(&id), "get-by-id missing id: {stdout}");
+    assert!(stdout.contains(&name), "get-by-id missing name: {stdout}");
+
+    let by_custom_args = ["ws", "get", custom_id.as_str(), "--by-custom-id"];
+    let stdout = assert_success(&run(&home, &by_custom_args), &by_custom_args);
+    assert!(
+        stdout.contains(&id),
+        "get-by-custom-id missing id: {stdout}"
+    );
+    assert!(
+        stdout.contains(&custom_id),
+        "get-by-custom-id missing custom_id: {stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}

@@ -8,7 +8,8 @@ mod common;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use memorylake_core::api::workspaces::{
-    CreateWorkspaceRequest, ListWorkspacesParams, create_workspace, list_workspaces,
+    CreateWorkspaceRequest, ListWorkspacesParams, create_workspace, get_workspace,
+    get_workspace_by_custom_id, list_workspaces,
 };
 
 use common::live_client;
@@ -59,7 +60,7 @@ fn create_and_list_workspace() {
         &client,
         &ListWorkspacesParams {
             page_size: Some(50),
-            name: Some(name.clone()),
+            name_fuzzy: Some(name.clone()),
             ..ListWorkspacesParams::default()
         },
     )
@@ -69,5 +70,43 @@ fn create_and_list_workspace() {
         listed.items.iter().any(|ws| ws.id == created.id),
         "created workspace {} not found in list results",
         created.id
+    );
+}
+
+#[test]
+fn get_workspace_by_id_and_custom_id() {
+    let client = live_client();
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let custom_id = format!("cli-live-get-{nanos}");
+    let name = format!("CLI Live Get {nanos}");
+
+    let created = create_workspace(
+        &client,
+        &CreateWorkspaceRequest {
+            name: name.clone(),
+            custom_id: custom_id.clone(),
+            description: None,
+        },
+    )
+    .expect("create workspace");
+
+    let by_id = get_workspace(&client, &created.id).expect("get by id");
+    assert_eq!(by_id.id, created.id);
+    assert_eq!(by_id.name, name);
+    assert_eq!(by_id.custom_id.as_deref(), Some(custom_id.as_str()));
+
+    let by_custom = get_workspace_by_custom_id(&client, &custom_id).expect("get by custom_id");
+    assert_eq!(by_custom.id, created.id);
+    assert_eq!(by_custom.name, name);
+    assert_eq!(by_custom.custom_id.as_deref(), Some(custom_id.as_str()));
+
+    let missing = get_workspace(&client, "ws-does-not-exist-000000000000000000000000");
+    assert!(
+        missing.is_err(),
+        "expected error for unknown id, got {missing:?}"
     );
 }

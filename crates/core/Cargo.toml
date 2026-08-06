@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 dirs = { workspace = true }
+percent-encoding = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -18,3 +19,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 dotenvy = { workspace = true }
+tracing-subscriber = { workspace = true }
