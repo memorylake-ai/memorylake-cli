@@ -48,7 +48,7 @@ fn parse_query(raw: &str) -> std::result::Result<String, String> {
 /// a repeatable flag yielding one `T` per occurrence, which does not match a
 /// parser that returns the whole list from a single value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdList(Vec<String>);
+pub struct IdList(pub(crate) Vec<String>);
 
 /// One flag's worth of memory types, already split and validated.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +78,7 @@ fn split_csv(raw: &str) -> std::result::Result<Vec<String>, String> {
 }
 
 /// Parse a comma-separated id filter.
-fn parse_id_list(raw: &str) -> std::result::Result<IdList, String> {
+pub(crate) fn parse_id_list(raw: &str) -> std::result::Result<IdList, String> {
     split_csv(raw).map(IdList)
 }
 

@@ -133,6 +133,10 @@ pub enum Error {
     Api {
         /// Human-readable error message (may include HTTP status and body).
         message: String,
+        /// Machine-readable `error_code` from the API envelope, when the
+        /// response carried one. Lets callers branch on a specific failure
+        /// (`NOT_FOUND`, …) without parsing the display string.
+        code: Option<String>,
     },
 }
 

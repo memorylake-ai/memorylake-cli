@@ -216,7 +216,7 @@ fn deny_strategy_reports_a_conflict() {
     // and this would pass instead of conflicting.
     let conflict = create_folder(&client, &request);
     match conflict {
-        Err(Error::Api { message }) => {
+        Err(Error::Api { message, .. }) => {
             assert!(
                 message.contains("DRIVE_ITEM_CONFLICT"),
                 "expected a conflict error, got: {message}"
@@ -269,7 +269,7 @@ fn workspace_root_cannot_be_deleted() {
     let client = live_client();
     let refused = delete_item(&client, ROOT_ALIAS);
     match refused {
-        Err(Error::Api { message }) => assert!(
+        Err(Error::Api { message, .. }) => assert!(
             message.contains("ACCESS_DENIED"),
             "expected the root to be protected, got: {message}"
         ),
