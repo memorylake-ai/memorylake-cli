@@ -120,6 +120,30 @@ impl Client {
         Ok(())
     }
 
+    /// Perform a DELETE that carries a JSON body and returns no usable payload.
+    ///
+    /// Some collection endpoints name their targets in the body rather than the
+    /// path — removing documents from a project, for instance. `reqwest` allows
+    /// a body on DELETE, but no other delete helper here sends one, so this is a
+    /// separate method rather than an extra argument threaded through them.
+    ///
+    /// Envelope handling matches [`Self::delete_empty`]: a non-2xx status or
+    /// `success: false` is an error, and whatever `data` holds is discarded.
+    pub fn delete_empty_with_body<B>(&self, path: &str, body: &B) -> Result<()>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path);
+        let request = self
+            .http
+            .delete(&url)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .build()?;
+        validate_envelope(self.execute(request)?)?;
+        Ok(())
+    }
+
     /// Trace, execute, and decode a prepared request.
     fn send<T>(&self, request: reqwest::blocking::Request) -> Result<T>
     where
@@ -978,6 +1002,90 @@ mod tests {
             .to_string();
         assert!(message.contains("agent not found"), "{message}");
         assert!(message.contains("404"), "{message}");
+    }
+
+    #[test]
+    fn delete_with_body_puts_the_json_payload_on_the_wire() {
+        // The whole reason this method exists: the ids identifying what to
+        // delete travel in the body, so a bodyless DELETE would reach the
+        // server with nothing to act on.
+        let (base, server) = one_shot_server(json_ok(r#"{"success":true,"data":{}}"#));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+
+        client
+            .delete_empty_with_body(
+                "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents",
+                &serde_json::json!({"ids": ["doc-a", "doc-b"]}),
+            )
+            .expect("delete with body succeeds");
+
+        let request = server.join().expect("server thread");
+        assert!(
+            request
+                .head
+                .starts_with("DELETE /api/v3/workspaces/ws-1/projects/proj-1/memories/documents "),
+            "unexpected request line:\n{}",
+            request.head
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&request.body),
+            r#"{"ids":["doc-a","doc-b"]}"#
+        );
+        // Routed through `execute`, so it carries credentials like every other
+        // authenticated verb.
+        assert!(request.has_header("authorization"));
+    }
+
+    #[test]
+    fn delete_with_body_accepts_an_empty_data_object() {
+        let server = StubServer::new("200 OK", r#"{"success":true,"data":{}}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        client
+            .delete_empty_with_body("/api/v3/docs", &serde_json::json!({"ids": ["doc-a"]}))
+            .expect("an empty data object is a successful delete");
+    }
+
+    #[test]
+    fn delete_with_body_accepts_an_absent_data_field() {
+        let server = StubServer::new("200 OK", r#"{"success":true}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        client
+            .delete_empty_with_body("/api/v3/docs", &serde_json::json!({"ids": ["doc-a"]}))
+            .expect("an absent data field is a successful delete");
+    }
+
+    #[test]
+    fn delete_with_body_rejects_an_unsuccessful_envelope() {
+        let server = StubServer::new(
+            "200 OK",
+            r#"{"success":false,"message":"document not found","error_code":"NOT_FOUND"}"#,
+        );
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let message = client
+            .delete_empty_with_body("/api/v3/docs", &serde_json::json!({"ids": ["doc-a"]}))
+            .expect_err("success:false must not be swallowed")
+            .to_string();
+        assert!(message.contains("document not found"), "{message}");
+        assert!(message.contains("[NOT_FOUND]"), "{message}");
+    }
+
+    #[test]
+    fn delete_with_body_rejects_a_non_success_status() {
+        let server = StubServer::new(
+            "403 Forbidden",
+            r#"{"success":false,"message":"permission denied"}"#,
+        );
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let message = client
+            .delete_empty_with_body("/api/v3/docs", &serde_json::json!({"ids": ["doc-a"]}))
+            .expect_err("403 must not be swallowed")
+            .to_string();
+        assert!(message.contains("permission denied"), "{message}");
+        assert!(message.contains("403"), "{message}");
     }
 
     /// Shared in-memory sink so a test can assert on rendered trace output.

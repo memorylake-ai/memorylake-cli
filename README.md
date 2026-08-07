@@ -25,7 +25,7 @@ cargo run -p memorylake-cli -- --help
 cargo test --workspace
 ```
 
-Live API tests (workspaces, actors, projects, library, agents) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
+Live API tests (workspaces, actors, projects, library, agents, documents) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
 
 ```bash
 cp .env.example .env
@@ -47,7 +47,7 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `actor` / `agent` / `auth` / `library` / `project` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`. The agent live test runs a full create → version → bind → unbind → delete lifecycle and deletes the agent it created, including when an assertion fails partway.
+CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `actor` / `agent` / `auth` / `document` / `library` / `project` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`. The agent live test runs a full create → version → bind → unbind → delete lifecycle and deletes the agent it created, including when an assertion fails partway. The document live tests upload their own scratch files, import them into a scratch project, and remove both.
 
 CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli) and as a workflow artifact.
 
@@ -195,6 +195,79 @@ the `name` in the command's output.
 `library delete` removes the item immediately, with no confirmation prompt.
 Deleting a folder recursively removes everything inside it. The workspace root
 is protected by the server (`403 ACCESS_DENIED`).
+
+## Documents
+
+Documents are Library files imported into a project and indexed there for
+semantic search and memory extraction. Every `document` (alias `doc`) subcommand
+sits under `project` and takes an explicit `--workspace` and `--project`.
+
+```bash
+memorylake project document import --workspace ws-1234 --project proj-5678 \
+  <item-id>... [--recursive] [--max-files 500] [--wait] [--timeout 600]
+
+memorylake proj doc list --workspace ws-1234 --project proj-5678 \
+  [--page-size 50] [--continuation-token TOKEN] [--name "partial name"]
+
+memorylake proj doc get    --workspace ws-1234 --project proj-5678 doc-3m4n5o6p
+memorylake proj doc delete --workspace ws-1234 --project proj-5678 doc-3m4n5o6p ...
+```
+
+Files must already be in the Library — upload them with `lib upload` first.
+Documents are addressed by their server-assigned `doc-...` id, which is **not**
+the Library `item_id` they came from. There is no `--by-custom-id`.
+
+### Importing folders
+
+`import` takes file ids. A folder id fails and imports nothing unless
+`--recursive` is set, which expands the folder into every file in its subtree.
+File ids and folder ids can be mixed in one invocation, and a file reachable
+through more than one argument is imported once.
+
+`--max-files` (default 500) caps the expanded set; exceeding it fails before any
+import request goes out. `MY_SPACE --recursive` names every file in the
+workspace, so the cap is what stands between a typo and a bulk import that
+cannot be undone.
+
+### Importing is asynchronous
+
+`import` returns as soon as the server accepts the batch. Each document then
+moves through `pending` / `running` to `okay` or `error`; `list` and `get` show
+the current `status`.
+
+`--wait` polls until every imported document reaches a terminal status, backing
+off from 1s to 15s between rounds and giving up after `--timeout` seconds
+(default 600). **Giving up does not cancel the import** — it carries on
+server-side, and `get` will show the outcome later.
+
+### Partial failure and exit status
+
+The import endpoint answers `200` even when individual files failed, so the CLI
+decides success itself. It prints the full API payload to stdout first, then
+exits **non-zero** when any of these hold:
+
+| Condition | Meaning |
+| --- | --- |
+| `failure_count > 0` | one or more files could not be imported |
+| `--wait` and a document ends in `error` | processing failed |
+| `--wait` and the timeout elapses | some documents never finished |
+| `--wait` and `details_truncated` is true | the server omitted per-file entries, so not every document could be polled |
+| a folder id without `--recursive` | nothing was imported |
+| more files than `--max-files` | nothing was imported |
+| the ids expand to no files | nothing was imported |
+
+Files already in the project come back as duplicates rather than failures and do
+not affect the exit status.
+
+On a large batch the server may set `details_truncated` and drop entries from
+`details`. The counts stay accurate; the per-file list does not.
+
+### Deletes are irreversible
+
+`document delete` removes the documents immediately, with no confirmation prompt
+and no `--yes` flag. The indexed content and every memory derived from them is
+destroyed. The Library files they were imported from are untouched, so the same
+files can be imported again afterwards.
 
 ## Agents
 
