@@ -238,7 +238,7 @@ fn run_import(
     // failure.
     println!("{}", serde_json::to_string_pretty(&outcome)?);
 
-    let waited = if options.wait {
+    let (waited, polled) = if options.wait {
         let document_ids = outcome.document_ids();
         eprintln!(
             "Waiting up to {}s for {} document(s) to finish processing…",
@@ -251,12 +251,16 @@ fn run_import(
             project,
             start: Instant::now(),
         };
-        Some(wait_for_documents(&poller, &document_ids, options.timeout)?)
+        let polled = document_ids.len();
+        (
+            Some(wait_for_documents(&poller, &document_ids, options.timeout)?),
+            polled,
+        )
     } else {
-        None
+        (None, 0)
     };
 
-    let failures = import_failures(&outcome, waited.as_ref());
+    let failures = import_failures(&outcome, waited.as_ref(), polled);
     if !failures.is_empty() {
         bail!(
             "import finished with problems:\n  - {}",
@@ -485,7 +489,11 @@ fn wait_for_documents(
 /// The import endpoint answers 200 even when individual files failed, so
 /// success has to be decided here rather than taken from the HTTP result. An
 /// empty list means the command succeeded.
-fn import_failures(outcome: &ImportOutcome, waited: Option<&WaitOutcome>) -> Vec<String> {
+fn import_failures(
+    outcome: &ImportOutcome,
+    waited: Option<&WaitOutcome>,
+    polled: usize,
+) -> Vec<String> {
     let mut failures = Vec::new();
 
     if outcome.failure_count > 0 {
@@ -510,6 +518,18 @@ fn import_failures(outcome: &ImportOutcome, waited: Option<&WaitOutcome>) -> Vec
              so some imported documents were never polled"
                 .to_string(),
         );
+    }
+
+    // Same blind spot without truncation: polling covers only the document
+    // ids named in `details`. If the server accepted more files than it
+    // named ids for, the difference was never polled, and exiting cleanly
+    // would claim a verification that never happened.
+    let accepted = u64::from(outcome.success_count) + u64::from(outcome.duplicate_count);
+    if !outcome.details_truncated && (polled as u64) < accepted {
+        failures.push(format!(
+            "--wait could not cover every document: the server accepted {accepted} file(s) \
+             but named only {polled} document id(s) in `details`, so the rest were never polled"
+        ));
     }
 
     if !waited.errored.is_empty() {
@@ -886,26 +906,57 @@ mod tests {
 
     #[test]
     fn a_clean_import_has_no_failures() {
-        assert!(import_failures(&outcome(3, 0, 0, false), None).is_empty());
+        assert!(import_failures(&outcome(3, 0, 0, false), None, 0).is_empty());
+    }
+
+    #[test]
+    fn waiting_on_fewer_ids_than_accepted_is_reported() {
+        // The server said it accepted three files but details named only one
+        // document id (and nothing was truncated): two documents were never
+        // polled, and --wait must not exit cleanly pretending they were.
+        let failures = import_failures(&outcome(3, 0, 0, false), Some(&WaitOutcome::default()), 1);
+        assert_eq!(failures.len(), 1);
+        assert!(
+            failures[0].contains("--wait could not cover every document"),
+            "{failures:?}"
+        );
+        assert!(failures[0].contains("accepted 3"), "{failures:?}");
+        assert!(failures[0].contains("only 1"), "{failures:?}");
+    }
+
+    #[test]
+    fn duplicates_count_toward_wait_coverage() {
+        // A duplicate detail carries the existing document id, so it is
+        // pollable and belongs in the accepted-vs-polled reconciliation.
+        let failures = import_failures(&outcome(0, 0, 2, false), Some(&WaitOutcome::default()), 1);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].contains("accepted 2"), "{failures:?}");
+    }
+
+    #[test]
+    fn full_coverage_under_wait_is_clean() {
+        assert!(
+            import_failures(&outcome(1, 0, 0, false), Some(&WaitOutcome::default()), 1).is_empty()
+        );
     }
 
     #[test]
     fn duplicates_alone_are_not_a_failure() {
         // Re-importing a file the project already has is the documented
         // behavior, not an error.
-        assert!(import_failures(&outcome(0, 0, 3, false), None).is_empty());
+        assert!(import_failures(&outcome(0, 0, 3, false), None, 0).is_empty());
     }
 
     #[test]
     fn a_partial_failure_fails_the_command() {
-        let failures = import_failures(&outcome(2, 1, 0, false), None);
+        let failures = import_failures(&outcome(2, 1, 0, false), None, 0);
         assert_eq!(failures.len(), 1);
         assert!(failures[0].contains("1 file(s) could not be imported"));
     }
 
     #[test]
     fn truncated_details_are_called_out_alongside_a_partial_failure() {
-        let failures = import_failures(&outcome(900, 4, 0, true), None);
+        let failures = import_failures(&outcome(900, 4, 0, true), None, 0);
         assert_eq!(failures.len(), 1);
         assert!(
             failures[0].contains("truncated"),
@@ -917,12 +968,12 @@ mod tests {
     #[test]
     fn truncated_details_alone_are_not_a_failure_without_wait() {
         // Nothing was claimed about processing, so nothing is unverified.
-        assert!(import_failures(&outcome(900, 0, 0, true), None).is_empty());
+        assert!(import_failures(&outcome(900, 0, 0, true), None, 0).is_empty());
     }
 
     #[test]
     fn truncated_details_fail_the_command_under_wait() {
-        let failures = import_failures(&outcome(900, 0, 0, true), Some(&WaitOutcome::default()));
+        let failures = import_failures(&outcome(900, 0, 0, true), Some(&WaitOutcome::default()), 1);
         assert_eq!(failures.len(), 1);
         assert!(
             failures[0].contains("--wait could not cover every document"),
@@ -937,7 +988,7 @@ mod tests {
             errored: ids(&["doc-9"]),
             timed_out: Vec::new(),
         };
-        let failures = import_failures(&outcome(1, 0, 0, false), Some(&waited));
+        let failures = import_failures(&outcome(1, 0, 0, false), Some(&waited), 1);
         assert_eq!(failures.len(), 1);
         assert!(failures[0].contains("doc-9"), "{}", failures[0]);
         assert!(failures[0].contains("error"), "{}", failures[0]);
@@ -949,7 +1000,7 @@ mod tests {
             errored: Vec::new(),
             timed_out: ids(&["doc-9"]),
         };
-        let failures = import_failures(&outcome(1, 0, 0, false), Some(&waited));
+        let failures = import_failures(&outcome(1, 0, 0, false), Some(&waited), 1);
         assert_eq!(failures.len(), 1);
         assert!(
             failures[0].contains("has not been cancelled"),
@@ -964,7 +1015,7 @@ mod tests {
             errored: ids(&["doc-8"]),
             timed_out: ids(&["doc-9"]),
         };
-        let failures = import_failures(&outcome(3, 2, 0, true), Some(&waited));
+        let failures = import_failures(&outcome(3, 2, 0, true), Some(&waited), 1);
         assert_eq!(
             failures.len(),
             4,

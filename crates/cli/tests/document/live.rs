@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::common::{
-    assert_failure, assert_success, live_base_url, login_args, require_api_key, run, scratch_file,
-    temp_home, unique_name,
+    assert_failure, assert_success, live_base_url, login_args, require_api_key, run,
+    scratch_text_file, temp_home, unique_name,
 };
 
 /// Seconds to let the server finish indexing under `--wait`.
@@ -101,7 +101,7 @@ fn delete_scratch_folder(home: &Path, item_id: &str) {
 
 /// Upload a small file into `parent` and return its Library item id.
 fn upload_file(home: &Path, parent: &str, tag: &str, name: &str) -> String {
-    let (dir, path) = scratch_file(tag, 4_096);
+    let (dir, path) = scratch_text_file(tag);
     let source = path.to_str().expect("utf-8 scratch path");
     let args = ["lib", "upload", source, "--parent", parent, "--name", name];
     let uploaded = json(&assert_success(&run(home, &args), &args));

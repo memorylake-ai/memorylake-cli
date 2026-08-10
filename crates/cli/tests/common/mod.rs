@@ -67,6 +67,23 @@ pub fn scratch_file(tag: &str, size: u64) -> (PathBuf, PathBuf) {
     (dir, path)
 }
 
+/// Create a scratch directory holding a small plain-text `payload.txt`.
+///
+/// Document tests need content the server can actually ingest: the binary
+/// byte cycle from [`scratch_file`] fails processing with `status: error`
+/// when imported as a document, because it is not text. Returns the directory
+/// (for the caller to remove) and the file path.
+pub fn scratch_text_file(tag: &str) -> (PathBuf, PathBuf) {
+    let dir = std::env::temp_dir().join(unique_name(tag));
+    fs::create_dir_all(&dir).expect("create scratch dir");
+    let path = dir.join("payload.txt");
+
+    let line = format!("Scratch document for the `{tag}` live test.\n");
+    fs::write(&path, line.repeat(64)).expect("write scratch text file");
+
+    (dir, path)
+}
+
 pub fn load_dotenv() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let candidates = [
