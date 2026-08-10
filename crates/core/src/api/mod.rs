@@ -2,6 +2,7 @@
 
 pub mod actors;
 pub mod agents;
+pub mod documents;
 pub mod library;
 pub mod projects;
 pub mod search;

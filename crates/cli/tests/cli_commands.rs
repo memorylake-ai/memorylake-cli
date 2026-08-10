@@ -14,6 +14,7 @@
 //!   workspace/{offline,live}.rs
 //!   project/{offline,live}.rs
 //!   search/{offline,wire,live}.rs
+//!   document/{offline,live}.rs
 //! ```
 //!
 //! Offline tests isolate config under a temporary `$HOME`.
@@ -24,6 +25,7 @@ mod actor;
 mod agent;
 mod auth;
 mod common;
+mod document;
 mod library;
 mod meta;
 mod project;

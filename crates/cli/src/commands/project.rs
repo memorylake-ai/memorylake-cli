@@ -1,5 +1,7 @@
 //! `memorylake project` / `proj` commands.
 
+mod document;
+
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use memorylake_core::api::projects::{
@@ -7,6 +9,8 @@ use memorylake_core::api::projects::{
     get_project, get_project_by_custom_id, list_projects, update_project,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
+
+use document::{DocumentCommand, run as run_document};
 
 /// Project subcommands.
 ///
@@ -81,6 +85,12 @@ pub enum ProjectCommand {
         workspace: String,
         /// Project id.
         id: String,
+    },
+    /// Manage the Library files imported into a project.
+    #[command(visible_alias = "doc")]
+    Document {
+        #[command(subcommand)]
+        command: DocumentCommand,
     },
 }
 
@@ -164,6 +174,7 @@ pub fn run(
             delete_project(&client, &workspace, &id).context("delete project")?;
             println!("Deleted project `{id}` in workspace `{workspace}`");
         }
+        ProjectCommand::Document { command } => run_document(&client, command)?,
     }
 
     Ok(())
