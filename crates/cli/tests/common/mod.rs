@@ -1,5 +1,7 @@
 //! Shared helpers for `memorylake` binary integration tests.
 
+pub mod stub;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

@@ -13,6 +13,7 @@
 //!   auth/{offline,live}.rs
 //!   workspace/{offline,live}.rs
 //!   project/{offline,live}.rs
+//!   search/{offline,wire,live}.rs
 //!   document/{offline,live}.rs
 //! ```
 //!
@@ -28,4 +29,5 @@ mod document;
 mod library;
 mod meta;
 mod project;
+mod search;
 mod workspace;

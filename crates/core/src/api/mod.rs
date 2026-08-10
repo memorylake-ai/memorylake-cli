@@ -5,6 +5,7 @@ pub mod agents;
 pub mod documents;
 pub mod library;
 pub mod projects;
+pub mod search;
 pub mod workspaces;
 
 pub(crate) mod path;

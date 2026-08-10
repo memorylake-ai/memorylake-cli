@@ -13,6 +13,7 @@ use commands::agent::{AgentCommand, run as run_agent};
 use commands::auth::{AuthCommand, run as run_auth};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::project::{ProjectCommand, run as run_project};
+use commands::search::{SearchArgs, run as run_search};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
 
 #[derive(Debug, Parser)]
@@ -73,6 +74,8 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Search memories in a workspace.
+    Search(SearchArgs),
     /// Print the CLI version.
     Version,
 }
@@ -88,6 +91,7 @@ fn main() -> Result<()> {
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
         Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
         Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
+        Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }
