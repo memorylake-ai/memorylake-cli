@@ -414,6 +414,15 @@ memorylake search --workspace ws-1234 \
 
 Automated live tests can only prove that a search is accepted and decodes, because this CLI cannot ingest memories — a freshly created workspace has nothing to match. Verify relevance by searching a workspace that already holds content.
 
+## Releases
+
+Releases are tagged by date: `vYYYYMMDD` (for example `v20260810`). A patch
+that must ship the same day appends a counter: `v20260810.1`, `v20260810.2`,
+and so on. Pushing the tag triggers the release workflow, which builds macOS
+(arm64, x86_64) and Linux (x86_64, arm64) binaries and attaches tarballs with
+SHA-256 checksums to the GitHub Release. The crate version in `Cargo.toml`
+stays semver and is independent of release tags.
+
 ## Lint
 
 ```bash
