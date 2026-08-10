@@ -230,6 +230,7 @@ impl Client {
         let value = HeaderValue::from_str(&format!("Bearer {}", self.api_key)).map_err(|err| {
             Error::Api {
                 message: format!("invalid API key header value: {err}"),
+                code: None,
             }
         })?;
         headers.insert(AUTHORIZATION, value);
@@ -358,6 +359,7 @@ fn validate_envelope(response: reqwest::blocking::Response) -> Result<(Value, Re
                     "API key was rejected by the server ({kind}): {server_msg}\n{}",
                     format_http_response(status, &body)
                 ),
+                code: None,
             });
         }
     }
@@ -370,14 +372,15 @@ fn validate_envelope(response: reqwest::blocking::Response) -> Result<(Value, Re
                     "unexpected response from {url} (expected MemoryLake API envelope with `success`; JSON error: {err})\n{}",
                     format_http_response(status, &body)
                 ),
+                code: None,
             });
         }
     };
 
     if !status.is_success() || !envelope.success {
-        let code = envelope
-            .error_code
-            .filter(|c| !c.trim().is_empty())
+        let code = envelope.error_code.filter(|c| !c.trim().is_empty());
+        let code_suffix = code
+            .as_deref()
             .map(|c| format!(" [{c}]"))
             .unwrap_or_default();
         let message = envelope
@@ -385,7 +388,11 @@ fn validate_envelope(response: reqwest::blocking::Response) -> Result<(Value, Re
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| "request failed".into());
         return Err(Error::Api {
-            message: format!("{message}{code}\n{}", format_http_response(status, &body)),
+            message: format!(
+                "{message}{code_suffix}\n{}",
+                format_http_response(status, &body)
+            ),
+            code,
         });
     }
 
@@ -405,6 +412,7 @@ where
             ctx.url,
             format_http_response(ctx.status, &ctx.body)
         ),
+        code: None,
     })
 }
 

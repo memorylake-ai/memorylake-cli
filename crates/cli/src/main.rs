@@ -11,6 +11,7 @@ use tracing_subscriber::EnvFilter;
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
 use commands::auth::{AuthCommand, run as run_auth};
+use commands::fact::{FactCommand, run as run_fact};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::search::{SearchArgs, run as run_search};
@@ -74,6 +75,11 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Add, delete, and list memory facts.
+    Fact {
+        #[command(subcommand)]
+        command: FactCommand,
+    },
     /// Search memories in a workspace.
     Search(SearchArgs),
     /// Print the CLI version.
@@ -91,6 +97,7 @@ fn main() -> Result<()> {
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
         Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
         Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
+        Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));

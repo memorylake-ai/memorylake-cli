@@ -268,6 +268,44 @@ On a large batch the server may set `details_truncated` and drop entries from
 and no `--yes` flag. The indexed content and every memory derived from them is
 destroyed. The Library files they were imported from are untouched, so the same
 files can be imported again afterwards.
+## Facts
+
+Facts are single remembered statements. Every fact is owned by exactly one
+scope — an actor or a project — and `add` / `delete` name that scope with a
+required, mutually exclusive `--actor` / `--project` pair.
+
+```bash
+memorylake fact add --workspace ws-1234 (--actor actor-… | --project proj-…) \
+  "fact text" ["another fact" ...]
+
+memorylake fact delete --workspace ws-1234 (--actor actor-… | --project proj-…) \
+  <fact-id> [<fact-id> ...]
+
+memorylake fact list --workspace ws-1234 [--actors a1,a2] [--projects p1,p2] \
+  [--page-size 50] [--continuation-token TOKEN]
+```
+
+- Facts are stored **verbatim** and are searchable immediately; there is no
+  asynchronous indexing step. Facts are immutable — to update one, add the
+  new statement; the server resolves semantic conflicts between facts itself.
+- The fact text lives under the wire key `fact` in every response, not
+  `content` (that was the v2 name).
+- `delete` sends **one request per id** (the API's `forget` endpoint) and
+  prints per-id outcomes (`{"forgotten": [...], "not_found": [...]}`). The
+  API's batch forget endpoint is deliberately not used: it is not atomic —
+  given a mix of valid and invalid ids it deletes the valid ones and then
+  fails the whole call. An id the server has already forgotten succeeds again
+  (idempotent); only an id that never existed in the scope lands in
+  `not_found`. Like `project document import`, the outcomes print first and
+  the command then exits **non-zero** when `not_found` is non-empty, so
+  scripts can trust the exit code.
+- `list` requires **at least one** of `--actors` / `--projects`: with neither
+  filter the API answers an empty page rather than every fact in the workspace,
+  and relaying that as output would misread as "no facts exist". Both flags
+  take one comma-separated value, like `search`. Listed facts carry an
+  `owner: {type, id}` naming the scope they live in, and the payload's `total`
+  is the exact cross-page count when the server provides it.
+- Page size is capped at 50 by the server.
 
 ## Agents
 
