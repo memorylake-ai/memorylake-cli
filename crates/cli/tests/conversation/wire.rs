@@ -8,8 +8,8 @@
 
 use serde_json::{Value, json};
 
-use crate::common::assert_success;
-use crate::common::stub::{exchange, request_body, request_line};
+use crate::common::stub::{exchange, exchange_sequence, request_body, request_line};
+use crate::common::{assert_failure, assert_success};
 
 const CONVERSATION: &str = r#"{"success":true,"data":{"id":"conv-1","kind":"DIRECT"}}"#;
 const EMPTY_PAGE: &str = r#"{"success":true,"data":{"items":[]}}"#;
@@ -338,6 +338,118 @@ fn message_append_forwards_json_blocks_verbatim() {
             "timestamp": "2026-08-13T00:00:00Z",
             "metadata": {"source": "cli"}
         })
+    );
+}
+
+#[test]
+fn append_wait_polls_cook_status_until_it_reports_finished() {
+    let (requests, output) = exchange_sequence(
+        &[
+            MESSAGE,
+            r#"{"success":true,"data":{"cook_finished":false}}"#,
+            r#"{"success":true,"data":{"cook_finished":true}}"#,
+        ],
+        &[
+            "conversation",
+            "message",
+            "append",
+            "conv-1",
+            "--actor",
+            "actor-1",
+            "--custom-id",
+            "msg-42",
+            "--text",
+            "hello",
+            "--wait",
+            "--workspace",
+            "ws-1",
+        ],
+    );
+    let stdout = assert_success(&output, &["conversation", "message", "append", "--wait"]);
+
+    assert_eq!(
+        request_line(&requests[0]),
+        "POST /api/v3/conversations/conv-1/messages HTTP/1.1"
+    );
+    for poll in &requests[1..] {
+        assert_eq!(
+            request_line(poll),
+            "GET /api/v3/workspaces/ws-1/memories/conversations/conv-1/cook-status HTTP/1.1",
+            "--wait polls the workspace-scoped cook-status endpoint"
+        );
+    }
+    assert!(
+        stdout.contains("conv-entry-1"),
+        "the appended message still prints; --wait only decides when to return: {stdout}"
+    );
+}
+
+#[test]
+fn append_wait_fails_when_the_timeout_elapses_first() {
+    // `--timeout 0` gives up after the first poll, so this pins the giving-up
+    // path without spending the backoff schedule.
+    let (requests, output) = exchange_sequence(
+        &[
+            MESSAGE,
+            r#"{"success":true,"data":{"cook_finished":false}}"#,
+        ],
+        &[
+            "conversation",
+            "message",
+            "append",
+            "conv-1",
+            "--actor",
+            "actor-1",
+            "--custom-id",
+            "msg-42",
+            "--text",
+            "hello",
+            "--wait",
+            "--workspace",
+            "ws-1",
+            "--timeout",
+            "0",
+        ],
+    );
+    let err = assert_failure(&output, &["conversation", "message", "append", "--wait"]);
+
+    assert_eq!(requests.len(), 2, "one append, one poll, then give up");
+    assert!(
+        err.contains("still building its memory"),
+        "the failure names what timed out: {err}"
+    );
+    assert!(
+        err.contains("processing continues on the server"),
+        "and that giving up did not cancel anything: {err}"
+    );
+    assert!(
+        err.contains("conv-entry-1"),
+        "the message id is still reported — it was appended: {err}"
+    );
+}
+
+#[test]
+fn append_without_wait_sends_exactly_one_request() {
+    let (requests, output) = exchange_sequence(
+        &[MESSAGE],
+        &[
+            "conversation",
+            "message",
+            "append",
+            "conv-1",
+            "--actor",
+            "actor-1",
+            "--custom-id",
+            "msg-42",
+            "--text",
+            "hello",
+        ],
+    );
+    assert_success(&output, &["conversation", "message", "append"]);
+    assert_eq!(
+        requests.len(),
+        1,
+        "no polling unless --wait was asked for: {requests:?}"
     );
 }
 

@@ -526,8 +526,17 @@ fn conversation_options_reach_the_server() {
         "--parent placed the message after the one it named: {stored}"
     );
 
-    // A third message, so a page size of 2 leaves a second page to fetch.
-    live.json(&[
+    // --- append --wait ----------------------------------------------------
+    // A third message, so a page size of 2 leaves a second page to fetch, and
+    // the one that exercises --wait.
+    //
+    // Either outcome is legitimate here: the server may finish building the
+    // conversation's memory within the timeout, or not — the API documents
+    // that a conversation is not guaranteed to reach a finished state. So this
+    // asserts what must hold either way (the message is stored, and a timeout
+    // says so plainly) rather than pinning a race.
+    let waited_custom_id = unique_name("conv-msg");
+    let args = [
         "conversation",
         "message",
         "append",
@@ -535,10 +544,50 @@ fn conversation_options_reach_the_server() {
         "--actor",
         live.actor.as_str(),
         "--custom-id",
-        unique_name("conv-msg").as_str(),
+        waited_custom_id.as_str(),
         "--text",
         "third message",
+        "--wait",
+        "--workspace",
+        live.workspace.as_str(),
+        "--timeout",
+        "30",
+    ];
+    let output = run(&live.home, &args);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let appended: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|err| panic!("--wait still prints the appended message: {err}\n{stdout}"));
+    let waited_message = id_of(&appended, "append --wait");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("still building its memory"),
+            "the only acceptable --wait failure is the timeout: {stderr}"
+        );
+        assert!(
+            stderr.contains("processing continues on the server"),
+            "a timeout must say the append was not undone: {stderr}"
+        );
+    }
+
+    // Whatever the wait concluded, the message itself is stored.
+    let after_wait = live.json(&[
+        "conversation",
+        "message",
+        "list",
+        conversation.as_str(),
+        "--page-size",
+        "50",
     ]);
+    assert!(
+        after_wait["items"]
+            .as_array()
+            .expect("listing has items")
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(waited_message.as_str())),
+        "--wait does not change what was appended: {after_wait}"
+    );
 
     // --- message list paging ----------------------------------------------
     let page = live.json(&[

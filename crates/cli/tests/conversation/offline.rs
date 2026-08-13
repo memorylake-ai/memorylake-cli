@@ -280,6 +280,33 @@ fn message_append_rejects_malformed_content_before_sending_it() {
 }
 
 #[test]
+fn message_append_wait_requires_a_workspace() {
+    // `cook-status` is workspace-scoped while `message append` is not, so
+    // --wait needs a workspace the command otherwise never asks for. clap
+    // catches it before any request.
+    let home = temp_home();
+    let args = [
+        "conversation",
+        "message",
+        "append",
+        "conv-1",
+        "--actor",
+        "actor-1",
+        "--custom-id",
+        "msg-1",
+        "--text",
+        "hi",
+        "--wait",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("--workspace"),
+        "--wait must name what it is missing: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
 fn message_append_requires_an_actor_and_a_custom_id() {
     let home = temp_home();
     for (args, expected) in [

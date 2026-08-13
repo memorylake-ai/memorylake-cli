@@ -6,10 +6,12 @@
 //! API addresses messages by conversation id alone.
 
 mod input;
+mod wait;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
 use memorylake_core::api::conversations::{
     AppendMessageRequest, ConversationKind, CreateConversationRequest, ListConversationsParams,
@@ -21,6 +23,7 @@ use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 use super::search::{IdList, parse_id_list};
 use input::{build_content, collect_metadata, parse_metadata_pair};
+use wait::{ApiCookPoller, DEFAULT_WAIT_TIMEOUT_SECS, WaitOutcome, wait_for_cook};
 
 /// Conversation kind as spelled on the command line.
 ///
@@ -142,7 +145,8 @@ pub enum ConversationCommand {
 /// `conversation message` subcommands.
 ///
 /// No `--workspace`: the messages endpoints are addressed by conversation id
-/// alone.
+/// alone. `append --wait` is the one exception, because the status it polls
+/// lives on the workspace-scoped `cook-status` endpoint.
 #[derive(Debug, Subcommand)]
 pub enum MessageCommand {
     /// Append a message to a conversation.
@@ -157,6 +161,10 @@ pub enum MessageCommand {
     /// returns the message created the first time instead of duplicating it.
     /// After a 409, re-read `message list` and retry with `--parent` set to
     /// the current last message.
+    ///
+    /// The message is stored the moment this returns, but the facts drawn from
+    /// it are extracted in the background. Pass `--wait` (with `--workspace`)
+    /// to keep polling until the conversation reports its memory finished.
     Append {
         /// Conversation id to append to.
         conversation: String,
@@ -185,6 +193,22 @@ pub enum MessageCommand {
         /// Metadata entry, repeatable (`--metadata key=value`).
         #[arg(long = "metadata", value_name = "KEY=VALUE", value_parser = parse_metadata_pair)]
         metadata: Vec<(String, String)>,
+        /// Poll until the conversation's memory finishes building.
+        ///
+        /// Requires --workspace: the status lives on a workspace-scoped
+        /// endpoint. The wait covers the whole conversation, not this message
+        /// alone, so a concurrent writer can keep it unfinished.
+        #[arg(long, requires = "workspace")]
+        wait: bool,
+        /// Workspace that owns the conversation. Only needed with --wait.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Seconds to keep polling. Only meaningful with `--wait`.
+        ///
+        /// Giving up does not undo the append or stop the processing; both
+        /// carry on server-side.
+        #[arg(long, default_value_t = DEFAULT_WAIT_TIMEOUT_SECS, value_name = "SECS")]
+        timeout: u64,
     },
     /// List the messages in a conversation.
     List {
@@ -295,6 +319,9 @@ fn run_message(client: &Client, command: MessageCommand) -> Result<()> {
             parent_message_id,
             timestamp,
             metadata,
+            wait,
+            workspace,
+            timeout,
         } => {
             let content = build_content(texts, content_json, content_file.as_deref())?;
             let request = AppendMessageRequest {
@@ -307,7 +334,24 @@ fn run_message(client: &Client, command: MessageCommand) -> Result<()> {
             };
             let data = append_message(client, &conversation, &request)
                 .with_context(|| format!("append message to conversation `{conversation}`"))?;
+            // Printed before any wait: the message is already stored, and the
+            // caller must not have to choose between seeing it and seeing a
+            // timeout.
             println!("{}", serde_json::to_string_pretty(&data)?);
+
+            if wait {
+                // clap's `requires` guarantees the workspace is present.
+                let workspace = workspace.context("--wait requires --workspace")?;
+                let poller = ApiCookPoller::new(client, &workspace, &conversation);
+                let outcome = wait_for_cook(&poller, Duration::from_secs(timeout))?;
+                if outcome == WaitOutcome::TimedOut {
+                    bail!(
+                        "conversation `{conversation}` was still building its memory when \
+                         --timeout elapsed ({timeout}s); the message was appended and \
+                         processing continues on the server"
+                    );
+                }
+            }
         }
         MessageCommand::List {
             conversation,

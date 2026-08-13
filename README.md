@@ -325,7 +325,8 @@ memorylake conversation delete --workspace ws-1234 <id>
 
 memorylake conversation message append <conversation-id> --actor actor-… --custom-id msg-42 \
   (--text "hello" [--text ...] | --content-json '<blocks>' | --content-file blocks.json) \
-  [--parent <message-id>] [--timestamp 2026-08-13T00:00:00Z] [--metadata key=value ...]
+  [--parent <message-id>] [--timestamp 2026-08-13T00:00:00Z] [--metadata key=value ...] \
+  [--wait --workspace ws-1234 [--timeout 600]]
 
 memorylake conversation message list <conversation-id> [--page-size N] [--continuation-token TOKEN]
 ```
@@ -363,8 +364,30 @@ memorylake conversation message list <conversation-id> [--page-size N] [--contin
   the append output.
 - **Memory lags messages.** An appended message is stored immediately but is
   not searchable until the server has processed it. `cook-status` reports
-  `cook_finished` for that; poll it with a timeout of your own, since not every
-  conversation reaches a finished state.
+  `cook_finished` for that.
+- `message append --wait` does that polling for you, backing off from 1s to 15s
+  between rounds and giving up after `--timeout` seconds (default 600). Three
+  things worth knowing:
+  - It **requires `--workspace`**, the one place a message subcommand does:
+    `cook-status` is a workspace-scoped endpoint while the append itself is not.
+  - It waits on the **whole conversation**, not just the message you appended —
+    that is all the endpoint reports — so a concurrent writer can keep it
+    unfinished.
+  - **Giving up does not undo the append or stop the processing**; both carry on
+    server-side. The message is printed before the wait begins and the command
+    then exits non-zero, so a timeout never costs you the output. Bound the wait
+    yourself: the API does not guarantee every conversation reaches a finished
+    state.
+- A conversation with no messages reports `cook_finished: true` — the flag means
+  "nothing left in flight", not "memory has been built". Measured against
+  production 2026-08-13, one message took ~9s to come back finished and three
+  took ~19s.
+- **Facts extracted from a conversation land on the speaking actor, not the
+  read-write project.** After a `--wait` returns, three first-person messages in
+  a single-actor conversation produced six facts under
+  `fact list --actors <actor>` and none under `fact list --projects <project>`,
+  even though the project was the conversation's `rw_project_ids` entry
+  (measured 2026-08-13). Look for the results under the actor.
 - `delete` removes the conversation **and every message in it**, immediately,
   with no confirmation prompt. Unlike `get` and `cook-status` it has no
   `--by-custom-id` lookup; resolve a `custom_id` with
