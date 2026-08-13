@@ -25,7 +25,7 @@ cargo run -p memorylake-cli -- --help
 cargo test --workspace
 ```
 
-Live API tests (workspaces, actors, projects, library, agents, documents, search) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
+Live API tests (workspaces, actors, projects, library, agents, documents, search, conversations) require `MEMORYLAKE_API_KEY`. Put secrets in a gitignored `.env` at the repo root:
 
 ```bash
 cp .env.example .env
@@ -47,7 +47,7 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `actor` / `agent` / `auth` / `document` / `library` / `project` / `search` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`. The agent live test runs a full create → version → bind → unbind → delete lifecycle and deletes the agent it created, including when an assertion fails partway. The document live tests upload their own scratch files, import them into a scratch project, and remove both.
+CLI command coverage comes from `crates/cli/tests/` (`cli_commands` harness + `actor` / `agent` / `auth` / `conversation` / `document` / `library` / `project` / `search` / `workspace` / `meta` suites; spawns the `memorylake` binary under a temp `$HOME`). Live CLI tests also need `MEMORYLAKE_API_KEY`. The agent live test runs a full create → version → bind → unbind → delete lifecycle and deletes the agent it created, including when an assertion fails partway. The document live tests upload their own scratch files, import them into a scratch project, and remove both. The conversation live test runs a full create → append → read → delete lifecycle against a scratch project and actor, and removes both from `Drop` so a mid-test failure still cleans up.
 
 CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli) and as a workflow artifact.
 
@@ -306,6 +306,69 @@ memorylake fact list --workspace ws-1234 [--actors a1,a2] [--projects p1,p2] \
   `owner: {type, id}` naming the scope they live in, and the payload's `total`
   is the exact cross-page count when the server provides it.
 - Page size is capped at 50 by the server.
+
+## Conversations
+
+A conversation is an ordered log of messages that the server turns into memory
+in the background. It belongs to a workspace and writes what it learns into
+exactly one project, named at creation time.
+
+```bash
+memorylake conversation create --workspace ws-1234 --custom-id session-42 \
+  --project proj-… [--name "Q3 Planning"] [--kind DIRECT|GROUP] \
+  [--actors a1,a2] [--metadata key=value ...]
+
+memorylake conversation list --workspace ws-1234 [--page-size N] [--continuation-token TOKEN]
+memorylake conversation get --workspace ws-1234 <id> [--by-custom-id]
+memorylake conversation cook-status --workspace ws-1234 <id> [--by-custom-id]
+memorylake conversation delete --workspace ws-1234 <id>
+
+memorylake conversation message append <conversation-id> --actor actor-… --custom-id msg-42 \
+  (--text "hello" [--text ...] | --content-json '<blocks>' | --content-file blocks.json) \
+  [--parent <message-id>] [--timestamp 2026-08-13T00:00:00Z] [--metadata key=value ...]
+
+memorylake conversation message list <conversation-id> [--page-size N] [--continuation-token TOKEN]
+```
+
+- `conv` is an alias for `conversation`, `msg` for `message`.
+- **The message subcommands take no `--workspace`.** The API addresses
+  conversations under their workspace
+  (`workspaces/{id}/memories/conversations/…`) but messages by conversation id
+  alone (`conversations/{id}/messages`), and the CLI mirrors that split.
+- `--project` is the conversation's read-write project: it reads context from
+  and writes facts and memory into that one project, and the caller needs
+  `project:mem_add` and `project:doc_add` on it. The API takes a
+  `rw_project_ids` list but accepts exactly one entry today.
+- **There is no project-scoped conversation listing.** `list` takes no filter
+  at all — not by project, not by actor — because the API offers none; filter
+  the workspace listing client-side (each item carries `rw_project_ids`) if you
+  need to.
+- Message content is a list of typed blocks. Each `--text` becomes one `TEXT`
+  block, in the order given; for the other five types (`FILE`, `IMAGE`,
+  `THINKING`, `TOOL_USE`, `TOOL_RESULT`) pass the block array directly with
+  `--content-json` / `--content-file`. The two ways are **mutually exclusive**
+  — mixing them would leave block order up to an unwritten rule. Blocks are
+  forwarded verbatim, so a block type this CLI predates still works; only a
+  missing or non-string `block_type` is rejected locally.
+- Appends to one conversation are **serialized server-side**: two at once leave
+  one caller with a 409 Conflict. Recovering is safe because `--custom-id` is
+  required and makes a retry idempotent — the same id returns the message
+  created the first time instead of duplicating it. After a 409, re-read
+  `message list` and retry with `--parent` set to the current last message.
+  Omitting `--parent` means "append after the latest message".
+- **`message append` does not echo everything it stored.** Its response leaves
+  `metadata`, `timestamp` and `actor_type` null even when the request set them
+  (measured 2026-08-13 against production). The values *are* stored —
+  `message list` reports them — so confirm a write by reading the listing, not
+  the append output.
+- **Memory lags messages.** An appended message is stored immediately but is
+  not searchable until the server has processed it. `cook-status` reports
+  `cook_finished` for that; poll it with a timeout of your own, since not every
+  conversation reaches a finished state.
+- `delete` removes the conversation **and every message in it**, immediately,
+  with no confirmation prompt. Unlike `get` and `cook-status` it has no
+  `--by-custom-id` lookup; resolve a `custom_id` with
+  `conversation get --by-custom-id` first.
 
 ## Agents
 

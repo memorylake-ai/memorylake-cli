@@ -16,6 +16,7 @@
 //!   search/{offline,wire,live}.rs
 //!   document/{offline,live}.rs
 //!   fact/{offline,live}.rs
+//!   conversation/{offline,wire,live}.rs
 //! ```
 //!
 //! Offline tests isolate config under a temporary `$HOME`.
@@ -26,6 +27,7 @@ mod actor;
 mod agent;
 mod auth;
 mod common;
+mod conversation;
 mod document;
 mod fact;
 mod library;
