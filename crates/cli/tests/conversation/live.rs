@@ -198,7 +198,7 @@ fn conversation_lifecycle_create_append_read_delete() {
     assert_eq!(
         created["rw_project_ids"],
         Value::Array(vec![Value::String(live.project.clone())]),
-        "the conversation writes memory into the project it was given: {created}"
+        "--project becomes the conversation's read-write scope: {created}"
     );
     assert_eq!(
         created["name"], "CLI live conversation",

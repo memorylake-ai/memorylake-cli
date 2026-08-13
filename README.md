@@ -336,9 +336,10 @@ memorylake conversation message list <conversation-id> [--page-size N] [--contin
   conversations under their workspace
   (`workspaces/{id}/memories/conversations/…`) but messages by conversation id
   alone (`conversations/{id}/messages`), and the CLI mirrors that split.
-- `--project` is the conversation's read-write project: it reads context from
-  and writes facts and memory into that one project, and the caller needs
-  `project:mem_add` and `project:doc_add` on it. The API takes a
+- `--project` is the conversation's read-write project — the scope it may read
+  context from and write into — and the caller needs `project:mem_add` and
+  `project:doc_add` on it. It bounds the conversation's access; it does not
+  decide where extracted facts end up (see below). The API takes a
   `rw_project_ids` list but accepts exactly one entry today.
 - **There is no project-scoped conversation listing.** `list` takes no filter
   at all — not by project, not by actor — because the API offers none; filter
@@ -382,12 +383,14 @@ memorylake conversation message list <conversation-id> [--page-size N] [--contin
   "nothing left in flight", not "memory has been built". Measured against
   production 2026-08-13, one message took ~9s to come back finished and three
   took ~19s.
-- **Facts extracted from a conversation land on the speaking actor, not the
-  read-write project.** After a `--wait` returns, three first-person messages in
-  a single-actor conversation produced six facts under
-  `fact list --actors <actor>` and none under `fact list --projects <project>`,
-  even though the project was the conversation's `rw_project_ids` entry
-  (measured 2026-08-13). Look for the results under the actor.
+- **Which scope an extracted fact lands in is the server's decision, not
+  yours.** Nothing on `create` or `message append` selects it: the backend
+  attributes each fact to an actor or a project based on what the fact is
+  about. `--project` scopes what the conversation may read and write; it does
+  not route facts. So after a wait returns, look in both places — a
+  single-actor conversation of three first-person messages put all six facts
+  under `fact list --actors <actor>` and none under
+  `fact list --projects <project>` (measured 2026-08-13).
 - `delete` removes the conversation **and every message in it**, immediately,
   with no confirmation prompt. Unlike `get` and `cook-status` it has no
   `--by-custom-id` lookup; resolve a `custom_id` with

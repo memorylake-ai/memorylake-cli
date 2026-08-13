@@ -54,9 +54,11 @@ impl From<KindArg> for ConversationKind {
 pub enum ConversationCommand {
     /// Create a conversation.
     ///
-    /// The conversation reads context from, and writes memory into, the one
-    /// project given by `--project`; the caller needs `mem_add` and `doc_add`
-    /// on it. The API accepts exactly one such project today.
+    /// `--project` is the scope the conversation may read context from and
+    /// write to; the caller needs `mem_add` and `doc_add` on it, and the API
+    /// accepts exactly one such project today. It does not decide where the
+    /// facts extracted from the conversation end up — the server attributes
+    /// each of those to an actor or a project on its own.
     Create {
         /// Workspace id to create the conversation in.
         #[arg(long)]
@@ -64,7 +66,7 @@ pub enum ConversationCommand {
         /// Caller-defined id. Must be unique within the project.
         #[arg(long)]
         custom_id: String,
-        /// Project this conversation reads from and writes memory to.
+        /// Project scope this conversation may read from and write to.
         #[arg(long)]
         project: String,
         /// Conversation title.

@@ -20,7 +20,12 @@ pub struct CreateConversationRequest {
     pub custom_id: String,
     /// Whether the conversation is `DIRECT` or `GROUP`.
     pub kind: ConversationKind,
-    /// The project this conversation reads context from and writes memory to.
+    /// The project scope this conversation may read context from and write to.
+    ///
+    /// Bounds the conversation's access; it does not route what the server
+    /// extracts. Which scope a fact is attributed to — an actor or a project —
+    /// is decided server-side from the fact itself, and no request field
+    /// selects it.
     ///
     /// A list on the wire, but exactly one entry is accepted for now. The
     /// caller must hold `project:mem_add` and `project:doc_add` on it.

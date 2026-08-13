@@ -2,10 +2,11 @@
 //! (`.../workspaces/{id}/memories/conversations` and `.../conversations/{id}/messages`).
 //!
 //! A conversation is an ordered log of messages that the server turns into
-//! memory in the background. It belongs to a workspace and writes what it
-//! learns into exactly one read-write project, named at creation time.
+//! memory in the background. It belongs to a workspace and names one
+//! read-write project at creation time, which bounds what it may read and
+//! write.
 //!
-//! Two things follow from that and shape this module:
+//! Three things follow from that and shape this module:
 //!
 //! * **Two address spaces.** The conversation itself is addressed under its
 //!   workspace; its messages are addressed by conversation id alone, with no
@@ -13,6 +14,9 @@
 //! * **Memory lags messages.** An appended message is stored immediately but
 //!   is not searchable until the server has processed it, so
 //!   [`get_cook_status`] exists to tell the two states apart.
+//! * **Attribution is the server's.** Which scope an extracted fact lands in —
+//!   an actor or a project — is decided server-side from the fact itself. No
+//!   field here selects it, so nothing in this module tries to model it.
 //!
 //! Appends within one conversation are serialized: concurrent ones leave one
 //! caller with a 409, recoverable because every message carries a caller-chosen
