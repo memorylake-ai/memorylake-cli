@@ -3,6 +3,7 @@
 pub mod actor;
 pub mod agent;
 pub mod auth;
+pub mod conversation;
 pub mod fact;
 pub mod library;
 

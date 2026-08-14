@@ -23,3 +23,6 @@ lcov.info
 coverage/
 *.profraw
 *.profdata
+
+# Claude local config
+.claude/*.local.md

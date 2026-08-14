@@ -11,6 +11,7 @@ use tracing_subscriber::EnvFilter;
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
 use commands::auth::{AuthCommand, run as run_auth};
+use commands::conversation::{ConversationCommand, run as run_conversation};
 use commands::fact::{FactCommand, run as run_fact};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::project::{ProjectCommand, run as run_project};
@@ -75,6 +76,12 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Manage conversations and their messages.
+    #[command(visible_alias = "conv")]
+    Conversation {
+        #[command(subcommand)]
+        command: ConversationCommand,
+    },
     /// Add, delete, and list memory facts.
     Fact {
         #[command(subcommand)]
@@ -97,6 +104,7 @@ fn main() -> Result<()> {
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
         Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
         Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
+        Commands::Conversation { command } => run_conversation(command, cli.profile, cli.base_url)?,
         Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
         Commands::Version => {

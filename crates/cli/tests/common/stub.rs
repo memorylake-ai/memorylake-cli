@@ -26,23 +26,40 @@ struct StubServer {
 
 impl StubServer {
     fn new(body: &str) -> Self {
+        Self::with_responses(&[body])
+    }
+
+    /// Answer `bodies.len()` requests, one canned body each, in order.
+    ///
+    /// Commands that poll send several requests in one run; each gets the next
+    /// body, so a test can script a sequence like "not finished, then
+    /// finished". Every response closes its connection, so each request
+    /// arrives on a fresh one.
+    fn with_responses(bodies: &[&str]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
         let addr = listener.local_addr().expect("stub server address");
-        let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-            body.len()
-        );
+        let responses: Vec<String> = bodies
+            .iter()
+            .map(|body| {
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            })
+            .collect();
 
         let (sender, requests) = channel();
         let handle = std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            let request = read_http_request(&mut stream);
-            // Best effort: a dropped receiver means the test already ended.
-            let _ = sender.send(request);
-            let _ = stream.write_all(response.as_bytes());
-            let _ = stream.flush();
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let request = read_http_request(&mut stream);
+                // Best effort: a dropped receiver means the test already ended.
+                let _ = sender.send(request);
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
         });
 
         Self {
@@ -58,6 +75,24 @@ impl StubServer {
             Err(RecvTimeoutError::Timeout) => panic!("stub server received no request"),
             Err(RecvTimeoutError::Disconnected) => panic!("stub server thread died"),
         }
+    }
+
+    /// Collect exactly `count` requests, failing if fewer arrive in time.
+    ///
+    /// The timeout is generous because a polling command sleeps between
+    /// requests.
+    fn received_all(&self, count: usize) -> Vec<String> {
+        (0..count)
+            .map(
+                |index| match self.requests.recv_timeout(Duration::from_secs(30)) {
+                    Ok(request) => request,
+                    Err(RecvTimeoutError::Timeout) => {
+                        panic!("stub server received {index} of {count} expected requests")
+                    }
+                    Err(RecvTimeoutError::Disconnected) => panic!("stub server thread died"),
+                },
+            )
+            .collect()
     }
 }
 
@@ -127,6 +162,20 @@ pub fn exchange(response: &str, args: &[&str]) -> (String, Output) {
     let request = server.received();
     let _ = fs::remove_dir_all(&home);
     (request, output)
+}
+
+/// Run one command against a stub that answers `responses` in order, and
+/// report every request the CLI sent alongside the process output.
+///
+/// For commands that poll: the request count is pinned by the length of
+/// `responses`, so an extra or missing round trip fails the test.
+pub fn exchange_sequence(responses: &[&str], args: &[&str]) -> (Vec<String>, Output) {
+    let server = StubServer::with_responses(responses);
+    let home = logged_in_home(&server.base_url);
+    let output = run(&home, args);
+    let requests = server.received_all(responses.len());
+    let _ = fs::remove_dir_all(&home);
+    (requests, output)
 }
 
 /// First line of a raw HTTP request (`METHOD path HTTP/1.1`).
