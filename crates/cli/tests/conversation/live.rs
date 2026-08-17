@@ -649,6 +649,8 @@ fn conversation_options_reach_the_server() {
             unique_name("conv-second").as_str(),
             "--project",
             live.project.as_str(),
+            "--actors",
+            live.actor.as_str(),
         ]),
         "second conversation create",
     );

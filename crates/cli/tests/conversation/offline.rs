@@ -64,7 +64,7 @@ fn message_help_lists_its_subcommands() {
 }
 
 #[test]
-fn create_requires_a_workspace_a_custom_id_and_a_project() {
+fn create_requires_a_workspace_a_custom_id_a_project_and_actors() {
     let home = temp_home();
     for (args, expected) in [
         (
@@ -75,6 +75,8 @@ fn create_requires_a_workspace_a_custom_id_and_a_project() {
                 "s-1",
                 "--project",
                 "proj-1",
+                "--actors",
+                "a-1",
             ],
             "--workspace",
         ),
@@ -86,6 +88,8 @@ fn create_requires_a_workspace_a_custom_id_and_a_project() {
                 "ws-1",
                 "--project",
                 "proj-1",
+                "--actors",
+                "a-1",
             ],
             "--custom-id",
         ),
@@ -97,8 +101,23 @@ fn create_requires_a_workspace_a_custom_id_and_a_project() {
                 "ws-1",
                 "--custom-id",
                 "s-1",
+                "--actors",
+                "a-1",
             ],
             "--project",
+        ),
+        (
+            vec![
+                "conversation",
+                "create",
+                "--workspace",
+                "ws-1",
+                "--custom-id",
+                "s-1",
+                "--project",
+                "proj-1",
+            ],
+            "--actors",
         ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);
@@ -122,6 +141,8 @@ fn create_rejects_a_kind_outside_the_documented_pair() {
             "s-1",
             "--project",
             "proj-1",
+            "--actors",
+            "a-1",
             "--kind",
             "BROADCAST",
         ],
@@ -145,6 +166,8 @@ fn create_spells_kinds_the_way_the_api_does() {
             "s-1",
             "--project",
             "proj-1",
+            "--actors",
+            "a-1",
             "--kind",
             kind,
         ];
@@ -166,6 +189,8 @@ fn create_spells_kinds_the_way_the_api_does() {
             "s-1",
             "--project",
             "proj-1",
+            "--actors",
+            "a-1",
             "--kind",
             "direct",
         ],
@@ -185,6 +210,8 @@ fn metadata_must_be_key_equals_value() {
             "s-1",
             "--project",
             "proj-1",
+            "--actors",
+            "a-1",
             "--metadata",
             "novalue",
         ],
@@ -200,6 +227,8 @@ fn metadata_must_be_key_equals_value() {
             "s-1",
             "--project",
             "proj-1",
+            "--actors",
+            "a-1",
             "--metadata",
             "=orphan",
         ],
@@ -359,6 +388,8 @@ fn every_subcommand_without_login_fails() {
             "s-1",
             "--project",
             "proj-1",
+            "--actors",
+            "a-1",
         ],
         vec!["conversation", "list", "--workspace", "ws-1"],
         vec!["conversation", "get", "--workspace", "ws-1", "conv-1"],

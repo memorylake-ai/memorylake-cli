@@ -33,6 +33,8 @@ fn create_posts_to_the_workspace_memories_tree() {
             "session-42",
             "--project",
             "proj-1",
+            "--actors",
+            "actor-1",
         ],
     );
     assert_success(&output, &["conversation", "create"]);
@@ -45,8 +47,9 @@ fn create_posts_to_the_workspace_memories_tree() {
 
 #[test]
 fn create_sends_only_what_was_asked_for() {
-    // `name`, `actor_ids` and `metadata` were not given: they must be absent,
-    // not null and not empty, so the server applies its own defaults.
+    // `name` and `metadata` were not given: they must be absent, not null and
+    // not empty, so the server applies its own defaults. `actor_ids` is not
+    // one of them — the API requires it, so it is always on the wire.
     let (request, _) = exchange(
         CONVERSATION,
         &[
@@ -58,6 +61,8 @@ fn create_sends_only_what_was_asked_for() {
             "session-42",
             "--project",
             "proj-1",
+            "--actors",
+            "actor-1",
         ],
     );
     assert_eq!(
@@ -65,7 +70,8 @@ fn create_sends_only_what_was_asked_for() {
         json!({
             "custom_id": "session-42",
             "kind": "DIRECT",
-            "rw_project_ids": ["proj-1"]
+            "rw_project_ids": ["proj-1"],
+            "actor_ids": ["actor-1"]
         })
     );
 }
