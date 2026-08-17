@@ -76,8 +76,10 @@ pub enum ConversationCommand {
         #[arg(long, value_enum, default_value = "DIRECT")]
         kind: KindArg,
         /// Actors participating in the conversation (comma-separated).
+        ///
+        /// Required: the API rejects a conversation with no actors.
         #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
-        actors: Option<IdList>,
+        actors: IdList,
         /// Metadata entry, repeatable (`--metadata key=value`).
         #[arg(long = "metadata", value_name = "KEY=VALUE", value_parser = parse_metadata_pair)]
         metadata: Vec<(String, String)>,
@@ -251,7 +253,7 @@ pub fn run(
                 kind: kind.into(),
                 rw_project_ids: vec![project],
                 name,
-                actor_ids: actors.map(|list| list.0).unwrap_or_default(),
+                actor_ids: actors.0,
                 metadata: collect_metadata(metadata),
             };
             let data = create_conversation(&client, &workspace, &request)

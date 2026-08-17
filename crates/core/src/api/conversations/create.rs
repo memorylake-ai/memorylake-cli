@@ -11,9 +11,9 @@ use super::types::{Conversation, ConversationKind, Metadata};
 
 /// Request body for creating a conversation.
 ///
-/// `custom_id`, `kind` and `rw_project_ids` are required by the API and are
-/// therefore plain fields. Optional ones are omitted from the body entirely
-/// when unset rather than sent as `null` or `[]`.
+/// `custom_id`, `kind`, `rw_project_ids` and `actor_ids` are required by the
+/// API and are therefore plain fields. Optional ones are omitted from the body
+/// entirely when unset rather than sent as `null` or `[]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CreateConversationRequest {
     /// Caller-defined identifier, unique within the project.
@@ -34,7 +34,9 @@ pub struct CreateConversationRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Actors participating in this conversation.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Required: the API rejects a create whose `actor_ids` is missing or
+    /// empty, so this is always sent.
     pub actor_ids: Vec<String>,
     /// Arbitrary key/value metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,7 +63,7 @@ mod tests {
             kind: ConversationKind::Direct,
             rw_project_ids: vec!["proj-1".into()],
             name: None,
-            actor_ids: Vec::new(),
+            actor_ids: vec!["actor-1".into()],
             metadata: None,
         }
     }
@@ -69,13 +71,15 @@ mod tests {
     #[test]
     fn a_minimal_body_sends_only_the_required_fields() {
         // An omitted optional must be absent, not `null` and not `[]`: the API
-        // reads a present-but-empty field as an explicit value.
+        // reads a present-but-empty field as an explicit value. `actor_ids` is
+        // not among them — the API requires it.
         assert_eq!(
             serde_json::to_value(minimal()).expect("serialize"),
             json!({
                 "custom_id": "session-42",
                 "kind": "DIRECT",
-                "rw_project_ids": ["proj-1"]
+                "rw_project_ids": ["proj-1"],
+                "actor_ids": ["actor-1"]
             })
         );
     }

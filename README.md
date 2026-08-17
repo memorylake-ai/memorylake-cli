@@ -315,8 +315,8 @@ exactly one project, named at creation time.
 
 ```bash
 memorylake conversation create --workspace ws-1234 --custom-id session-42 \
-  --project proj-… [--name "Q3 Planning"] [--kind DIRECT|GROUP] \
-  [--actors a1,a2] [--metadata key=value ...]
+  --project proj-… --actors a1[,a2] [--name "Q3 Planning"] [--kind DIRECT|GROUP] \
+  [--metadata key=value ...]
 
 memorylake conversation list --workspace ws-1234 [--page-size N] [--continuation-token TOKEN]
 memorylake conversation get --workspace ws-1234 <id> [--by-custom-id]
@@ -341,6 +341,9 @@ memorylake conversation message list <conversation-id> [--page-size N] [--contin
   `project:doc_add` on it. It bounds the conversation's access; it does not
   decide where extracted facts end up (see below). The API takes a
   `rw_project_ids` list but accepts exactly one entry today.
+- `--actors` is **required**: the API rejects a conversation created without
+  participants, so the CLI asks for them up front rather than letting the
+  server turn it down. Pass several comma-separated for a `GROUP`.
 - **There is no project-scoped conversation listing.** `list` takes no filter
   at all — not by project, not by actor — because the API offers none; filter
   the workspace listing client-side (each item carries `rw_project_ids`) if you
