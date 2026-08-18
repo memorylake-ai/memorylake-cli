@@ -21,6 +21,7 @@ use memorylake_core::api::conversations::{
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
+use super::require_workspace;
 use super::search::{IdList, parse_id_list};
 use input::{build_content, collect_metadata, parse_metadata_pair};
 use wait::{ApiCookPoller, DEFAULT_WAIT_TIMEOUT_SECS, WaitOutcome, wait_for_cook};
@@ -61,8 +62,10 @@ pub enum ConversationCommand {
     /// each of those to an actor or a project on its own.
     Create {
         /// Workspace id to create the conversation in.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Caller-defined id. Must be unique within the project.
         #[arg(long)]
         custom_id: String,
@@ -90,8 +93,10 @@ pub enum ConversationCommand {
     /// actor — so this returns the workspace's conversations as they come.
     List {
         /// Workspace id that owns the conversations.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Number of items per page.
         #[arg(long)]
         page_size: Option<u32>,
@@ -102,8 +107,10 @@ pub enum ConversationCommand {
     /// Get a single conversation.
     Get {
         /// Workspace id that owns the conversation.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Conversation id (or custom_id when `--by-custom-id` is set).
         id: String,
         /// Treat the positional argument as a caller-defined custom_id.
@@ -117,8 +124,10 @@ pub enum ConversationCommand {
     /// `conversation get --by-custom-id` first.
     Delete {
         /// Workspace id that owns the conversation.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Conversation id.
         id: String,
     },
@@ -130,8 +139,10 @@ pub enum ConversationCommand {
     /// own, because not every conversation reaches a finished state.
     CookStatus {
         /// Workspace id that owns the conversation.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Conversation id (or custom_id when `--by-custom-id` is set).
         id: String,
         /// Treat the positional argument as a caller-defined custom_id.
@@ -199,10 +210,13 @@ pub enum MessageCommand {
         metadata: Vec<(String, String)>,
         /// Poll until the conversation's memory finishes building.
         ///
-        /// Requires --workspace: the status lives on a workspace-scoped
-        /// endpoint. The wait covers the whole conversation, not this message
-        /// alone, so a concurrent writer can keep it unfinished.
-        #[arg(long, requires = "workspace")]
+        /// Needs a workspace, unlike the append itself: the status lives on a
+        /// workspace-scoped endpoint. `--workspace`, a remembered one from
+        /// `workspace use`, or MEMORYLAKE_WORKSPACE all satisfy it.
+        ///
+        /// The wait covers the whole conversation, not this message alone, so
+        /// a concurrent writer can keep it unfinished.
+        #[arg(long)]
         wait: bool,
         /// Workspace that owns the conversation. Only needed with --wait.
         #[arg(long)]
@@ -248,6 +262,7 @@ pub fn run(
             actors,
             metadata,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let request = CreateConversationRequest {
                 custom_id,
                 kind: kind.into(),
@@ -265,6 +280,7 @@ pub fn run(
             page_size,
             continuation_token,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let params = ListConversationsParams {
                 page_size,
                 continuation_token,
@@ -278,6 +294,7 @@ pub fn run(
             id,
             by_custom_id,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = if by_custom_id {
                 get_conversation_by_custom_id(&client, &workspace, &id)
             } else {
@@ -287,6 +304,7 @@ pub fn run(
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         ConversationCommand::Delete { workspace, id } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             delete_conversation(&client, &workspace, &id)
                 .with_context(|| format!("delete conversation `{id}`"))?;
             println!("deleted conversation {id}");
@@ -296,6 +314,7 @@ pub fn run(
             id,
             by_custom_id,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = if by_custom_id {
                 get_cook_status_by_custom_id(&client, &workspace, &id)
             } else {
@@ -304,14 +323,21 @@ pub fn run(
             .with_context(|| format!("get cook status of conversation `{id}`"))?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
-        ConversationCommand::Message { command } => run_message(&client, command)?,
+        ConversationCommand::Message { command } => {
+            run_message(&client, &paths, &runtime.profile, command)?
+        }
     }
 
     Ok(())
 }
 
 /// Execute a `conversation message` subcommand.
-fn run_message(client: &Client, command: MessageCommand) -> Result<()> {
+fn run_message(
+    client: &Client,
+    paths: &Paths,
+    profile: &str,
+    command: MessageCommand,
+) -> Result<()> {
     match command {
         MessageCommand::Append {
             conversation,
@@ -328,6 +354,17 @@ fn run_message(client: &Client, command: MessageCommand) -> Result<()> {
             timeout,
         } => {
             let content = build_content(texts, content_json, content_file.as_deref())?;
+            // Resolved before the append, not inside the `if wait` below:
+            // appending is not idempotent from the caller's point of view, so
+            // discovering a missing workspace afterwards would leave the
+            // message stored and the command failed. Only --wait needs one, so
+            // a plain append still asks for nothing.
+            let wait_workspace = if wait {
+                Some(require_workspace(paths, profile, workspace)?)
+            } else {
+                None
+            };
+
             let request = AppendMessageRequest {
                 actor_id: actor,
                 custom_id,
@@ -343,9 +380,7 @@ fn run_message(client: &Client, command: MessageCommand) -> Result<()> {
             // timeout.
             println!("{}", serde_json::to_string_pretty(&data)?);
 
-            if wait {
-                // clap's `requires` guarantees the workspace is present.
-                let workspace = workspace.context("--wait requires --workspace")?;
+            if let Some(workspace) = wait_workspace {
                 let poller = ApiCookPoller::new(client, &workspace, &conversation);
                 let outcome = wait_for_cook(&poller, Duration::from_secs(timeout))?;
                 if outcome == WaitOutcome::TimedOut {

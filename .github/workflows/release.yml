@@ -26,6 +26,10 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -36,7 +40,10 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build
         run: cargo build --release -p memorylake-cli --target ${{ matrix.target }}
-      - name: Package
+      # Unix ships .tar.gz; Windows ships .zip, which Expand-Archive handles
+      # natively so the PowerShell installer needs no external tools.
+      - name: Package (unix)
+        if: runner.os != 'Windows'
         run: |
           name="memorylake-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$name"
@@ -44,6 +51,19 @@ jobs:
           cp README.md LICENSE "$name/"
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "memorylake-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/memorylake.exe" $name
+          Copy-Item README.md, LICENSE $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          # Match the `shasum` format the Unix assets use, so both installers
+          # parse the checksum file the same way.
+          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File -FilePath "$name.zip.sha256" -Encoding ascii -NoNewline
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -51,6 +71,8 @@ jobs:
           path: |
             memorylake-*.tar.gz
             memorylake-*.tar.gz.sha256
+            memorylake-*.zip
+            memorylake-*.zip.sha256
 
   release:
     name: release
@@ -66,4 +88,6 @@ jobs:
           files: |
             memorylake-*.tar.gz
             memorylake-*.tar.gz.sha256
+            memorylake-*.zip
+            memorylake-*.zip.sha256
           generate_release_notes: true

@@ -98,10 +98,16 @@ impl StubServer {
 
 impl Drop for StubServer {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            // Best effort: a panicking server thread already failed the test.
-            let _ = handle.join();
-        }
+        // The server thread is deliberately dropped rather than joined.
+        //
+        // It may be parked in `accept()` waiting for a request the command under
+        // test never sent — which is exactly what happens when that command
+        // fails before reaching the network. Joining then blocks forever, so a
+        // clean "received no request" panic turns into a test that appears to
+        // hang, hiding the real failure behind a timeout. Nothing observable
+        // depends on the thread finishing: it owns only its listener and a
+        // sender whose receiver is going away with this struct.
+        drop(self.handle.take());
     }
 }
 
@@ -151,6 +157,42 @@ pub fn logged_in_home(base_url: &str) -> PathBuf {
     )
     .expect("write credentials.toml");
     home
+}
+
+/// A temp `$HOME` logged in and already remembering `workspace`, as though
+/// `workspace use` had run.
+pub fn logged_in_home_with_workspace(base_url: &str, workspace: &str) -> PathBuf {
+    let home = temp_home();
+    let root = home.join(".memorylake");
+    fs::create_dir_all(&root).expect("create .memorylake");
+    fs::write(
+        root.join("config.toml"),
+        format!(
+            "active_profile = \"default\"\n\n[profiles.default]\nbase_url = \"{base_url}\"\nworkspace = \"{workspace}\"\n"
+        ),
+    )
+    .expect("write config.toml");
+    fs::write(
+        root.join("credentials.toml"),
+        "[profiles.default]\napi_key = \"sk_offline_stub_key\"\nlogin_method = \"api_key\"\n",
+    )
+    .expect("write credentials.toml");
+    home
+}
+
+/// Run one command against a stub, from a `$HOME` that already remembers a
+/// workspace. Reports the request the CLI sent and the process output.
+pub fn exchange_with_remembered_workspace(
+    response: &str,
+    workspace: &str,
+    args: &[&str],
+) -> (String, Output) {
+    let server = StubServer::new(response);
+    let home = logged_in_home_with_workspace(&server.base_url, workspace);
+    let output = run(&home, args);
+    let request = server.received();
+    let _ = fs::remove_dir_all(&home);
+    (request, output)
 }
 
 /// Run one command against a stub returning `response`, and report both the

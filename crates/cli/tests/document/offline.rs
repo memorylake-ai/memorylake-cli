@@ -2,6 +2,7 @@
 
 use std::fs;
 
+use crate::common::stub::logged_in_home;
 use crate::common::{assert_failure, assert_success, run, temp_home};
 
 #[test]
@@ -185,10 +186,6 @@ fn missing_workspace_or_project_flag_is_rejected() {
     let home = temp_home();
     for (args, missing) in [
         (
-            ["project", "document", "list", "--project", "proj-1"].as_slice(),
-            "--workspace",
-        ),
-        (
             ["project", "document", "list", "--workspace", "ws-1"].as_slice(),
             "--project",
         ),
@@ -203,6 +200,15 @@ fn missing_workspace_or_project_flag_is_rejected() {
             "missing {missing} should be reported for {args:?}: {err}"
         );
     }
+    let _ = fs::remove_dir_all(&home);
+
+    // `--workspace` is optional now that one can be remembered, so its absence
+    // is a runtime error naming how to supply one, not a clap error.
+    let home = logged_in_home("http://127.0.0.1:1/openapi/memorylake");
+    let args = ["project", "document", "list", "--project", "proj-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("no workspace given"), "{err}");
+    assert!(err.contains("workspace use"), "{err}");
     let _ = fs::remove_dir_all(&home);
 }
 

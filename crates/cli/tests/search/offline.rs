@@ -89,16 +89,18 @@ fn without_login_it_fails_on_credentials() {
 #[test]
 fn missing_workspace_or_query_is_rejected() {
     let home = temp_home();
-    for (args, expected) in [
-        (["search", "some query"].as_slice(), "--workspace"),
-        (["search", "--workspace", "ws-1"].as_slice(), "QUERY"),
-    ] {
-        let err = assert_failure(&run(&home, args), args);
-        assert!(
-            err.contains(expected),
-            "expected {expected:?} for {args:?}, got: {err}"
-        );
-    }
+    let args = ["search", "--workspace", "ws-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("QUERY"), "a missing query is reported: {err}");
+    let _ = fs::remove_dir_all(&home);
+
+    // A search with no workspace anywhere is a runtime error now, since
+    // `workspace use` may have remembered one.
+    let home = logged_in_home(UNREACHABLE);
+    let args = ["search", "some query"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("no workspace given"), "{err}");
+    assert!(err.contains("workspace use"), "{err}");
     let _ = fs::remove_dir_all(&home);
 }
 

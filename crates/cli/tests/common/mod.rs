@@ -141,16 +141,25 @@ pub fn login_args<'a>(
 }
 
 pub fn run(home: &Path, args: &[&str]) -> Output {
-    // Isolate CLI config (`dirs::home_dir()` → `~/.memorylake`).
-    // Unix reads `HOME`; Windows uses the user profile (`USERPROFILE`), not `HOME`.
-    // Clear legacy `HOMEDRIVE`/`HOMEPATH` so they cannot override the temp profile.
+    // Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
+    // at the directory holding config.toml / credentials.toml.
+    //
+    // Redirecting the home directory is not enough, and on Windows does not work
+    // at all: `dirs::home_dir()` there calls
+    // `SHGetKnownFolderPath(FOLDERID_Profile)`, which ignores both `USERPROFILE`
+    // and `HOME`. Tests that relied on those variables silently read the real
+    // user's config, so they could never see the credentials they had just
+    // written. They are still set, so anything else resolving a home directory
+    // stays inside the sandbox.
     bin()
+        .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env_remove("HOMEDRIVE")
         .env_remove("HOMEPATH")
         .env_remove("MEMORYLAKE_API_KEY")
         .env_remove("MEMORYLAKE_BASE_URL")
+        .env_remove("MEMORYLAKE_WORKSPACE")
         .args(args)
         .output()
         .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))

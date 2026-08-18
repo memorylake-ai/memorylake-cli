@@ -12,6 +12,67 @@ Command-line interface for MemoryLake.
 | `memorylake-cli` | `crates/cli` | Binary (`memorylake`) |
 | `memorylake-core` | `crates/core` | Shared library logic |
 
+## Install
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.ps1 | iex
+```
+
+Both installers resolve the latest release, download the build for your
+platform, **verify it against the published SHA-256**, and install the binary.
+They are configurable through the environment:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MEMORYLAKE_VERSION` | `latest` | Release tag to install, e.g. `v20260818` |
+| `MEMORYLAKE_INSTALL_DIR` | `~/.local/bin` (Unix), `%LOCALAPPDATA%\memorylake\bin` (Windows) | Where the binary goes |
+| `MEMORYLAKE_INSTALL_NAME` | `memorylake` | Name to install it as |
+| `MEMORYLAKE_NO_SETUP` | unset | Set to skip the guided login / workspace setup |
+
+```bash
+# pin a version, install somewhere else
+MEMORYLAKE_VERSION=v20260818 MEMORYLAKE_INSTALL_DIR=/usr/local/bin \
+  curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.sh | sh
+```
+
+The Unix installer prints how to add the install directory to `PATH` if it is
+not already there; the PowerShell one adds it to the user `PATH` for you. Both
+refuse to install if the checksum does not match. Re-running either upgrades an
+existing install in place.
+
+### Guided setup
+
+On a first install, both scripts then walk you through what the CLI needs: they
+run `auth login` — which asks **which deployment to use**, then takes your API
+key — and `workspace use` to **pick** a default workspace from a list. You never
+have to know a workspace id, or a URL, to get started.
+
+- Nothing is asked on an upgrade: an install that is already logged in keeps its
+  credentials and workspace.
+- Without an interactive terminal (CI, a Dockerfile, a provisioning script) the
+  setup is skipped and the two commands are printed instead, so the install
+  never blocks on a prompt nobody can answer.
+- Set `MEMORYLAKE_NO_SETUP=1` to skip it entirely.
+
+Both steps are ordinary commands, so you can run or redo them at any time:
+
+```bash
+memorylake auth login       # choose an endpoint, then store the API key
+memorylake workspace use    # pick a default workspace from a list
+```
+
+Prefer to do it by hand? Grab a tarball (or `.zip` on Windows) from the
+[releases page](https://github.com/memorylake-ai/memorylake-cli/releases),
+verify it against its `.sha256`, and put `memorylake` on your `PATH`.
+
 ## Build
 
 ```bash
@@ -54,7 +115,7 @@ CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memoryla
 ## Auth & workspaces
 
 ```bash
-# Interactive: choose login method (API key or OAuth), then follow prompts
+# Interactive: choose an endpoint, then enter your API key
 memorylake auth login
 
 # Non-interactive API key login
@@ -68,9 +129,31 @@ memorylake auth logout
 memorylake workspace list
 memorylake ws create --name "My Workspace" --custom-id my-ws-001
 memorylake ws get ws-1234 [--by-custom-id]
+
+# Pick a default workspace so other commands can omit --workspace
+memorylake ws use                 # choose from a list
+memorylake ws use ws-1234         # or name one directly
+memorylake ws current             # show which one is in effect, and why
+memorylake ws use --clear         # go back to passing --workspace everywhere
 ```
 
-`auth login` without `--api-key` opens an interactive picker (`api_key` / `oauth`). OAuth is listed but not implemented yet. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
+`auth login` without `--api-key` is interactive. It first asks which MemoryLake deployment to use:
+
+| Choice | Base URL |
+| --- | --- |
+| Global (default) | `https://app.memorylake.ai/openapi/memorylake` |
+| China | `https://app.memorylake.cn/openapi/memorylake` |
+| Other | whatever URL you enter |
+
+The two are **separate deployments, not mirrors** — an account on one does not exist on the other, so logging in to the wrong one fails in a way that reads like a rejected API key. The question is only asked when nothing has already answered it: a `--base-url`, a `base_url` on the profile, or `MEMORYLAKE_BASE_URL` all skip it, and so does `--api-key` (which means non-interactive, and must never block on a prompt).
+
+To pick the China endpoint non-interactively:
+
+```bash
+memorylake auth login --api-key sk-... --base-url https://app.memorylake.cn/openapi/memorylake
+```
+
+It then asks for the API key. There is no login-method picker: API key is the only method wired to the API today, and offering a choice whose other option cannot complete would just let a first-time user pick a dead end. OAuth is planned; it will appear here when it works. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
 
 Config and credentials live under `~/.memorylake/` (`config.toml`, `credentials.toml`).
 
@@ -82,8 +165,11 @@ Profile selection: CLI `--profile` → `active_profile` → not logged in. Env v
 | --- | --- |
 | Base URL | CLI `--base-url` → profile `base_url` in `config.toml` → `MEMORYLAKE_BASE_URL` → built-in default |
 | API key (`login_method = api_key`) | profile key in `credentials.toml` → `MEMORYLAKE_API_KEY` |
+| Workspace | CLI `--workspace` → profile `workspace` in `config.toml` (set by `ws use`) → `MEMORYLAKE_WORKSPACE` |
 
-`auth status` prints `Base URL source` and `API key source` (`profile` / `env` / `cli` / `default`).
+`auth status` prints `Base URL source` and `API key source` (`profile` / `env` / `cli` / `default`); `ws current` does the same for the workspace.
+
+There is **no built-in default workspace** — with none remembered and none passed, a command that needs one fails and says how to supply it. `ws use` verifies the id exists before storing it, so a typo is caught once rather than on every later command.
 
 ## Actors
 
@@ -118,7 +204,7 @@ memorylake actor list --workspace ws-...
 
 ## Projects
 
-Projects are knowledge containers inside a workspace — they organize documents, conversations, and extracted facts. Every `project` (alias `proj`) subcommand takes an explicit `--workspace`; there is no default or remembered workspace.
+Projects are knowledge containers inside a workspace — they organize documents, conversations, and extracted facts. Every `project` (alias `proj`) subcommand needs a workspace: pass `--workspace`, or remember one with `memorylake ws use` and omit the flag.
 
 ```bash
 memorylake project list --workspace ws-1234 [--page-size 50] \

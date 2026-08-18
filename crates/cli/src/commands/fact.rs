@@ -13,6 +13,7 @@ use memorylake_core::api::facts::{
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
+use super::require_workspace;
 use super::search::{IdList, parse_id_list};
 
 /// `fact` subcommands.
@@ -25,8 +26,10 @@ pub enum FactCommand {
     /// resolves semantic conflicts between facts itself.
     Add {
         /// Workspace id the scope belongs to.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Store as this actor's facts. Exactly one of --actor / --project.
         #[arg(long)]
         actor: Option<String>,
@@ -46,8 +49,10 @@ pub enum FactCommand {
     /// error.
     Delete {
         /// Workspace id the scope belongs to.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Delete from this actor's facts. Exactly one of --actor / --project.
         #[arg(long)]
         actor: Option<String>,
@@ -61,8 +66,10 @@ pub enum FactCommand {
     /// List facts across a workspace, filtered by owning scope.
     List {
         /// Workspace id to list in.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Limit to facts owned by these actors (comma-separated).
         #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
         actors: Option<IdList>,
@@ -111,6 +118,7 @@ pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<Strin
             project,
             facts,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let scope = resolve_scope(actor, project)?;
             let request = AddFactsRequest { facts };
             let data = add_facts(&client, &workspace, &scope, &request).context("add facts")?;
@@ -122,6 +130,7 @@ pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<Strin
             project,
             fact_ids,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let scope = resolve_scope(actor, project)?;
             let mut forgotten = Vec::new();
             let mut not_found = Vec::new();
@@ -158,6 +167,7 @@ pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<Strin
             page_size,
             continuation_token,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             if actors.is_none() && projects.is_none() {
                 // The endpoint answers an empty page in that case (measured
                 // 2026-08-07), which would read as "no facts exist" — reject

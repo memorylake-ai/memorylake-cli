@@ -12,15 +12,16 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
+use crate::commands::require_workspace;
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
-use memorylake_core::Client;
 use memorylake_core::api::documents::{
     DOCUMENT_STATUS_ERROR, DeleteDocumentsRequest, ImportDocumentsRequest, ImportOutcome,
     ListDocumentsParams, delete_documents, get_document, import_documents, is_terminal_status,
     list_documents,
 };
 use memorylake_core::api::library::{Item, ItemList, ListChildrenParams, get_item, list_children};
+use memorylake_core::{Client, Paths};
 
 /// Files a single `import` may cover before it refuses to run.
 ///
@@ -48,8 +49,10 @@ pub enum DocumentCommand {
     /// soon as the server accepts the batch unless `--wait` is given.
     Import {
         /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project to import into.
         #[arg(long)]
         project: String,
@@ -76,8 +79,10 @@ pub enum DocumentCommand {
     /// List the documents in a project.
     List {
         /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project whose documents to list.
         #[arg(long)]
         project: String,
@@ -94,8 +99,10 @@ pub enum DocumentCommand {
     /// Get a single document, including its processing status.
     Get {
         /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project containing the document.
         #[arg(long)]
         project: String,
@@ -109,8 +116,10 @@ pub enum DocumentCommand {
     /// The Library files they came from are left untouched.
     Delete {
         /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project to remove the documents from.
         #[arg(long)]
         project: String,
@@ -121,7 +130,7 @@ pub enum DocumentCommand {
 }
 
 /// Execute a `project document` subcommand.
-pub fn run(client: &Client, command: DocumentCommand) -> Result<()> {
+pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentCommand) -> Result<()> {
     match command {
         DocumentCommand::Import {
             workspace,
@@ -131,18 +140,21 @@ pub fn run(client: &Client, command: DocumentCommand) -> Result<()> {
             max_files,
             wait,
             timeout,
-        } => run_import(
-            client,
-            &workspace,
-            &project,
-            &item_ids,
-            ImportOptions {
-                recursive,
-                max_files,
-                wait,
-                timeout: Duration::from_secs(timeout),
-            },
-        ),
+        } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
+            run_import(
+                client,
+                &workspace,
+                &project,
+                &item_ids,
+                ImportOptions {
+                    recursive,
+                    max_files,
+                    wait,
+                    timeout: Duration::from_secs(timeout),
+                },
+            )
+        }
         DocumentCommand::List {
             workspace,
             project,
@@ -150,6 +162,7 @@ pub fn run(client: &Client, command: DocumentCommand) -> Result<()> {
             continuation_token,
             name_fuzzy,
         } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
             let data = list_documents(
                 client,
                 &workspace,
@@ -169,6 +182,7 @@ pub fn run(client: &Client, command: DocumentCommand) -> Result<()> {
             project,
             document_id,
         } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
             let data = get_document(client, &workspace, &project, &document_id)
                 .with_context(|| format!("get document `{document_id}`"))?;
             println!("{}", serde_json::to_string_pretty(&data)?);
@@ -179,6 +193,7 @@ pub fn run(client: &Client, command: DocumentCommand) -> Result<()> {
             project,
             document_ids,
         } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
             delete_documents(
                 client,
                 &workspace,
