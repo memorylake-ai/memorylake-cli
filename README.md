@@ -26,43 +26,20 @@ curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/s
 irm https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.ps1 | iex
 ```
 
-Both installers resolve the latest release, download the build for your
-platform, **verify it against the published SHA-256**, and install the binary.
-They are configurable through the environment:
+Both resolve the latest release, **verify the download against its published
+SHA-256**, install the binary, and refuse to install if the checksum does not
+match. Re-running either upgrades in place. `MEMORYLAKE_VERSION`,
+`MEMORYLAKE_INSTALL_DIR`, `MEMORYLAKE_INSTALL_NAME` and `MEMORYLAKE_NO_SETUP`
+override the details — see the comments at the top of either script.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `MEMORYLAKE_VERSION` | `latest` | Release tag to install, e.g. `v20260818` |
-| `MEMORYLAKE_INSTALL_DIR` | `~/.local/bin` (Unix), `%LOCALAPPDATA%\memorylake\bin` (Windows) | Where the binary goes |
-| `MEMORYLAKE_INSTALL_NAME` | `memorylake` | Name to install it as |
-| `MEMORYLAKE_NO_SETUP` | unset | Set to skip the guided login / workspace setup |
+On a first install they then walk you through what the CLI needs: `auth login`
+asks which deployment to use and takes your API key, then `workspace use` lets
+you **pick** a default workspace from a list. You never have to know a workspace
+id, or a URL, to get started. An upgrade that is already logged in is left
+alone, and without an interactive terminal (CI, a Dockerfile) the setup is
+skipped and the commands printed instead.
 
-```bash
-# pin a version, install somewhere else
-MEMORYLAKE_VERSION=v20260818 MEMORYLAKE_INSTALL_DIR=/usr/local/bin \
-  curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.sh | sh
-```
-
-The Unix installer prints how to add the install directory to `PATH` if it is
-not already there; the PowerShell one adds it to the user `PATH` for you. Both
-refuse to install if the checksum does not match. Re-running either upgrades an
-existing install in place.
-
-### Guided setup
-
-On a first install, both scripts then walk you through what the CLI needs: they
-run `auth login` — which asks **which deployment to use**, then takes your API
-key — and `workspace use` to **pick** a default workspace from a list. You never
-have to know a workspace id, or a URL, to get started.
-
-- Nothing is asked on an upgrade: an install that is already logged in keeps its
-  credentials and workspace.
-- Without an interactive terminal (CI, a Dockerfile, a provisioning script) the
-  setup is skipped and the two commands are printed instead, so the install
-  never blocks on a prompt nobody can answer.
-- Set `MEMORYLAKE_NO_SETUP=1` to skip it entirely.
-
-Both steps are ordinary commands, so you can run or redo them at any time:
+Both are ordinary commands, so you can run or redo them at any time:
 
 ```bash
 memorylake auth login       # choose an endpoint, then store the API key
