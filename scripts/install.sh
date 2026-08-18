@@ -134,7 +134,12 @@ setup() {
 
     [ -z "${MEMORYLAKE_NO_SETUP:-}" ] || return 0
 
-    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+    # Actually open /dev/tty rather than testing it with `-r`/`-w`: the device
+    # node can exist and pass those tests while opening it fails with "Device
+    # not configured", which is what happens with no controlling terminal — cron,
+    # some containers, a detached session. Done in a subshell so the descriptor
+    # does not leak into this one.
+    if ! (exec 3<>/dev/tty) 2>/dev/null; then
         say ""
         say "no terminal available, so setup was skipped. To finish:"
         say "  $INSTALL_NAME auth login       # store your API key"
@@ -143,7 +148,11 @@ setup() {
     fi
 
     # Already logged in? Then this is an upgrade, not a first install.
-    if "$_bin" auth status >/dev/null 2>&1; then
+    #
+    # Read the reported state rather than the exit status: `auth status`
+    # succeeds either way, because answering "not logged in" is a successful
+    # query. A CLI test pins this output so the check cannot rot silently.
+    if "$_bin" auth status 2>/dev/null | grep -q 'Logged in: yes'; then
         say ""
         say "already logged in; leaving your credentials and workspace as they are"
         return 0

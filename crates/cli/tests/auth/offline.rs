@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::common::stub::logged_in_home;
 use crate::common::{assert_failure, assert_success, run, temp_home};
 
 fn memorylake_root(home: &Path) -> std::path::PathBuf {
@@ -17,6 +18,59 @@ fn status_without_login_succeeds() {
     assert!(stdout.contains("Active profile: (none)"));
     assert!(stdout.contains("Logged in: no"));
     assert!(!stdout.contains("Credentials: valid"));
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn status_reports_login_state_in_its_output_not_its_exit_code() {
+    // `scripts/install.sh` and `install.ps1` decide whether to run their guided
+    // setup by reading this line, because `auth status` exits 0 either way —
+    // answering "not logged in" is a successful query. Renaming or reformatting
+    // the line silently turns the installers' check into "always logged in", so
+    // the contract is pinned here.
+    let home = temp_home();
+    let args = ["auth", "status"];
+    let output = run(&home, &args);
+    assert!(
+        output.status.success(),
+        "`auth status` must succeed even when nobody is logged in"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Logged in: no"),
+        "installers grep for this exact text: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Logged in: yes"),
+        "the negative state must not contain the affirmative string: {stdout}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn status_reports_being_logged_in_before_it_validates_the_credentials() {
+    // Stored credentials that cannot be validated (offline, unreachable API)
+    // still count as logged in for the installers' purposes: the line is
+    // printed before validation, and the command's non-zero exit does not reach
+    // the `grep` reading it through a pipe. Without this, an install run on a
+    // flaky network would re-prompt someone who is already set up.
+    let home = logged_in_home("http://127.0.0.1:1/openapi/memorylake");
+    let args = ["auth", "status"];
+    let output = run(&home, &args);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("Logged in: yes"),
+        "stored credentials read as logged in: {stdout}"
+    );
+    assert!(
+        !output.status.success(),
+        "validation against an unreachable API still fails the command"
+    );
+    assert!(
+        !stdout.contains("Credentials: valid"),
+        "and it must not claim the credentials were verified: {stdout}"
+    );
     let _ = fs::remove_dir_all(&home);
 }
 

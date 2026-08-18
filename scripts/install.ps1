@@ -182,8 +182,12 @@ function Invoke-Setup([string]$BinPath) {
     }
 
     # Already logged in? Then this is an upgrade, not a first install.
-    & $BinPath auth status *> $null
-    if ($LASTEXITCODE -eq 0) {
+    #
+    # Read the reported state rather than the exit status: `auth status`
+    # succeeds either way, because answering "not logged in" is a successful
+    # query. A CLI test pins this output so the check cannot rot silently.
+    $status = (& $BinPath auth status 2>$null) -join "`n"
+    if ($status -match 'Logged in:\s*yes') {
         Write-Info ''
         Write-Info 'already logged in; leaving your credentials and workspace as they are'
         return
