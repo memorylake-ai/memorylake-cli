@@ -18,6 +18,14 @@
 # failures surface through $LASTEXITCODE, so the download path checks explicitly.
 $ErrorActionPreference = 'Stop'
 
+# Windows PowerShell 5.1 on older systems still defaults to TLS 1.0/1.1, which
+# GitHub refuses. Additive so nothing already enabled is turned off.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {
+    # PowerShell 7 manages this itself and may not expose the setting.
+}
+
 $Repo = 'memorylake-ai/memorylake-cli'
 $BinName = 'memorylake'
 
@@ -44,45 +52,70 @@ function Stop-WithError([string]$Message) {
     exit 1
 }
 
-# Map the process architecture onto the Rust target triple the release is built
-# for. PROCESSOR_ARCHITECTURE is deliberately not used: it reports the *process*
-# architecture, so an x86 PowerShell on an ARM64 machine would pick the wrong
-# build.
+# Map the OS architecture onto the Rust target triple the release is built for.
+#
+# Two sources, in that order, because neither works everywhere:
+#
+# * `RuntimeInformation::OSArchitecture` is the accurate one — it reports the
+#   *OS* architecture even from an emulated process — but it is a .NET Core API.
+#   Windows PowerShell 5.1 runs on .NET Framework, where the type is missing and
+#   the expression yields nothing at all.
+# * The environment variables always exist. `PROCESSOR_ARCHITECTURE` alone is
+#   the process architecture, which is wrong for a 32-bit shell on a 64-bit OS —
+#   but that is exactly when `PROCESSOR_ARCHITEW6432` is set, and it holds the
+#   OS architecture. Preferring it when present covers the gap.
 function Get-Target {
-    switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
+    $arch = $null
+    try {
+        $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    } catch {
+        # No such type on this runtime; fall through to the environment.
+    }
+
+    if ([string]::IsNullOrWhiteSpace($arch)) {
+        $arch = if ($env:PROCESSOR_ARCHITEW6432) {
+            $env:PROCESSOR_ARCHITEW6432
+        } else {
+            $env:PROCESSOR_ARCHITECTURE
+        }
+    }
+
+    # `switch` is case-insensitive by default, so one label covers X64/x64 and
+    # ARM64/Arm64. AMD64 is the environment variable's spelling of X64.
+    switch ($arch) {
         'X64' { return 'x86_64-pc-windows-msvc' }
-        'Arm64' { return 'aarch64-pc-windows-msvc' }
+        'AMD64' { return 'x86_64-pc-windows-msvc' }
+        'ARM64' { return 'aarch64-pc-windows-msvc' }
         default {
-            Stop-WithError "unsupported architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+            Stop-WithError "unsupported architecture: '$arch'. This CLI ships x64 and ARM64 Windows builds; see https://github.com/$Repo/releases"
         }
     }
 }
 
-# Resolve `latest` to a concrete tag by reading the redirect GitHub serves from
-# /releases/latest, rather than the JSON API, which rate-limits unauthenticated
-# callers far more aggressively.
+# Resolve `latest` to a concrete tag.
+#
+# Reads the releases API rather than the redirect on /releases/latest. The
+# redirect is cheaper, but getting the Location header out of it differs by
+# runtime — Windows PowerShell 5.1 hands back a Dictionary where `.Location`
+# is not a property, PowerShell 7 an HttpResponseMessage — and quietly yielding
+# nothing is worse than one extra request. `Invoke-RestMethod` behaves the same
+# on both.
 function Resolve-Version([string]$Requested) {
     if ($Requested -ne 'latest') { return $Requested }
 
-    $url = "https://github.com/$Repo/releases/latest"
+    $url = "https://api.github.com/repos/$Repo/releases/latest"
     try {
-        $response = Invoke-WebRequest -Uri $url -MaximumRedirection 0 -ErrorAction SilentlyContinue
-        $location = $response.Headers.Location
+        $release = Invoke-RestMethod -Uri $url -UseBasicParsing -Headers @{
+            'Accept'     = 'application/vnd.github+json'
+            'User-Agent' = 'memorylake-cli-installer'
+        }
     } catch {
-        # PowerShell 5.1 throws on a 3xx when redirects are disabled; the
-        # response still carries the header we need.
-        $location = $_.Exception.Response.Headers.Location
+        Stop-WithError "could not reach the releases API ($($_.Exception.Message)).`n  Set MEMORYLAKE_VERSION to a tag such as v20260818.1 to skip this lookup."
     }
 
-    if (-not $location) {
-        # Last resort: follow redirects and read where we landed.
-        $final = Invoke-WebRequest -Uri $url -UseBasicParsing
-        $location = $final.BaseResponse.ResponseUri
-    }
-
-    $tag = ([string]$location -split '/tag/')[-1]
+    $tag = $release.tag_name
     if ([string]::IsNullOrWhiteSpace($tag)) {
-        Stop-WithError 'could not resolve the latest release; set MEMORYLAKE_VERSION to a tag such as v20260818'
+        Stop-WithError 'the releases API returned no tag; set MEMORYLAKE_VERSION to a tag such as v20260818.1'
     }
     return $tag.Trim()
 }

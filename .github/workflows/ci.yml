@@ -119,9 +119,8 @@ jobs:
         run: cargo test -p memorylake-cli -- --skip live
 
       # The PowerShell installer runs on users' machines via `irm | iex`, so it
-      # is checked where it actually runs. The download path needs a published
-      # Windows asset, but everything before it can be exercised here: the file
-      # must parse, and the checksum gate must reject a tampered archive.
+      # is checked where it actually runs: parsing, the checksum gate, and — in
+      # the steps below — a real end-to-end install under both PowerShell hosts.
       - name: Validate scripts/install.ps1
         shell: pwsh
         run: |
@@ -151,6 +150,38 @@ jobs:
           catch { $rejected = $true }
           if (-not $rejected) { Write-Host 'tampered archive was accepted'; exit 1 }
           Write-Host 'tampered archive: rejected'
+
+      # Install for real, from the published release, under **Windows PowerShell
+      # 5.1** — the host most Windows users get by double-clicking "PowerShell",
+      # and a different runtime from pwsh 7. Skipping it is how an installer that
+      # only works on 7 shipped once already: 5.1 runs on .NET Framework, where
+      # the .NET Core APIs for architecture detection and response headers are
+      # simply absent.
+      #
+      # MEMORYLAKE_NO_SETUP keeps the guided login out of it; a runner has no
+      # credentials and setup is covered by the Unix job.
+      - name: Install end to end (Windows PowerShell 5.1)
+        shell: powershell
+        env:
+          MEMORYLAKE_NO_SETUP: '1'
+          MEMORYLAKE_INSTALL_DIR: ${{ github.workspace }}\ps51
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "host: $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+          .\scripts\install.ps1
+          & "$env:MEMORYLAKE_INSTALL_DIR\memorylake.exe" --version
+          & "$env:MEMORYLAKE_INSTALL_DIR\memorylake.exe" workspace use --help | Select-Object -First 1
+
+      - name: Install end to end (PowerShell 7)
+        shell: pwsh
+        env:
+          MEMORYLAKE_NO_SETUP: '1'
+          MEMORYLAKE_INSTALL_DIR: ${{ github.workspace }}\ps7
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "host: $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+          .\scripts\install.ps1
+          & "$env:MEMORYLAKE_INSTALL_DIR\memorylake.exe" --version
 
   coverage:
     name: coverage
