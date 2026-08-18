@@ -33,6 +33,12 @@ pub const ENV_BASE_URL: &str = "MEMORYLAKE_BASE_URL";
 /// Environment variable holding a fallback workspace id.
 pub const ENV_WORKSPACE: &str = "MEMORYLAKE_WORKSPACE";
 
+/// Environment variable overriding where CLI state is stored.
+///
+/// Points at the directory holding `config.toml` and `credentials.toml`,
+/// replacing `~/.memorylake` entirely.
+pub const ENV_CONFIG_DIR: &str = "MEMORYLAKE_CONFIG_DIR";
+
 /// Where the resolved API key came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiKeySource {
@@ -111,8 +117,22 @@ pub struct Paths {
 }
 
 impl Paths {
-    /// Resolve default paths under the user home directory.
+    /// Resolve where CLI state lives: `MEMORYLAKE_CONFIG_DIR`, else
+    /// `~/.memorylake`.
+    ///
+    /// The override exists because the home directory is not always
+    /// redirectable. On Windows `dirs::home_dir()` calls
+    /// `SHGetKnownFolderPath(FOLDERID_Profile)`, which ignores `USERPROFILE`
+    /// and `HOME` entirely — so pointing a test, a container, or a CI job at a
+    /// scratch directory by setting those variables silently has no effect and
+    /// the real user's config is read instead.
     pub fn default_home() -> Result<Self> {
+        if let Some(dir) = std::env::var_os(ENV_CONFIG_DIR) {
+            let dir = PathBuf::from(dir);
+            if !dir.as_os_str().is_empty() {
+                return Ok(Self::from_root(dir));
+            }
+        }
         let home = dirs::home_dir().ok_or(Error::HomeDir)?;
         Ok(Self::from_root(home.join(".memorylake")))
     }
@@ -619,6 +639,52 @@ mod tests {
                 .as_nanos()
         ));
         Paths::from_root(root)
+    }
+
+    #[test]
+    fn the_config_dir_can_be_redirected_by_environment() {
+        // The only way to sandbox CLI state on Windows: `dirs::home_dir()` there
+        // ignores USERPROFILE and HOME, so redirecting the home directory does
+        // nothing and the real user's config would be read instead.
+        let _guard = env_lock().lock().unwrap();
+        let scratch = temp_paths();
+        unsafe {
+            std::env::set_var(ENV_CONFIG_DIR, &scratch.root);
+        }
+        let resolved = Paths::default_home();
+        unsafe {
+            std::env::remove_var(ENV_CONFIG_DIR);
+        }
+        let resolved = resolved.expect("resolve paths");
+
+        assert_eq!(resolved.root, scratch.root);
+        assert_eq!(resolved.config, scratch.root.join("config.toml"));
+        assert_eq!(
+            resolved.credentials,
+            scratch.root.join("credentials.toml"),
+            "both files live directly under the override, with no .memorylake suffix added"
+        );
+    }
+
+    #[test]
+    fn a_blank_config_dir_falls_back_to_the_home_directory() {
+        // An empty variable is a common artefact of shell quoting; treating it
+        // as a path would put state in the process's working directory.
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var(ENV_CONFIG_DIR, "");
+        }
+        let resolved = Paths::default_home();
+        unsafe {
+            std::env::remove_var(ENV_CONFIG_DIR);
+        }
+
+        let resolved = resolved.expect("resolve paths");
+        assert!(
+            resolved.root.ends_with(".memorylake"),
+            "expected the home-directory default, got {:?}",
+            resolved.root
+        );
     }
 
     #[test]
