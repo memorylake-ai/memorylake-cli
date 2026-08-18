@@ -120,6 +120,10 @@ verify_checksum() {
     fi
 }
 
+# Set by `setup` when the install already has usable credentials, so the closing
+# message does not tell someone to log in seconds after they just did.
+SETUP_DONE=0
+
 # Walk a fresh install through logging in and picking a workspace.
 #
 # Piped through `sh`, stdin is the script itself, so the CLI's prompts would
@@ -134,6 +138,22 @@ setup() {
 
     [ -z "${MEMORYLAKE_NO_SETUP:-}" ] || return 0
 
+    # Already logged in? Then this is an upgrade, not a first install.
+    #
+    # Checked before the terminal test, because it needs no terminal: an
+    # upgrade run from CI or a script would otherwise be told that setup was
+    # skipped and to go log in, when it is already configured.
+    #
+    # Read the reported state rather than the exit status: `auth status`
+    # succeeds either way, because answering "not logged in" is a successful
+    # query. A CLI test pins this output so the check cannot rot silently.
+    if "$_bin" auth status 2>/dev/null | grep -q 'Logged in: yes'; then
+        say ""
+        say "already logged in; leaving your credentials and workspace as they are"
+        SETUP_DONE=1
+        return 0
+    fi
+
     # Actually open /dev/tty rather than testing it with `-r`/`-w`: the device
     # node can exist and pass those tests while opening it fails with "Device
     # not configured", which is what happens with no controlling terminal — cron,
@@ -144,17 +164,6 @@ setup() {
         say "no terminal available, so setup was skipped. To finish:"
         say "  $INSTALL_NAME auth login       # store your API key"
         say "  $INSTALL_NAME workspace use    # pick a default workspace"
-        return 0
-    fi
-
-    # Already logged in? Then this is an upgrade, not a first install.
-    #
-    # Read the reported state rather than the exit status: `auth status`
-    # succeeds either way, because answering "not logged in" is a successful
-    # query. A CLI test pins this output so the check cannot rot silently.
-    if "$_bin" auth status 2>/dev/null | grep -q 'Logged in: yes'; then
-        say ""
-        say "already logged in; leaving your credentials and workspace as they are"
         return 0
     fi
 
@@ -179,6 +188,10 @@ setup() {
         say "no workspace selected. Run '$INSTALL_NAME workspace use' to pick one,"
         say "or pass --workspace <id> to each command."
     fi
+
+    # Logged in either way: a skipped workspace is a preference, not a failure,
+    # and the line above already says how to set one.
+    SETUP_DONE=1
 }
 
 main() {
@@ -227,17 +240,24 @@ main() {
     # Compare against the resolved binary rather than `command -v` alone: a
     # different memorylake earlier in PATH would otherwise look like success.
     resolved="$(command -v "$INSTALL_NAME" 2>/dev/null || true)"
-    if [ "$resolved" = "$INSTALL_DIR/$INSTALL_NAME" ]; then
-        say ""
-        say "run '$INSTALL_NAME auth login' to get started"
-    elif [ -n "$resolved" ]; then
-        say ""
-        say "note: '$INSTALL_NAME' currently resolves to $resolved"
-        say "      put $INSTALL_DIR earlier in PATH to use the version just installed"
-    else
+    if [ -z "$resolved" ]; then
         say ""
         say "$INSTALL_DIR is not on your PATH; add it with:"
         say "  export PATH=\"$INSTALL_DIR:\$PATH\""
+    elif [ "$resolved" != "$INSTALL_DIR/$INSTALL_NAME" ]; then
+        say ""
+        say "note: '$INSTALL_NAME' currently resolves to $resolved"
+        say "      put $INSTALL_DIR earlier in PATH to use the version just installed"
+    fi
+
+    # Kept separate from the PATH notes above: whether the binary is reachable
+    # and whether it is configured are different questions, and telling someone
+    # to log in seconds after they did reads like the setup failed.
+    say ""
+    if [ "$SETUP_DONE" = "1" ]; then
+        say "you're set. Try '$INSTALL_NAME workspace current' or '$INSTALL_NAME project list'."
+    else
+        say "run '$INSTALL_NAME auth login' to get started"
     fi
 }
 

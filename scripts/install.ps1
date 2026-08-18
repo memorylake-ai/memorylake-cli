@@ -27,6 +27,10 @@ function Get-EnvOrDefault([string]$Name, [string]$Default) {
     return $value
 }
 
+# Set by Invoke-Setup when the install already has usable credentials, so the
+# closing message does not tell someone to log in seconds after they just did.
+$script:SetupDone = $false
+
 $Version = Get-EnvOrDefault 'MEMORYLAKE_VERSION' 'latest'
 $InstallDir = Get-EnvOrDefault 'MEMORYLAKE_INSTALL_DIR' (Join-Path $env:LOCALAPPDATA 'memorylake\bin')
 $InstallName = Get-EnvOrDefault 'MEMORYLAKE_INSTALL_NAME' $BinName
@@ -149,6 +153,7 @@ function Install-Memorylake {
         Write-Info "installed $destination"
         Show-PathHint
         Invoke-Setup $destination
+        Show-NextStep
     } finally {
         Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -167,6 +172,23 @@ function Invoke-Setup([string]$BinPath) {
         return
     }
 
+    # Already logged in? Then this is an upgrade, not a first install.
+    #
+    # Checked before the interactivity test, because it needs no terminal: an
+    # upgrade run from CI or a provisioning script would otherwise be told that
+    # setup was skipped and to go log in, when it is already configured.
+    #
+    # Read the reported state rather than the exit status: `auth status`
+    # succeeds either way, because answering "not logged in" is a successful
+    # query. A CLI test pins this output so the check cannot rot silently.
+    $status = (& $BinPath auth status 2>$null) -join "`n"
+    if ($status -match 'Logged in:\s*yes') {
+        Write-Info ''
+        Write-Info 'already logged in; leaving your credentials and workspace as they are'
+        $script:SetupDone = $true
+        return
+    }
+
     # $Host.UI.RawUI is unavailable in non-interactive hosts, which is the most
     # reliable signal available here that there is nobody to prompt.
     $interactive = $true
@@ -178,18 +200,6 @@ function Invoke-Setup([string]$BinPath) {
         Write-Info 'no interactive terminal, so setup was skipped. To finish:'
         Write-Info "  $InstallName auth login       # store your API key"
         Write-Info "  $InstallName workspace use    # pick a default workspace"
-        return
-    }
-
-    # Already logged in? Then this is an upgrade, not a first install.
-    #
-    # Read the reported state rather than the exit status: `auth status`
-    # succeeds either way, because answering "not logged in" is a successful
-    # query. A CLI test pins this output so the check cannot rot silently.
-    $status = (& $BinPath auth status 2>$null) -join "`n"
-    if ($status -match 'Logged in:\s*yes') {
-        Write-Info ''
-        Write-Info 'already logged in; leaving your credentials and workspace as they are'
         return
     }
 
@@ -214,6 +224,9 @@ function Invoke-Setup([string]$BinPath) {
         Write-Info "no workspace selected. Run '$InstallName workspace use' to pick one,"
         Write-Info 'or pass --workspace <id> to each command.'
     }
+
+    # Logged in either way: a skipped workspace is a preference, not a failure.
+    $script:SetupDone = $true
 }
 
 # Tell the user how to reach the binary, and add it to the user PATH when it is
@@ -224,21 +237,28 @@ function Show-PathHint {
     $entries = @()
     if ($userPath) { $entries = $userPath -split ';' | Where-Object { $_ } }
 
-    if ($entries -contains $InstallDir) {
+    if (-not ($entries -contains $InstallDir)) {
+        $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
+        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+        # The change lands in the registry, so it reaches new shells only; update
+        # this session too, otherwise the very next command would fail.
+        $env:Path = "$env:Path;$InstallDir"
+
         Write-Info ''
-        Write-Info "run '$InstallName auth login' to get started"
-        return
+        Write-Info "added $InstallDir to your user PATH (new terminals will see it)"
     }
+}
 
-    $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
-    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-    # The change lands in the registry, so it reaches new shells only; update
-    # this session too, otherwise the very next command would fail.
-    $env:Path = "$env:Path;$InstallDir"
-
+# Say what to do next. Kept apart from the PATH note: whether the binary is
+# reachable and whether it is configured are different questions, and telling
+# someone to log in seconds after they did reads like the setup failed.
+function Show-NextStep {
     Write-Info ''
-    Write-Info "added $InstallDir to your user PATH"
-    Write-Info "open a new terminal, then run '$InstallName auth login' to get started"
+    if ($script:SetupDone) {
+        Write-Info "you're set. Try '$InstallName workspace current' or '$InstallName project list'."
+    } else {
+        Write-Info "run '$InstallName auth login' to get started"
+    }
 }
 
 Install-Memorylake
