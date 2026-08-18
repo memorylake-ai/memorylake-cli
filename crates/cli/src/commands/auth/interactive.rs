@@ -11,11 +11,23 @@ pub enum InteractiveLoginMethod {
     /// Store and validate a MemoryLake API key.
     ApiKey,
     /// Browser / OAuth device login (not implemented yet).
+    ///
+    /// Kept out of [`Self::AVAILABLE`] until the flow exists, so nothing
+    /// constructs it today. Retained rather than deleted because `run_login`
+    /// still handles it, which is what will carry the real flow.
+    #[allow(dead_code)] // planned login method; not offered until it works
     OAuth,
 }
 
 impl InteractiveLoginMethod {
-    const ALL: [Self; 2] = [Self::ApiKey, Self::OAuth];
+    /// Methods a user can actually complete today.
+    ///
+    /// [`Self::OAuth`] is deliberately absent: it is not wired to the API yet,
+    /// so offering it means a first-time user can pick the one option that
+    /// cannot work and be told so only afterwards. A picker whose extra choice
+    /// is a dead end is worse than no picker. Add it back here — nothing else
+    /// needs to change — once the flow exists.
+    const AVAILABLE: &'static [Self] = &[Self::ApiKey];
 
     fn label(self) -> &'static str {
         match self {
@@ -26,14 +38,20 @@ impl InteractiveLoginMethod {
 }
 
 /// Ask the user which login method to use for `base_url`.
+///
+/// With only one method available this returns it without prompting, for the
+/// same reason `workspace use` skips a one-item menu: there is nothing to
+/// decide, and the next prompt already makes clear what is being asked for.
 pub fn prompt_login_method(base_url: &str) -> Result<InteractiveLoginMethod> {
-    let labels: Vec<&str> = InteractiveLoginMethod::ALL
-        .iter()
-        .map(|m| m.label())
-        .collect();
+    let available = InteractiveLoginMethod::AVAILABLE;
+    if let [only] = available {
+        return Ok(*only);
+    }
+
+    let labels: Vec<&str> = available.iter().map(|m| m.label()).collect();
     let prompt = format!("Select login method to {base_url}");
     let idx = select_index(prompt, &labels, 0)?;
-    Ok(InteractiveLoginMethod::ALL[idx])
+    Ok(available[idx])
 }
 
 /// Prompt for an API key (input is hidden).
@@ -73,5 +91,31 @@ pub fn prompt_base_url() -> Result<String> {
             }
             Ok(url)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_single_available_method_is_returned_without_prompting() {
+        // This test passing at all is the assertion: it runs with no TTY, so it
+        // would fail if the one-method case still opened a picker. It also pins
+        // that the method offered is the one that works — OAuth is defined but
+        // not wired up, and must not be reachable through this path.
+        let method = prompt_login_method("https://app.memorylake.ai/openapi/memorylake")
+            .expect("a single method needs no terminal");
+        assert_eq!(method, InteractiveLoginMethod::ApiKey);
+    }
+
+    #[test]
+    fn only_implemented_methods_are_offered() {
+        assert_eq!(
+            InteractiveLoginMethod::AVAILABLE,
+            &[InteractiveLoginMethod::ApiKey],
+            "a method that cannot complete must not be offered; \
+             add it here together with its flow"
+        );
     }
 }

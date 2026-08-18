@@ -115,7 +115,7 @@ CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memoryla
 ## Auth & workspaces
 
 ```bash
-# Interactive: choose login method (API key or OAuth), then follow prompts
+# Interactive: choose an endpoint, then enter your API key
 memorylake auth login
 
 # Non-interactive API key login
@@ -153,7 +153,7 @@ To pick the China endpoint non-interactively:
 memorylake auth login --api-key sk-... --base-url https://app.memorylake.cn/openapi/memorylake
 ```
 
-After the endpoint, it offers a login method picker (`api_key` / `oauth`). OAuth is listed but not implemented yet. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
+It then asks for the API key. There is no login-method picker: API key is the only method wired to the API today, and offering a choice whose other option cannot complete would just let a first-time user pick a dead end. OAuth is planned; it will appear here when it works. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
 
 Config and credentials live under `~/.memorylake/` (`config.toml`, `credentials.toml`).
 
