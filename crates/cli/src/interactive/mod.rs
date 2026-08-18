@@ -40,7 +40,6 @@ pub fn prompt_secret(prompt: impl Into<String>) -> Result<String> {
 }
 
 /// Prompt for a visible line of text.
-#[allow(dead_code)] // available for future interactive commands
 pub fn prompt_line(prompt: impl Into<String>) -> Result<String> {
     prepare()?;
     let _guard = TerminalGuard::new();

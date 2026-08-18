@@ -50,10 +50,10 @@ existing install in place.
 
 ### Guided setup
 
-On a first install, both scripts then walk you through the two things the CLI
-needs: they run `auth login` to store your API key, and `workspace use` to
-**pick** a default workspace from a list — you never have to know a workspace id
-to get started.
+On a first install, both scripts then walk you through what the CLI needs: they
+run `auth login` — which asks **which deployment to use**, then takes your API
+key — and `workspace use` to **pick** a default workspace from a list. You never
+have to know a workspace id, or a URL, to get started.
 
 - Nothing is asked on an upgrade: an install that is already logged in keeps its
   credentials and workspace.
@@ -65,7 +65,7 @@ to get started.
 Both steps are ordinary commands, so you can run or redo them at any time:
 
 ```bash
-memorylake auth login       # store or replace the API key
+memorylake auth login       # choose an endpoint, then store the API key
 memorylake workspace use    # pick a default workspace from a list
 ```
 
@@ -137,7 +137,23 @@ memorylake ws current             # show which one is in effect, and why
 memorylake ws use --clear         # go back to passing --workspace everywhere
 ```
 
-`auth login` without `--api-key` opens an interactive picker (`api_key` / `oauth`). OAuth is listed but not implemented yet. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
+`auth login` without `--api-key` is interactive. It first asks which MemoryLake deployment to use:
+
+| Choice | Base URL |
+| --- | --- |
+| Global (default) | `https://app.memorylake.ai/openapi/memorylake` |
+| China | `https://app.memorylake.cn/openapi/memorylake` |
+| Other | whatever URL you enter |
+
+The two are **separate deployments, not mirrors** — an account on one does not exist on the other, so logging in to the wrong one fails in a way that reads like a rejected API key. The question is only asked when nothing has already answered it: a `--base-url`, a `base_url` on the profile, or `MEMORYLAKE_BASE_URL` all skip it, and so does `--api-key` (which means non-interactive, and must never block on a prompt).
+
+To pick the China endpoint non-interactively:
+
+```bash
+memorylake auth login --api-key sk-... --base-url https://app.memorylake.cn/openapi/memorylake
+```
+
+After the endpoint, it offers a login method picker (`api_key` / `oauth`). OAuth is listed but not implemented yet. API-key login (flag or interactive) validates against the API before writing credentials. `auth status`, `auth switch`, and `auth refresh` also validate when credentials are present.
 
 Config and credentials live under `~/.memorylake/` (`config.toml`, `credentials.toml`).
 

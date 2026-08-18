@@ -10,8 +10,16 @@ use serde::{Deserialize, Serialize};
 use crate::credentials::{CredentialsFile, LOGIN_METHOD_API_KEY, ProfileCredentials};
 use crate::error::{Error, Result};
 
-/// Default MemoryLake OpenAPI base URL.
+/// Default MemoryLake OpenAPI base URL (global deployment).
 pub const DEFAULT_BASE_URL: &str = "https://app.memorylake.ai/openapi/memorylake";
+
+/// Base URL for the China deployment.
+///
+/// A separate deployment rather than a mirror, so accounts and data do not
+/// carry over between it and [`DEFAULT_BASE_URL`]. Offered during interactive
+/// login because picking the wrong one fails in a way that reads like a bad API
+/// key rather than a wrong endpoint.
+pub const CN_BASE_URL: &str = "https://app.memorylake.cn/openapi/memorylake";
 
 /// Default profile name when none is specified.
 pub const DEFAULT_PROFILE: &str = "default";

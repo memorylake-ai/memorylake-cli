@@ -100,6 +100,56 @@ fn login_without_api_key_fails_without_tty() {
 }
 
 #[test]
+fn a_non_interactive_login_never_prompts_for_an_endpoint() {
+    // `--api-key` is how scripts and CI log in. Interactive `auth login` now
+    // offers a choice of deployment when nothing else picked one, and that
+    // prompt must never appear here: with no TTY it would fail, turning every
+    // automated login into an error.
+    let home = temp_home();
+    let args = [
+        "auth",
+        "login",
+        "--api-key",
+        "sk_bogus_key_offline",
+        "--base-url",
+        "https://127.0.0.1:1/openapi/memorylake",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        !err.contains("Select the MemoryLake endpoint") && !err.contains("not a terminal"),
+        "a keyed login must fail on the network, not on a prompt: {err}"
+    );
+    assert!(
+        err.contains("127.0.0.1:1"),
+        "it reached the endpoint it was told to use: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn an_endpoint_already_chosen_is_not_asked_about_again() {
+    // A profile carrying a base_url has answered the question already. Asking
+    // again would invite overwriting it by accident, and with no TTY it would
+    // fail outright — so this must reach the network instead.
+    let home = temp_home();
+    let root = memorylake_root(&home);
+    fs::create_dir_all(&root).expect("create .memorylake");
+    fs::write(
+        root.join("config.toml"),
+        "active_profile = \"default\"\n\n[profiles.default]\nbase_url = \"http://127.0.0.1:1/openapi/memorylake\"\n",
+    )
+    .expect("write config.toml");
+
+    let args = ["auth", "login"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        !err.contains("Select the MemoryLake endpoint"),
+        "the stored endpoint must not be re-asked: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
 fn login_with_unreachable_base_url_does_not_persist() {
     let home = temp_home();
     let args = [

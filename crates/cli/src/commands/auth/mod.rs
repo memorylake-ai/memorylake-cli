@@ -6,11 +6,11 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::workspaces::{ListWorkspacesParams, list_workspaces};
 use memorylake_core::{
-    Client, DEFAULT_PROFILE, Error as CoreError, Paths, ResolveOverrides, auth_status,
-    login_api_key, logout, resolve, resolve_profile_base_url, switch_profile,
+    BaseUrlSource, Client, DEFAULT_PROFILE, Error as CoreError, Paths, ResolveOverrides,
+    auth_status, login_api_key, logout, resolve, resolve_profile_base_url, switch_profile,
 };
 
-use interactive::{InteractiveLoginMethod, prompt_api_key, prompt_login_method};
+use interactive::{InteractiveLoginMethod, prompt_api_key, prompt_base_url, prompt_login_method};
 
 /// Authentication subcommands.
 #[derive(Debug, Subcommand)]
@@ -166,8 +166,19 @@ fn run_login(
 ) -> Result<()> {
     let profile = profile.unwrap_or_else(|| DEFAULT_PROFILE.to_string());
     // Same precedence as runtime resolve: CLI → profile config → env → default.
-    let (probe_url, _) = resolve_profile_base_url(paths, &profile, base_url.as_deref())
+    let (resolved_url, url_source) = resolve_profile_base_url(paths, &profile, base_url.as_deref())
         .context("resolve base URL for login")?;
+
+    // Offer the endpoint choice only when nothing chose one: a `--base-url`, a
+    // profile entry or MEMORYLAKE_BASE_URL is an answer already given, and
+    // re-asking would invite overwriting it by accident. `--api-key` means
+    // non-interactive, so it never prompts either.
+    let interactive = api_key.is_none();
+    let probe_url = if interactive && url_source == BaseUrlSource::Default {
+        prompt_base_url()?
+    } else {
+        resolved_url
+    };
 
     let method = if api_key.is_some() {
         InteractiveLoginMethod::ApiKey
