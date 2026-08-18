@@ -20,6 +20,44 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  # The install script is the first thing a new user runs, and it runs through
+  # `curl | sh` on shells this project does not choose. Lint it as POSIX sh and
+  # prove the checksum gate holds under sh, bash and zsh alike — an unquoted
+  # command in a variable, for instance, behaves differently under zsh.
+  install-script:
+    name: install script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck -s sh scripts/install.sh
+      - name: Checksum gate holds in every shell
+        run: |
+          set -eu
+          sed '$ d' scripts/install.sh > /tmp/lib.sh
+          cat > /tmp/ck.sh <<'EOF'
+          . /tmp/lib.sh
+          cd "$(mktemp -d)"
+          printf 'payload' > a.tar.gz
+          sha256sum a.tar.gz > a.tar.gz.sha256
+          (verify_checksum "$PWD/a.tar.gz" "$PWD/a.tar.gz.sha256" >/dev/null 2>&1) ||
+            { echo "intact archive was rejected"; exit 1; }
+          printf 'tampered' > a.tar.gz
+          if (verify_checksum "$PWD/a.tar.gz" "$PWD/a.tar.gz.sha256" >/dev/null 2>&1); then
+            echo "tampered archive was accepted"; exit 1
+          fi
+          EOF
+          sudo apt-get install -y --no-install-recommends zsh >/dev/null
+          for shell in sh bash zsh; do
+            "$shell" /tmp/ck.sh || { echo "failed under $shell"; exit 1; }
+            echo "checksum gate holds under $shell"
+          done
+      - name: Install the published release end to end
+        run: |
+          set -eu
+          MEMORYLAKE_INSTALL_DIR="$PWD/testbin" sh scripts/install.sh
+          "$PWD/testbin/memorylake" --version
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
@@ -41,6 +79,61 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+
+  # Windows is a release target but not a test platform: this proves the crate
+  # still builds and its platform-independent behaviour holds there, so a broken
+  # Windows build surfaces on the PR rather than when a release tag is pushed.
+  #
+  # Live tests are skipped rather than run with a key: they create real objects,
+  # and doing that from a second platform would double the scratch state every
+  # CI run leaves behind for no extra signal.
+  windows:
+    name: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p memorylake-cli
+      - name: Test (core, no network)
+        run: cargo test -p memorylake-core --lib
+      - name: Test (CLI, offline and wire only)
+        run: cargo test -p memorylake-cli -- --skip live
+
+      # The PowerShell installer runs on users' machines via `irm | iex`, so it
+      # is checked where it actually runs. The download path needs a published
+      # Windows asset, but everything before it can be exercised here: the file
+      # must parse, and the checksum gate must reject a tampered archive.
+      - name: Validate scripts/install.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/install.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Host "parse error: $_" }; exit 1 }
+          Write-Host 'install.ps1 parses cleanly'
+
+          # Load the functions without running the installer: strip the final
+          # entry-point call, then dot-source what is left.
+          $src = (Get-Content scripts/install.ps1 -Raw) -replace '(?m)^Install-Memorylake\s*$', ''
+          . ([scriptblock]::Create($src))
+
+          New-Item -ItemType Directory -Path ck -Force | Out-Null
+          Set-Content ck/a.zip 'payload' -NoNewline
+          $hash = (Get-FileHash ck/a.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  a.zip" | Out-File ck/a.zip.sha256 -Encoding ascii -NoNewline
+
+          Test-Checksum (Resolve-Path ck/a.zip) (Resolve-Path ck/a.zip.sha256)
+          Write-Host 'intact archive: accepted'
+
+          Set-Content ck/a.zip 'tampered' -NoNewline
+          $rejected = $false
+          try { Test-Checksum (Resolve-Path ck/a.zip) (Resolve-Path ck/a.zip.sha256) }
+          catch { $rejected = $true }
+          if (-not $rejected) { Write-Host 'tampered archive was accepted'; exit 1 }
+          Write-Host 'tampered archive: rejected'
 
   coverage:
     name: coverage

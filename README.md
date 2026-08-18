@@ -12,6 +12,45 @@ Command-line interface for MemoryLake.
 | `memorylake-cli` | `crates/cli` | Binary (`memorylake`) |
 | `memorylake-core` | `crates/core` | Shared library logic |
 
+## Install
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.ps1 | iex
+```
+
+Both installers resolve the latest release, download the build for your
+platform, **verify it against the published SHA-256**, and install the binary.
+They are configurable through the environment:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MEMORYLAKE_VERSION` | `latest` | Release tag to install, e.g. `v20260818` |
+| `MEMORYLAKE_INSTALL_DIR` | `~/.local/bin` (Unix), `%LOCALAPPDATA%\memorylake\bin` (Windows) | Where the binary goes |
+| `MEMORYLAKE_INSTALL_NAME` | `memorylake` | Name to install it as |
+
+```bash
+# pin a version, install somewhere else
+MEMORYLAKE_VERSION=v20260818 MEMORYLAKE_INSTALL_DIR=/usr/local/bin \
+  curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.sh | sh
+```
+
+The Unix installer prints how to add the install directory to `PATH` if it is
+not already there; the PowerShell one adds it to the user `PATH` for you. Both
+refuse to install if the checksum does not match. Re-running either upgrades an
+existing install in place.
+
+Prefer to do it by hand? Grab a tarball (or `.zip` on Windows) from the
+[releases page](https://github.com/memorylake-ai/memorylake-cli/releases),
+verify it against its `.sha256`, and put `memorylake` on your `PATH`.
+
 ## Build
 
 ```bash
