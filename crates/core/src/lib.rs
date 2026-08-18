@@ -12,8 +12,10 @@ mod test_support;
 pub use client::{Client, PartUploadError};
 pub use config::{
     ApiKeySource, AuthStatus, BaseUrlSource, DEFAULT_BASE_URL, DEFAULT_PROFILE, ENV_API_KEY,
-    ENV_BASE_URL, FileConfig, Paths, ProfileConfig, ResolveOverrides, RuntimeConfig, auth_status,
-    login_api_key, logout, mask_api_key, resolve, resolve_profile_base_url, switch_profile,
+    ENV_BASE_URL, ENV_WORKSPACE, FileConfig, Paths, ProfileConfig, ResolveOverrides, RuntimeConfig,
+    WorkspaceSource, auth_status, clear_profile_workspace, login_api_key, logout, mask_api_key,
+    resolve, resolve_profile_base_url, resolve_profile_workspace, set_profile_workspace,
+    switch_profile,
 };
 pub use credentials::{
     CredentialsFile, LOGIN_METHOD_API_KEY, LOGIN_METHOD_OAUTH, ProfileCredentials,

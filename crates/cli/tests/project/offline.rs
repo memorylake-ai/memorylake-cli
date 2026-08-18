@@ -2,6 +2,7 @@
 
 use std::fs;
 
+use crate::common::stub::logged_in_home;
 use crate::common::{assert_failure, assert_success, run, temp_home};
 
 #[test]
@@ -170,9 +171,17 @@ fn update_without_any_field_is_not_rejected_locally() {
     let _ = fs::remove_dir_all(&home);
 }
 
+/// A base URL nothing is listening on, so a command that reaches the network
+/// fails visibly rather than silently succeeding.
+const UNREACHABLE: &str = "http://127.0.0.1:1/openapi/memorylake";
+
 #[test]
-fn missing_workspace_flag_is_rejected() {
-    let home = temp_home();
+fn a_missing_workspace_is_reported_with_how_to_supply_one() {
+    // `--workspace` is optional now that `workspace use` can remember one, so
+    // this is a runtime check rather than a clap one. The profile here has no
+    // remembered workspace, so the command must say so — and say how to fix it
+    // — without contacting the API.
+    let home = logged_in_home(UNREACHABLE);
     for args in [
         ["project", "list"].as_slice(),
         ["project", "get", "proj-1"].as_slice(),
@@ -180,8 +189,16 @@ fn missing_workspace_flag_is_rejected() {
     ] {
         let err = assert_failure(&run(&home, args), args);
         assert!(
-            err.contains("--workspace"),
-            "missing --workspace should be reported for {args:?}: {err}"
+            err.contains("no workspace given"),
+            "missing workspace should be reported for {args:?}: {err}"
+        );
+        assert!(
+            err.contains("workspace use") && err.contains("--workspace"),
+            "the error must name both ways to supply one for {args:?}: {err}"
+        );
+        assert!(
+            !err.contains("could not connect"),
+            "the check must happen before any request for {args:?}: {err}"
         );
     }
     let _ = fs::remove_dir_all(&home);

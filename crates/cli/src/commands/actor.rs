@@ -1,5 +1,6 @@
 //! `memorylake actor` commands.
 
+use super::require_workspace;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use memorylake_core::api::actors::{
@@ -38,8 +39,10 @@ impl From<ActorTypeArg> for ActorType {
 #[derive(Debug, Args)]
 pub struct BindingArgs {
     /// Workspace id.
+    ///
+    /// Defaults to the workspace remembered by `workspace use`.
     #[arg(long)]
-    pub workspace: String,
+    pub workspace: Option<String>,
     /// Actor id.
     #[arg(long)]
     pub actor: String,
@@ -207,11 +210,13 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
             println!("Deleted actor `{id}`");
         }
         ActorCommand::Bind(BindingArgs { workspace, actor }) => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = bind_actor(&client, &workspace, &actor)
                 .with_context(|| format!("bind actor `{actor}` to workspace `{workspace}`"))?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         ActorCommand::Unbind(BindingArgs { workspace, actor }) => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             unbind_actor(&client, &workspace, &actor)
                 .with_context(|| format!("unbind actor `{actor}` from workspace `{workspace}`"))?;
             println!("Unbound actor `{actor}` from workspace `{workspace}`");

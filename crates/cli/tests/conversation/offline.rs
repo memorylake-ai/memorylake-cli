@@ -71,19 +71,6 @@ fn create_requires_a_workspace_a_custom_id_a_project_and_actors() {
             vec![
                 "conversation",
                 "create",
-                "--custom-id",
-                "s-1",
-                "--project",
-                "proj-1",
-                "--actors",
-                "a-1",
-            ],
-            "--workspace",
-        ),
-        (
-            vec![
-                "conversation",
-                "create",
                 "--workspace",
                 "ws-1",
                 "--project",
@@ -309,11 +296,50 @@ fn message_append_rejects_malformed_content_before_sending_it() {
 }
 
 #[test]
-fn message_append_wait_requires_a_workspace() {
-    // `cook-status` is workspace-scoped while `message append` is not, so
-    // --wait needs a workspace the command otherwise never asks for. clap
-    // catches it before any request.
-    let home = temp_home();
+fn create_without_a_workspace_anywhere_says_how_to_supply_one() {
+    // `--workspace` is optional now that `workspace use` can remember one, so
+    // its absence is a runtime error rather than a clap one.
+    assert_rejected_locally(
+        &[
+            "conversation",
+            "create",
+            "--custom-id",
+            "s-1",
+            "--project",
+            "proj-1",
+            "--actors",
+            "a-1",
+        ],
+        "no workspace given",
+    );
+}
+
+#[test]
+fn message_append_wait_needs_a_workspace_but_a_plain_append_does_not() {
+    // `cook-status` is workspace-scoped while the append itself is not, so
+    // --wait needs a workspace the command otherwise never asks for. It may
+    // come from --workspace or from `workspace use`; with neither, the error
+    // says so.
+    assert_rejected_locally(
+        &[
+            "conversation",
+            "message",
+            "append",
+            "conv-1",
+            "--actor",
+            "actor-1",
+            "--custom-id",
+            "msg-1",
+            "--text",
+            "hi",
+            "--wait",
+        ],
+        "no workspace given",
+    );
+
+    // Without --wait the same command must not ask for a workspace at all: it
+    // should get as far as the network and fail there instead.
+    let home = logged_in_home(UNREACHABLE);
     let args = [
         "conversation",
         "message",
@@ -325,12 +351,11 @@ fn message_append_wait_requires_a_workspace() {
         "msg-1",
         "--text",
         "hi",
-        "--wait",
     ];
     let err = assert_failure(&run(&home, &args), &args);
     assert!(
-        err.contains("--workspace"),
-        "--wait must name what it is missing: {err}"
+        !err.contains("no workspace given"),
+        "a plain append must not require a workspace: {err}"
     );
     let _ = fs::remove_dir_all(&home);
 }

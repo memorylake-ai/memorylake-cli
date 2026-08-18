@@ -16,6 +16,7 @@ use memorylake_core::api::agents::{
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 use std::path::PathBuf;
 
+use super::require_workspace;
 use body::{FromVersion, load_config_body, reject_config_fields, require_field, set_scalar};
 
 /// Agent subcommands.
@@ -103,8 +104,10 @@ pub enum AgentCommand {
         /// Agent id to bind.
         agent_id: String,
         /// Workspace to bind the agent into.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
     },
     /// Unbind an agent from a workspace.
     ///
@@ -113,14 +116,18 @@ pub enum AgentCommand {
         /// Agent id to unbind.
         agent_id: String,
         /// Workspace to remove the agent from.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
     },
     /// List the agents bound to a workspace.
     Bindings {
         /// Workspace whose bindings to list.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Number of items per page.
         #[arg(long)]
         page_size: Option<u32>,
@@ -256,6 +263,7 @@ pub fn run(command: AgentCommand, profile: Option<String>, base_url: Option<Stri
             agent_id,
             workspace,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = bind_agent(
                 &client,
                 &workspace,
@@ -270,6 +278,7 @@ pub fn run(command: AgentCommand, profile: Option<String>, base_url: Option<Stri
             agent_id,
             workspace,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             unbind_agent(&client, &workspace, &agent_id).with_context(|| {
                 format!("unbind agent `{agent_id}` from workspace `{workspace}`")
             })?;
@@ -281,6 +290,7 @@ pub fn run(command: AgentCommand, profile: Option<String>, base_url: Option<Stri
             continuation_token,
             name_fuzzy,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = list_workspace_agents(
                 &client,
                 &workspace,

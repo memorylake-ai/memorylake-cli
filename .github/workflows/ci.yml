@@ -55,8 +55,25 @@ jobs:
       - name: Install the published release end to end
         run: |
           set -eu
-          MEMORYLAKE_INSTALL_DIR="$PWD/testbin" sh scripts/install.sh
+          MEMORYLAKE_INSTALL_DIR="$PWD/testbin" sh scripts/install.sh | tee out.txt
           "$PWD/testbin/memorylake" --version
+
+          # A CI step has no controlling terminal, which is exactly the case the
+          # guided setup must detect: it has to print the manual steps and exit
+          # cleanly rather than hang waiting on a prompt nobody can answer.
+          grep -q "no terminal available" out.txt
+          grep -q "auth login" out.txt
+          grep -q "workspace use" out.txt
+          echo "guided setup degraded correctly without a terminal"
+
+      - name: Setup can be opted out of entirely
+        run: |
+          set -eu
+          MEMORYLAKE_NO_SETUP=1 MEMORYLAKE_INSTALL_DIR="$PWD/testbin2" \
+            sh scripts/install.sh | tee out2.txt
+          if grep -q "no terminal available" out2.txt; then
+            echo "MEMORYLAKE_NO_SETUP should skip setup silently"; exit 1
+          fi
 
   clippy:
     name: clippy

@@ -120,6 +120,58 @@ verify_checksum() {
     fi
 }
 
+# Walk a fresh install through logging in and picking a workspace.
+#
+# Piped through `sh`, stdin is the script itself, so the CLI's prompts would
+# read from it and see EOF. Everything interactive is therefore redirected from
+# /dev/tty, and when there is no terminal to read from — CI, a Dockerfile — the
+# setup is skipped with the commands printed instead of hanging or half-running.
+#
+# Skipped entirely when MEMORYLAKE_NO_SETUP is set, for anyone scripting the
+# install itself.
+setup() {
+    _bin="$1"
+
+    [ -z "${MEMORYLAKE_NO_SETUP:-}" ] || return 0
+
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        say ""
+        say "no terminal available, so setup was skipped. To finish:"
+        say "  $INSTALL_NAME auth login       # store your API key"
+        say "  $INSTALL_NAME workspace use    # pick a default workspace"
+        return 0
+    fi
+
+    # Already logged in? Then this is an upgrade, not a first install.
+    if "$_bin" auth status >/dev/null 2>&1; then
+        say ""
+        say "already logged in; leaving your credentials and workspace as they are"
+        return 0
+    fi
+
+    say ""
+    say "Let's get you set up. Ctrl-C to skip — you can run these later."
+    say ""
+
+    # `auth login` prompts for the key and validates it against the API before
+    # storing anything, so a typo is caught here rather than on first use.
+    if ! "$_bin" auth login </dev/tty >/dev/tty 2>&1; then
+        say ""
+        say "login did not complete. Run '$INSTALL_NAME auth login' when ready."
+        return 0
+    fi
+
+    # `workspace use` with no argument lists the account's workspaces and lets
+    # the user choose. Nobody has a workspace id memorised on day one, so the
+    # setup must never ask them to type one.
+    say ""
+    if ! "$_bin" workspace use </dev/tty >/dev/tty 2>&1; then
+        say ""
+        say "no workspace selected. Run '$INSTALL_NAME workspace use' to pick one,"
+        say "or pass --workspace <id> to each command."
+    fi
+}
+
 main() {
     need_cmd curl || need_cmd wget || err "need curl or wget to download the release"
     need_cmd tar || err "need tar to unpack the release"
@@ -160,6 +212,8 @@ main() {
     mv -f "$staged" "$INSTALL_DIR/$INSTALL_NAME"
 
     say "installed $INSTALL_DIR/$INSTALL_NAME"
+
+    setup "$INSTALL_DIR/$INSTALL_NAME"
 
     # Compare against the resolved binary rather than `command -v` alone: a
     # different memorylake earlier in PATH would otherwise look like success.

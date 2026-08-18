@@ -1,5 +1,6 @@
 //! `memorylake search` command.
 
+use super::require_workspace;
 use anyhow::{Context, Result};
 use clap::Args;
 use memorylake_core::api::search::{MemoryType, SearchMemoriesRequest, search_memories};
@@ -15,8 +16,10 @@ pub struct SearchArgs {
     #[arg(value_parser = parse_query)]
     query: String,
     /// Workspace id to search in.
+    ///
+    /// Defaults to the workspace remembered by `workspace use`.
     #[arg(long)]
-    workspace: String,
+    workspace: Option<String>,
     /// Limit to these projects (comma-separated). Defaults to every project.
     #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
     projects: Option<IdList>,
@@ -114,6 +117,7 @@ pub fn run(args: SearchArgs, profile: Option<String>, base_url: Option<String>) 
         .context("resolve API credentials")?;
     let client = Client::new(&runtime.base_url, &runtime.api_key).context("build API client")?;
 
+    let workspace = require_workspace(&paths, &runtime.profile, args.workspace)?;
     let request = SearchMemoriesRequest {
         query: args.query,
         project_ids: args.projects.map(|list| list.0),
@@ -121,7 +125,7 @@ pub fn run(args: SearchArgs, profile: Option<String>, base_url: Option<String>) 
         memory_types: args.types.map(|list| list.0),
         top_k: args.top_k,
     };
-    let data = search_memories(&client, &args.workspace, &request).context("search memories")?;
+    let data = search_memories(&client, &workspace, &request).context("search memories")?;
     println!("{}", serde_json::to_string_pretty(&data)?);
 
     Ok(())

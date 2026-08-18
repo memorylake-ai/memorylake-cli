@@ -10,19 +10,22 @@ use memorylake_core::api::projects::{
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
+use super::require_workspace;
 use document::{DocumentCommand, run as run_document};
 
 /// Project subcommands.
 ///
-/// Projects live inside a workspace, so every subcommand takes `--workspace`.
-/// There is no default or remembered workspace.
+/// Projects live inside a workspace, so every subcommand needs one: either
+/// `--workspace` or the one remembered by `workspace use`.
 #[derive(Debug, Subcommand)]
 pub enum ProjectCommand {
     /// List projects in a workspace.
     List {
         /// Workspace id that owns the projects.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Number of items per page.
         #[arg(long)]
         page_size: Option<u32>,
@@ -36,8 +39,10 @@ pub enum ProjectCommand {
     /// Create a project.
     Create {
         /// Workspace id to create the project in.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project display name.
         #[arg(long)]
         name: String,
@@ -51,8 +56,10 @@ pub enum ProjectCommand {
     /// Get a single project by id.
     Get {
         /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project id (or custom_id when `--by-custom-id` is set).
         id: String,
         /// Treat the positional argument as a caller-defined custom_id.
@@ -64,8 +71,10 @@ pub enum ProjectCommand {
     /// Only the flags you pass are sent; omitted fields are left unchanged.
     Update {
         /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project id.
         id: String,
         /// New display name.
@@ -81,8 +90,10 @@ pub enum ProjectCommand {
     /// This cannot be undone, and the command does not ask for confirmation.
     Delete {
         /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
-        workspace: String,
+        workspace: Option<String>,
         /// Project id.
         id: String,
     },
@@ -112,6 +123,7 @@ pub fn run(
             continuation_token,
             name_fuzzy,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = list_projects(
                 &client,
                 &workspace,
@@ -130,6 +142,7 @@ pub fn run(
             custom_id,
             description,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = create_project(
                 &client,
                 &workspace,
@@ -147,6 +160,7 @@ pub fn run(
             id,
             by_custom_id,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = if by_custom_id {
                 get_project_by_custom_id(&client, &workspace, &id)
                     .context("get project by custom_id")?
@@ -161,6 +175,7 @@ pub fn run(
             name,
             description,
         } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = update_project(
                 &client,
                 &workspace,
@@ -171,10 +186,13 @@ pub fn run(
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         ProjectCommand::Delete { workspace, id } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             delete_project(&client, &workspace, &id).context("delete project")?;
             println!("Deleted project `{id}` in workspace `{workspace}`");
         }
-        ProjectCommand::Document { command } => run_document(&client, command)?,
+        ProjectCommand::Document { command } => {
+            run_document(&client, &paths, &runtime.profile, command)?
+        }
     }
 
     Ok(())

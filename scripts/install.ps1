@@ -148,8 +148,67 @@ function Install-Memorylake {
 
         Write-Info "installed $destination"
         Show-PathHint
+        Invoke-Setup $destination
     } finally {
         Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Walk a fresh install through logging in and picking a workspace.
+#
+# `irm | iex` leaves stdin usable for prompts, unlike the Unix `curl | sh` case,
+# so the CLI's own interactive commands are simply invoked. When the host is not
+# interactive — a CI runner, a provisioning script — the commands are printed
+# instead, so nothing blocks on a prompt nobody can answer.
+#
+# Skipped entirely when MEMORYLAKE_NO_SETUP is set.
+function Invoke-Setup([string]$BinPath) {
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MEMORYLAKE_NO_SETUP'))) {
+        return
+    }
+
+    # $Host.UI.RawUI is unavailable in non-interactive hosts, which is the most
+    # reliable signal available here that there is nobody to prompt.
+    $interactive = $true
+    try { $null = $Host.UI.RawUI.KeyAvailable } catch { $interactive = $false }
+    if ([Environment]::UserInteractive -eq $false) { $interactive = $false }
+
+    if (-not $interactive) {
+        Write-Info ''
+        Write-Info 'no interactive terminal, so setup was skipped. To finish:'
+        Write-Info "  $InstallName auth login       # store your API key"
+        Write-Info "  $InstallName workspace use    # pick a default workspace"
+        return
+    }
+
+    # Already logged in? Then this is an upgrade, not a first install.
+    & $BinPath auth status *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info ''
+        Write-Info 'already logged in; leaving your credentials and workspace as they are'
+        return
+    }
+
+    Write-Info ''
+    Write-Info "Let's get you set up. Ctrl-C to skip — you can run these later."
+    Write-Info ''
+
+    # `auth login` prompts for the key and validates it before storing anything.
+    & $BinPath auth login
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info ''
+        Write-Info "login did not complete. Run '$InstallName auth login' when ready."
+        return
+    }
+
+    # `workspace use` with no argument lists the account's workspaces and lets
+    # the user choose — nobody has a workspace id memorised on day one.
+    Write-Info ''
+    & $BinPath workspace use
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info ''
+        Write-Info "no workspace selected. Run '$InstallName workspace use' to pick one,"
+        Write-Info 'or pass --workspace <id> to each command.'
     }
 }
 
