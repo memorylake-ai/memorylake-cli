@@ -29,6 +29,31 @@ logging in and picking a workspace; `MEMORYLAKE_VERSION`,
 `MEMORYLAKE_INSTALL_DIR`, `MEMORYLAKE_INSTALL_NAME` and `MEMORYLAKE_NO_SETUP`
 override the details — see the comments at the top of either script.
 
+### Installing without prompts
+
+Supply the credentials and nothing is asked — useful for a link handed out by a
+console, and for CI, where there is no one to prompt:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.sh \
+  | sh -s -- --api-key sk-… --workspace ws-… [--base-url URL]
+```
+
+```powershell
+# `irm | iex` cannot pass parameters, so Windows uses the environment
+$env:MEMORYLAKE_API_KEY='sk-…'; $env:MEMORYLAKE_WORKSPACE='ws-…'
+irm https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.ps1 | iex
+```
+
+Every flag has an environment variable (`MEMORYLAKE_API_KEY`,
+`MEMORYLAKE_WORKSPACE`, `MEMORYLAKE_BASE_URL`); a flag wins over its variable.
+**Supplied credentials replace whatever is already stored** — that is the point
+when a console hands out a key. The key is validated before anything is written,
+so one that will not work leaves your existing configuration untouched.
+
+A key on the command line is recorded in your shell's history. Prefer a
+short-lived key where that matters.
+
 Prefer not to pipe a script into your shell? Download an archive from the
 [releases page](https://github.com/memorylake-ai/memorylake-cli/releases), check
 it against its `.sha256`, and put `memorylake` on your `PATH`.
