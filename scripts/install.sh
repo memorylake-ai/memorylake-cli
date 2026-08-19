@@ -3,10 +3,26 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.sh | sh
 #
-# Environment overrides:
-#   MEMORYLAKE_VERSION       release tag to install (default: latest)
-#   MEMORYLAKE_INSTALL_DIR   where to put the binary (default: $HOME/.local/bin)
-#   MEMORYLAKE_INSTALL_NAME  name to install it as (default: memorylake)
+# Credentials can be supplied so the install finishes without prompting — what a
+# web console hands out, and what CI needs. `sh -s --` passes flags through a
+# pipe:
+#
+#   curl -fsSL … | sh -s -- --api-key sk-… --workspace ws-… [--base-url URL]
+#
+# Every flag has an environment variable, which is the only form available to
+# the PowerShell installer and often the tidier one in CI:
+#
+#   --api-key    MEMORYLAKE_API_KEY
+#   --workspace  MEMORYLAKE_WORKSPACE
+#   --base-url   MEMORYLAKE_BASE_URL
+#   --version    MEMORYLAKE_VERSION       release tag to install (default: latest)
+#   --install-dir MEMORYLAKE_INSTALL_DIR  where to put the binary (default: $HOME/.local/bin)
+#                MEMORYLAKE_INSTALL_NAME  name to install it as (default: memorylake)
+#                MEMORYLAKE_NO_SETUP      skip the guided setup entirely
+#
+# A flag wins over its variable. Note that an API key on the command line is
+# recorded by the shell's history; a variable assignment is too. Prefer a
+# short-lived key where that matters.
 #
 # POSIX sh on purpose: this runs before anything is installed, so it may not
 # assume bash. `set -eu` without pipefail — pipefail is not POSIX, so every
@@ -19,6 +35,56 @@ BIN_NAME="memorylake"
 VERSION="${MEMORYLAKE_VERSION:-latest}"
 INSTALL_DIR="${MEMORYLAKE_INSTALL_DIR:-$HOME/.local/bin}"
 INSTALL_NAME="${MEMORYLAKE_INSTALL_NAME:-$BIN_NAME}"
+API_KEY="${MEMORYLAKE_API_KEY:-}"
+WORKSPACE="${MEMORYLAKE_WORKSPACE:-}"
+BASE_URL="${MEMORYLAKE_BASE_URL:-}"
+
+# Parse flags, which override the variables above.
+#
+# Each value is required to be present: `--api-key` with nothing after it would
+# otherwise silently consume the next flag as its value.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --api-key)
+            [ $# -ge 2 ] || err "--api-key needs a value"
+            API_KEY="$2"
+            shift 2
+            ;;
+        --workspace)
+            [ $# -ge 2 ] || err "--workspace needs a value"
+            WORKSPACE="$2"
+            shift 2
+            ;;
+        --base-url)
+            [ $# -ge 2 ] || err "--base-url needs a value"
+            BASE_URL="$2"
+            shift 2
+            ;;
+        --version)
+            [ $# -ge 2 ] || err "--version needs a value"
+            VERSION="$2"
+            shift 2
+            ;;
+        --install-dir)
+            [ $# -ge 2 ] || err "--install-dir needs a value"
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --no-setup)
+            MEMORYLAKE_NO_SETUP=1
+            shift
+            ;;
+        -h | --help)
+            say "usage: install.sh [--api-key KEY] [--workspace ID] [--base-url URL]"
+            say "                  [--version TAG] [--install-dir DIR] [--no-setup]"
+            say ""
+            say "Through a pipe, pass flags after \`sh -s --\`:"
+            say "  curl -fsSL … | sh -s -- --api-key sk-… --workspace ws-…"
+            exit 0
+            ;;
+        *) err "unknown option: $1 (try --help)" ;;
+    esac
+done
 
 say() {
     printf '%s\n' "$*"
@@ -138,6 +204,33 @@ setup() {
 
     [ -z "${MEMORYLAKE_NO_SETUP:-}" ] || return 0
 
+    # Credentials supplied by the caller finish the setup without prompting.
+    #
+    # Checked before the already-logged-in test below, and deliberately so: a
+    # supplied key is an instruction to use *that* key, not a coincidence to be
+    # skipped because some other one is already stored. It also runs before the
+    # terminal test, so a console-generated command or a CI job configures the
+    # install completely with no terminal at all.
+    if [ -n "$API_KEY" ]; then
+        say ""
+        if [ -n "$BASE_URL" ]; then
+            set -- auth login --api-key "$API_KEY" --base-url "$BASE_URL"
+        else
+            set -- auth login --api-key "$API_KEY"
+        fi
+        # `auth login` validates against the API before storing anything, so a
+        # key that will not work fails here rather than on first use.
+        if ! "$_bin" "$@"; then
+            say ""
+            say "the supplied API key was not accepted; nothing was stored."
+            say "run '$INSTALL_NAME auth login' to enter one interactively."
+            return 0
+        fi
+        setup_workspace "$_bin" || return 0
+        SETUP_DONE=1
+        return 0
+    fi
+
     # Already logged in? Then this is an upgrade, not a first install.
     #
     # Checked before the terminal test, because it needs no terminal: an
@@ -179,6 +272,39 @@ setup() {
         return 0
     fi
 
+    setup_workspace "$_bin"
+
+    # Logged in either way: a skipped workspace is a preference, not a failure,
+    # and the line above already says how to set one.
+    SETUP_DONE=1
+}
+
+# Remember a default workspace: the supplied one, or one the user picks.
+#
+# A missing workspace never fails the install — the CLI works without one, it
+# just wants `--workspace` on every call — so this always returns success. It
+# returns non-zero only when it could not even try.
+setup_workspace() {
+    _bin="$1"
+
+    if [ -n "$WORKSPACE" ]; then
+        if ! "$_bin" workspace use "$WORKSPACE"; then
+            say ""
+            say "could not use workspace '$WORKSPACE'; run '$INSTALL_NAME workspace use'"
+            say "to pick one from your account."
+        fi
+        return 0
+    fi
+
+    # No terminal and nothing supplied: say what is left to do rather than
+    # hanging on a prompt nobody can answer.
+    if ! (exec 3<>/dev/tty) 2>/dev/null; then
+        say ""
+        say "no workspace set. Run '$INSTALL_NAME workspace use' to pick one,"
+        say "or pass --workspace <id> to each command."
+        return 0
+    fi
+
     # `workspace use` with no argument lists the account's workspaces and lets
     # the user choose. Nobody has a workspace id memorised on day one, so the
     # setup must never ask them to type one.
@@ -188,10 +314,7 @@ setup() {
         say "no workspace selected. Run '$INSTALL_NAME workspace use' to pick one,"
         say "or pass --workspace <id> to each command."
     fi
-
-    # Logged in either way: a skipped workspace is a preference, not a failure,
-    # and the line above already says how to set one.
-    SETUP_DONE=1
+    return 0
 }
 
 main() {

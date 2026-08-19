@@ -66,6 +66,39 @@ jobs:
           grep -q "workspace use" out.txt
           echo "guided setup degraded correctly without a terminal"
 
+      # Supplied credentials must win over whatever is already stored: a console
+      # hands out a key for a reason, and silently keeping a stale one would
+      # leave the install pointing somewhere the user did not choose. The
+      # success path needs a real key, so this asserts the ordering instead —
+      # a rejected key proves the supplied one was *tried* rather than skipped
+      # because credentials already existed.
+      - name: Supplied credentials override what is already stored
+        run: |
+          set -eu
+          config="$PWD/override-config"
+          mkdir -p "$config"
+          cat > "$config/credentials.toml" <<'CREDS'
+          [profiles.default]
+          api_key = "sk-stale-key-that-does-not-work"
+          login_method = "api_key"
+          CREDS
+          cat > "$config/config.toml" <<'CONF'
+          active_profile = "default"
+
+          [profiles.default]
+          workspace = "ws-stale"
+          CONF
+
+          MEMORYLAKE_CONFIG_DIR="$config" MEMORYLAKE_INSTALL_DIR="$PWD/testbin3" \
+            sh scripts/install.sh --api-key sk-definitely-not-valid | tee out3.txt
+
+          # The stale key must not have been treated as "already logged in".
+          if grep -q "already logged in" out3.txt; then
+            echo "a supplied key was skipped in favour of stored credentials"; exit 1
+          fi
+          grep -q "was not accepted" out3.txt
+          echo "supplied credentials take precedence over stored ones"
+
       - name: Setup can be opted out of entirely
         run: |
           set -eu
@@ -86,16 +119,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # Everything that needs no network. The live tests run once, in `coverage` —
+  # see the note there.
+  #
+  # No API key is set, so a live test that slipped in here would fail loudly
+  # rather than quietly reaching production from two jobs at once.
   test:
     name: test
     runs-on: ubuntu-latest
-    env:
-      MEMORYLAKE_API_KEY: ${{ secrets.MEMORYLAKE_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - name: Test (no network)
+        run: |
+          cargo test -p memorylake-core --lib
+          cargo test -p memorylake-cli -- --skip live
 
   # Windows is a release target but not a test platform: this proves the crate
   # still builds and its platform-independent behaviour holds there, so a broken
@@ -121,6 +160,38 @@ jobs:
       # The PowerShell installer runs on users' machines via `irm | iex`, so it
       # is checked where it actually runs: parsing, the checksum gate, and — in
       # the steps below — a real end-to-end install under both PowerShell hosts.
+      # Parse under Windows PowerShell 5.1 as well as 7. Their parsers differ:
+      # a command missing its final argument, with a `function … {` on the next
+      # line, parses cleanly under 7 and fails under 5.1, which swallows the
+      # function header as an argument and then cannot find a closing brace.
+      # That shipped once because only 7 was checked here.
+      # Windows PowerShell 5.1 reads a .ps1 with no BOM as ANSI, not UTF-8. An
+      # em dash then decodes as `a€"` under cp1252 — and that trailing byte is
+      # a smart quote, which PowerShell accepts as a string delimiter. One
+      # em dash in the wrong place therefore unbalances the quotes and the
+      # parse fails somewhere else entirely. Keeping the file ASCII avoids the
+      # question; a BOM would too, but silently, and only until someone strips
+      # it.
+      - name: install.ps1 stays ASCII
+        shell: bash
+        run: |
+          if LC_ALL=C grep -n '[^[:print:][:space:]]' scripts/install.ps1; then
+            echo "non-ASCII byte in install.ps1 — Windows PowerShell 5.1 reads this file as ANSI"
+            exit 1
+          fi
+          echo "install.ps1 is ASCII"
+
+      - name: Parse scripts/install.ps1 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "host: $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts\install.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Host "parse error: $_" }; exit 1 }
+          Write-Host 'install.ps1 parses cleanly under 5.1'
+
       - name: Validate scripts/install.ps1
         shell: pwsh
         run: |
@@ -195,7 +266,17 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Generate coverage
+      # The only job that runs the live tests, and so the only one that talks to
+      # production. They used to run here *and* in `test`, concurrently, against
+      # the same account — which failed at the connection level often enough to
+      # need a rerun most times. Running them once fixes that and halves the
+      # scratch state each CI run leaves behind (see #15).
+      #
+      # They stay in this job rather than the other because they are worth ~9
+      # points of coverage: they reach paging, chunked upload and error paths
+      # that the stub-backed tests do not. A live failure therefore surfaces
+      # here — that is deliberate, not a misplaced test.
+      - name: Generate coverage (includes the live tests)
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4

@@ -8,10 +8,23 @@
 
         irm https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.ps1 | iex
 
+    Credentials can be supplied so the install finishes without prompting -- what
+    a web console hands out, and what CI needs. `irm | iex` cannot pass
+    parameters to a script, so these come from the environment:
+
+        $env:MEMORYLAKE_API_KEY='sk-...'; $env:MEMORYLAKE_WORKSPACE='ws-...'; irm ... | iex
+
     Environment overrides:
+        MEMORYLAKE_API_KEY       log in with this key, no prompting
+        MEMORYLAKE_WORKSPACE     remember this workspace, no prompting
+        MEMORYLAKE_BASE_URL      endpoint to log in to (default: app.memorylake.ai)
         MEMORYLAKE_VERSION       release tag to install (default: latest)
         MEMORYLAKE_INSTALL_DIR   where to put the binary (default: %LOCALAPPDATA%\memorylake\bin)
         MEMORYLAKE_INSTALL_NAME  name to install it as, without .exe (default: memorylake)
+        MEMORYLAKE_NO_SETUP      skip the guided setup entirely
+
+    Note that a key assigned on the command line is recorded in PowerShell's
+    history. Prefer a short-lived key where that matters.
 #>
 
 # Stop on the first error. Note this does not cover native executables, whose
@@ -42,6 +55,9 @@ $script:SetupDone = $false
 $Version = Get-EnvOrDefault 'MEMORYLAKE_VERSION' 'latest'
 $InstallDir = Get-EnvOrDefault 'MEMORYLAKE_INSTALL_DIR' (Join-Path $env:LOCALAPPDATA 'memorylake\bin')
 $InstallName = Get-EnvOrDefault 'MEMORYLAKE_INSTALL_NAME' $BinName
+$ApiKey = Get-EnvOrDefault 'MEMORYLAKE_API_KEY' ''
+$Workspace = Get-EnvOrDefault 'MEMORYLAKE_WORKSPACE' ''
+$BaseUrl = Get-EnvOrDefault "MEMORYLAKE_BASE_URL" ""
 
 function Write-Info([string]$Message) {
     Write-Host $Message
@@ -56,12 +72,12 @@ function Stop-WithError([string]$Message) {
 #
 # Two sources, in that order, because neither works everywhere:
 #
-# * `RuntimeInformation::OSArchitecture` is the accurate one — it reports the
-#   *OS* architecture even from an emulated process — but it is a .NET Core API.
+# * `RuntimeInformation::OSArchitecture` is the accurate one -- it reports the
+#   *OS* architecture even from an emulated process -- but it is a .NET Core API.
 #   Windows PowerShell 5.1 runs on .NET Framework, where the type is missing and
 #   the expression yields nothing at all.
 # * The environment variables always exist. `PROCESSOR_ARCHITECTURE` alone is
-#   the process architecture, which is wrong for a 32-bit shell on a 64-bit OS —
+#   the process architecture, which is wrong for a 32-bit shell on a 64-bit OS --
 #   but that is exactly when `PROCESSOR_ARCHITEW6432` is set, and it holds the
 #   OS architecture. Preferring it when present covers the gap.
 function Get-Target {
@@ -96,8 +112,8 @@ function Get-Target {
 #
 # Reads the releases API rather than the redirect on /releases/latest. The
 # redirect is cheaper, but getting the Location header out of it differs by
-# runtime — Windows PowerShell 5.1 hands back a Dictionary where `.Location`
-# is not a property, PowerShell 7 an HttpResponseMessage — and quietly yielding
+# runtime -- Windows PowerShell 5.1 hands back a Dictionary where `.Location`
+# is not a property, PowerShell 7 an HttpResponseMessage -- and quietly yielding
 # nothing is worse than one extra request. `Invoke-RestMethod` behaves the same
 # on both.
 function Resolve-Version([string]$Requested) {
@@ -196,12 +212,39 @@ function Install-Memorylake {
 #
 # `irm | iex` leaves stdin usable for prompts, unlike the Unix `curl | sh` case,
 # so the CLI's own interactive commands are simply invoked. When the host is not
-# interactive — a CI runner, a provisioning script — the commands are printed
+# interactive -- a CI runner, a provisioning script -- the commands are printed
 # instead, so nothing blocks on a prompt nobody can answer.
 #
 # Skipped entirely when MEMORYLAKE_NO_SETUP is set.
 function Invoke-Setup([string]$BinPath) {
     if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MEMORYLAKE_NO_SETUP'))) {
+        return
+    }
+
+    # Credentials supplied by the caller finish the setup without prompting.
+    #
+    # Checked before the already-logged-in test below, and deliberately so: a
+    # supplied key is an instruction to use *that* key, not a coincidence to be
+    # skipped because some other one is already stored. It also runs before the
+    # interactivity test, so a console-generated command or a CI job configures
+    # the install completely with no terminal at all.
+    if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
+        Write-Info ''
+        $loginArgs = @('auth', 'login', '--api-key', $ApiKey)
+        if (-not [string]::IsNullOrWhiteSpace($BaseUrl)) {
+            $loginArgs += @('--base-url', $BaseUrl)
+        }
+        # `auth login` validates against the API before storing anything, so a
+        # key that will not work fails here rather than on first use.
+        & $BinPath @loginArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Info ''
+            Write-Info 'the supplied API key was not accepted; nothing was stored.'
+            Write-Info "run '$InstallName auth login' to enter one interactively."
+            return
+        }
+        Set-DefaultWorkspace $BinPath
+        $script:SetupDone = $true
         return
     }
 
@@ -237,7 +280,7 @@ function Invoke-Setup([string]$BinPath) {
     }
 
     Write-Info ''
-    Write-Info "Let's get you set up. Ctrl-C to skip — you can run these later."
+    Write-Info "Let's get you set up. Ctrl-C to skip -- you can run these later."
     Write-Info ''
 
     # `auth login` prompts for the key and validates it before storing anything.
@@ -248,8 +291,29 @@ function Invoke-Setup([string]$BinPath) {
         return
     }
 
+    Set-DefaultWorkspace $BinPath
+
+    # Logged in either way: a skipped workspace is a preference, not a failure.
+    $script:SetupDone = $true
+}
+
+# Remember a default workspace: the supplied one, or one the user picks.
+#
+# A missing workspace never fails the install -- the CLI works without one, it
+# just wants `--workspace` on every call.
+function Set-DefaultWorkspace([string]$BinPath) {
+    if (-not [string]::IsNullOrWhiteSpace($Workspace)) {
+        & $BinPath workspace use $Workspace
+        if ($LASTEXITCODE -ne 0) {
+            Write-Info ''
+            Write-Info "could not use workspace '$Workspace'; run '$InstallName workspace use'"
+            Write-Info 'to pick one from your account.'
+        }
+        return
+    }
+
     # `workspace use` with no argument lists the account's workspaces and lets
-    # the user choose — nobody has a workspace id memorised on day one.
+    # the user choose -- nobody has a workspace id memorised on day one.
     Write-Info ''
     & $BinPath workspace use
     if ($LASTEXITCODE -ne 0) {
@@ -257,13 +321,10 @@ function Invoke-Setup([string]$BinPath) {
         Write-Info "no workspace selected. Run '$InstallName workspace use' to pick one,"
         Write-Info 'or pass --workspace <id> to each command.'
     }
-
-    # Logged in either way: a skipped workspace is a preference, not a failure.
-    $script:SetupDone = $true
 }
 
 # Tell the user how to reach the binary, and add it to the user PATH when it is
-# not already there. Only the user-scoped PATH is touched — a machine-scoped
+# not already there. Only the user-scoped PATH is touched -- a machine-scoped
 # change would need elevation and affect every account.
 function Show-PathHint {
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
