@@ -294,6 +294,250 @@ fn actor_lifecycle_end_to_end() {
     let _ = fs::remove_dir_all(&home);
 }
 
+/// Tags, end to end: what the server stores, how it filters, and what each of
+/// the two tag flags does.
+///
+/// The filter tag carries the run's unique suffix so a parallel run or a stale
+/// actor from an earlier one cannot make an assertion pass or fail by accident.
+#[test]
+fn actor_tags_end_to_end() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let suffix = unique_suffix();
+    let custom_id = format!("cli-bin-tag-{suffix}");
+    let display_name = format!("CLI Bin Tag {suffix}");
+    let unique_tag = format!("cli-tag-{suffix}");
+
+    // --- create: the server trims and de-duplicates ------------------------
+    // `vip` is passed twice and one entry is padded, so the response shows
+    // whose job normalization is. The CLI sends what it was given.
+    let created = json_of(
+        &home,
+        &[
+            "actor",
+            "create",
+            "--custom-id",
+            custom_id.as_str(),
+            "--display-name",
+            display_name.as_str(),
+            "--tags",
+            &format!("vip, cn , vip, {unique_tag}"),
+        ],
+    );
+    let actor_id = created["id"]
+        .as_str()
+        .expect("create returns an id")
+        .to_string();
+    let mut guard = ActorGuard::new(&home, &actor_id);
+
+    let tags: Vec<String> = created["tags"]
+        .as_array()
+        .expect("create returns a tags array")
+        .iter()
+        .map(|tag| tag.as_str().expect("tags are strings").to_string())
+        .collect();
+    assert_eq!(
+        tags,
+        vec!["vip".to_string(), "cn".to_string(), unique_tag.clone()],
+        "the server de-duplicates and trims, and keeps first-seen order: {}",
+        created["tags"]
+    );
+
+    // --- an actor with no tags reports an empty list, not a missing field ---
+    let plain_custom_id = format!("cli-bin-notag-{suffix}");
+    let plain = json_of(
+        &home,
+        &[
+            "actor",
+            "create",
+            "--custom-id",
+            plain_custom_id.as_str(),
+            "--display-name",
+            &format!("CLI Bin NoTag {suffix}"),
+        ],
+    );
+    let plain_id = plain["id"]
+        .as_str()
+        .expect("create returns an id")
+        .to_string();
+    let mut plain_guard = ActorGuard::new(&home, &plain_id);
+    assert_eq!(
+        plain["tags"],
+        Value::Array(Vec::new()),
+        "no tags must print as [], which is what the API sends: {plain}"
+    );
+
+    // --- filter by one tag --------------------------------------------------
+    let found = json_of(
+        &home,
+        &["actor", "list", "--page-size", "50", "--tags", &unique_tag],
+    );
+    let ids: Vec<&str> = found["items"]
+        .as_array()
+        .expect("list returns items")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![actor_id.as_str()],
+        "a unique tag must match exactly the actor carrying it: {found}"
+    );
+
+    // --- several tags are ANDed, not ORed -----------------------------------
+    let both = json_of(
+        &home,
+        &[
+            "actor",
+            "list",
+            "--page-size",
+            "50",
+            "--tags",
+            &format!("vip,{unique_tag}"),
+        ],
+    );
+    assert!(
+        both["items"]
+            .as_array()
+            .expect("list returns items")
+            .iter()
+            .any(|item| item["id"] == Value::String(actor_id.clone())),
+        "an actor carrying both tags must be returned: {both}"
+    );
+
+    let missing = json_of(
+        &home,
+        &[
+            "actor",
+            "list",
+            "--page-size",
+            "50",
+            "--tags",
+            &format!("{unique_tag},not-a-tag-on-this-actor"),
+        ],
+    );
+    assert!(
+        missing["items"]
+            .as_array()
+            .expect("list returns items")
+            .is_empty(),
+        "AND means one absent tag excludes the actor; OR would have matched: {missing}"
+    );
+
+    // --- matching is case-sensitive -----------------------------------------
+    let wrong_case = json_of(
+        &home,
+        &[
+            "actor",
+            "list",
+            "--page-size",
+            "50",
+            "--tags",
+            &unique_tag.to_uppercase(),
+        ],
+    );
+    assert!(
+        wrong_case["items"]
+            .as_array()
+            .expect("list returns items")
+            .is_empty(),
+        "tags are matched exactly, so an upper-cased tag must not match: {wrong_case}"
+    );
+
+    // --- a binding carries the actor's tags and its status ------------------
+    let workspace_id = create_workspace(&home, &suffix);
+    let binding = json_of(
+        &home,
+        &[
+            "actor",
+            "bind",
+            "--workspace",
+            workspace_id.as_str(),
+            "--actor",
+            actor_id.as_str(),
+        ],
+    );
+    assert!(
+        binding["tags"]
+            .as_array()
+            .expect("a binding reports tags")
+            .iter()
+            .any(|tag| tag == &Value::String(unique_tag.clone())),
+        "the binding must carry the actor's tags: {binding}"
+    );
+    assert_eq!(
+        binding["status"],
+        Value::String("ACTIVE".to_string()),
+        "a live actor's binding is ACTIVE: {binding}"
+    );
+
+    // --- --tags replaces the whole list ------------------------------------
+    let replaced = json_of(
+        &home,
+        &["actor", "update", actor_id.as_str(), "--tags", "gold"],
+    );
+    assert_eq!(
+        replaced["tags"],
+        Value::Array(vec![Value::String("gold".to_string())]),
+        "--tags replaces rather than adds: {replaced}"
+    );
+
+    // --- an omitted --tags leaves them alone -------------------------------
+    let renamed = json_of(
+        &home,
+        &[
+            "actor",
+            "update",
+            actor_id.as_str(),
+            "--description",
+            "tags must survive this",
+        ],
+    );
+    assert_eq!(
+        renamed["tags"],
+        Value::Array(vec![Value::String("gold".to_string())]),
+        "an update that does not mention tags must not disturb them: {renamed}"
+    );
+
+    // --- --clear-tags empties the list --------------------------------------
+    let cleared = json_of(
+        &home,
+        &["actor", "update", actor_id.as_str(), "--clear-tags"],
+    );
+    assert_eq!(
+        cleared["tags"],
+        Value::Array(Vec::new()),
+        "--clear-tags must remove every tag: {cleared}"
+    );
+
+    // --- the server rejects a tag the CLI cannot catch ----------------------
+    // Length is left to the server, so prove its error actually surfaces.
+    let too_long = "x".repeat(65);
+    let args = [
+        "actor",
+        "update",
+        actor_id.as_str(),
+        "--tags",
+        too_long.as_str(),
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("64"),
+        "the server's length limit must reach the user: {err}"
+    );
+
+    for id in [actor_id.as_str(), plain_id.as_str()] {
+        let args = ["actor", "delete", id];
+        assert_success(&run(&home, &args), &args);
+    }
+    guard.disarm();
+    plain_guard.disarm();
+
+    let _ = fs::remove_dir_all(&home);
+}
+
 #[test]
 fn create_with_duplicate_custom_id_surfaces_the_server_error() {
     let api_key = require_api_key();

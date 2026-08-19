@@ -62,7 +62,7 @@ pub struct MemoryTypeList(Vec<MemoryType>);
 /// An empty entry is rejected rather than dropped: `--projects a,,b` is far
 /// more likely to be a typo than a request to search two projects, and
 /// silently ignoring it would quietly change the caller's filter.
-fn split_csv(raw: &str) -> std::result::Result<Vec<String>, String> {
+pub(crate) fn split_csv(raw: &str) -> std::result::Result<Vec<String>, String> {
     if raw.trim().is_empty() {
         return Err("must not be empty".to_string());
     }

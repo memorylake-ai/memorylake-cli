@@ -79,6 +79,13 @@ pub struct Actor {
     /// Optional free-text role or purpose.
     #[serde(default)]
     pub description: Option<String>,
+    /// Labels used to group and filter actors, e.g. `vip` or `cn`.
+    ///
+    /// The API always sends this field, empty when the actor has none, so the
+    /// default only covers a deployment that predates tags -- where no tags is
+    /// also the truth.
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Optional caller-defined metadata.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
@@ -108,6 +115,16 @@ pub struct ActorBinding {
     /// Bound actor's display name.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Bound actor's tags. Empty when it has none.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Whether the bound actor still exists.
+    ///
+    /// A deleted actor keeps its binding, so this is what distinguishes a live
+    /// member from a tombstone. Kept as sent rather than parsed into an enum:
+    /// the CLI only prints it, and an unknown value must not fail the command.
+    #[serde(default)]
+    pub status: Option<String>,
     /// When the binding was created (ISO 8601).
     #[serde(default)]
     pub bound_at: Option<String>,
@@ -152,6 +169,35 @@ mod tests {
         assert_eq!(actor.display_name, "Alice Chen");
         assert!(actor.description.is_none());
         assert!(actor.metadata.is_none());
+        assert!(
+            actor.tags.is_empty(),
+            "a response without tags must decode as no tags, not fail"
+        );
+    }
+
+    #[test]
+    fn actor_decodes_tags() {
+        let raw = r#"{
+            "id": "act-a1b2c3d4e5f6",
+            "actor_type": "HUMAN",
+            "display_name": "Alice Chen",
+            "tags": ["vip", "cn"]
+        }"#;
+        let actor: Actor = serde_json::from_str(raw).expect("decode actor with tags");
+        assert_eq!(actor.tags, vec!["vip".to_string(), "cn".to_string()]);
+    }
+
+    #[test]
+    fn actor_decodes_an_empty_tag_list() {
+        // What the API actually sends for an actor with no tags.
+        let raw = r#"{
+            "id": "act-1",
+            "actor_type": "HUMAN",
+            "display_name": "Alice Chen",
+            "tags": []
+        }"#;
+        let actor: Actor = serde_json::from_str(raw).expect("decode actor with empty tags");
+        assert!(actor.tags.is_empty());
     }
 
     #[test]
@@ -167,5 +213,31 @@ mod tests {
         assert_eq!(binding.actor_id, "act-a1b2c3d4e5f6");
         assert_eq!(binding.actor_type, Some(ActorType::Human));
         assert_eq!(binding.bound_at.as_deref(), Some("2025-03-15T09:00:00Z"));
+        assert!(binding.tags.is_empty());
+        assert!(binding.status.is_none());
+    }
+
+    #[test]
+    fn actor_binding_decodes_tags_and_status() {
+        // The shape the API actually returns, measured against production.
+        let raw = r#"{
+            "tags": ["vip", "cn"],
+            "status": "ACTIVE",
+            "actor_id": "act-1",
+            "custom_id": "user-1",
+            "actor_type": "HUMAN",
+            "display_name": "Alice Chen",
+            "bound_at": "2026-08-19T09:14:37.434605Z"
+        }"#;
+        let binding: ActorBinding = serde_json::from_str(raw).expect("decode binding");
+        assert_eq!(binding.tags, vec!["vip".to_string(), "cn".to_string()]);
+        assert_eq!(binding.status.as_deref(), Some("ACTIVE"));
+    }
+
+    #[test]
+    fn actor_binding_keeps_an_unknown_status() {
+        let raw = r#"{"actor_id":"act-1","status":"SUSPENDED"}"#;
+        let binding: ActorBinding = serde_json::from_str(raw).expect("decode unknown status");
+        assert_eq!(binding.status.as_deref(), Some("SUSPENDED"));
     }
 }

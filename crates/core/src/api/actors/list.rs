@@ -31,6 +31,9 @@ pub struct ListActorsParams {
     /// Fuzzy filter by display name (partial match). Sent as
     /// `display_name_fuzzy`.
     pub display_name_fuzzy: Option<String>,
+    /// Filter by tag. Several tags are combined with AND: only actors carrying
+    /// every listed tag are returned. Matching is exact and case-sensitive.
+    pub tags: Option<Vec<String>>,
 }
 
 impl ListActorsParams {
@@ -48,6 +51,14 @@ impl ListActorsParams {
         }
         if let Some(display_name_fuzzy) = &self.display_name_fuzzy {
             query.push(("display_name_fuzzy", display_name_fuzzy.clone()));
+        }
+        // Repeated `tags=` rather than one comma-joined value. The API accepts
+        // both, but repeating is unambiguous: it needs no agreement about how a
+        // value is split, and a tag can never contain a comma anyway.
+        if let Some(tags) = &self.tags {
+            for tag in tags {
+                query.push(("tags", tag.clone()));
+            }
         }
         query
     }
@@ -74,6 +85,7 @@ mod tests {
             continuation_token: Some("token-abc".to_string()),
             actor_type: Some(ActorType::Assistant),
             display_name_fuzzy: Some("Alice".to_string()),
+            tags: Some(vec!["vip".to_string(), "cn".to_string()]),
         };
         assert_eq!(
             params.to_query(),
@@ -82,8 +94,35 @@ mod tests {
                 ("continuation_token", "token-abc".to_string()),
                 ("actor_type", "ASSISTANT".to_string()),
                 ("display_name_fuzzy", "Alice".to_string()),
+                ("tags", "vip".to_string()),
+                ("tags", "cn".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn each_tag_becomes_its_own_query_pair() {
+        let params = ListActorsParams {
+            tags: Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+            ..ListActorsParams::default()
+        };
+        assert_eq!(
+            params.to_query(),
+            vec![
+                ("tags", "a".to_string()),
+                ("tags", "b".to_string()),
+                ("tags", "c".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_tag_list_adds_no_query_pair() {
+        let params = ListActorsParams {
+            tags: Some(Vec::new()),
+            ..ListActorsParams::default()
+        };
+        assert!(params.to_query().is_empty());
     }
 
     #[test]

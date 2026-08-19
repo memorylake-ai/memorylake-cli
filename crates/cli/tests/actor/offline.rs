@@ -54,7 +54,9 @@ fn update_without_any_field_fails_before_credentials() {
     let args = ["actor", "update", "act-1"];
     let err = assert_failure(&run(&home, &args), &args);
     assert!(
-        err.contains("at least one of --display-name, --description, or --metadata"),
+        err.contains(
+            "at least one of --display-name, --description, --tags, --clear-tags, or --metadata"
+        ),
         "unexpected error output: {err}"
     );
     // The input error must win over the not-logged-in error, otherwise the
@@ -63,6 +65,47 @@ fn update_without_any_field_fails_before_credentials() {
         !err.contains("not logged in"),
         "input validation must run before credential resolution: {err}"
     );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn tags_and_clear_tags_together_are_rejected() {
+    let home = temp_home();
+    let args = ["actor", "update", "act-1", "--tags", "vip", "--clear-tags"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("--clear-tags") && err.contains("--tags"),
+        "the error must name both conflicting flags: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn tags_must_not_be_empty_or_have_doubled_commas() {
+    let home = temp_home();
+    // `--tags ""` is rejected rather than treated as "clear": clearing has its
+    // own flag, and an empty value is far more likely to be a shell mishap.
+    for raw in ["", "   ", "vip,,cn", "vip,"] {
+        let args = [
+            "actor",
+            "create",
+            "--custom-id",
+            "u-1",
+            "--display-name",
+            "U",
+            "--tags",
+            raw,
+        ];
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(
+            err.contains("must not be empty") || err.contains("empty entry"),
+            "unexpected error output for {raw:?}: {err}"
+        );
+        assert!(
+            !err.contains("not logged in"),
+            "tags must be rejected before credential resolution: {err}"
+        );
+    }
     let _ = fs::remove_dir_all(&home);
 }
 

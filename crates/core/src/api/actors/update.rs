@@ -23,6 +23,13 @@ pub struct UpdateActorRequest {
     /// New description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Replacement tag list.
+    ///
+    /// Like `metadata`, this **replaces** rather than merges: the list sent here
+    /// becomes the actor's complete set of tags. `Some(vec![])` removes every
+    /// tag; `None` leaves the stored tags untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     /// Replacement metadata object.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
@@ -32,7 +39,10 @@ impl UpdateActorRequest {
     /// `true` when no field is set, i.e. the request would send an empty body
     /// and change nothing. Callers should reject this before making a request.
     pub fn is_empty(&self) -> bool {
-        self.display_name.is_none() && self.description.is_none() && self.metadata.is_none()
+        self.display_name.is_none()
+            && self.description.is_none()
+            && self.tags.is_none()
+            && self.metadata.is_none()
     }
 }
 
@@ -75,5 +85,31 @@ mod tests {
             serde_json::to_string(&request).unwrap(),
             r#"{"metadata":{"tier":"enterprise"}}"#
         );
+    }
+
+    #[test]
+    fn tags_alone_is_a_valid_update() {
+        let request = UpdateActorRequest {
+            tags: Some(vec!["gold".to_string()]),
+            ..UpdateActorRequest::default()
+        };
+        assert!(!request.is_empty());
+        assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"tags":["gold"]}"#
+        );
+    }
+
+    #[test]
+    fn an_empty_tag_list_is_sent_because_it_means_remove_every_tag() {
+        // The distinction matters here in a way it does not for the other
+        // fields: an omitted `tags` leaves the stored tags alone, so dropping
+        // an empty list would silently turn "clear them" into "change nothing".
+        let request = UpdateActorRequest {
+            tags: Some(Vec::new()),
+            ..UpdateActorRequest::default()
+        };
+        assert!(!request.is_empty());
+        assert_eq!(serde_json::to_string(&request).unwrap(), r#"{"tags":[]}"#);
     }
 }
