@@ -12,6 +12,7 @@
 //! [`list_documents`].
 
 mod delete;
+mod download;
 mod get;
 mod import;
 mod list;
@@ -19,6 +20,7 @@ mod path;
 mod types;
 
 pub use delete::{DeleteDocumentsRequest, delete_documents};
+pub use download::download_document;
 pub use get::get_document;
 pub use import::{ImportDocumentsRequest, import_documents};
 pub use list::{DocumentList, ListDocumentsParams, list_documents};

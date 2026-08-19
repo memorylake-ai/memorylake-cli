@@ -11,8 +11,8 @@
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
-use std::process::Output;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -35,10 +35,21 @@ struct ScriptedServer {
 }
 
 impl ScriptedServer {
-    fn new(responses: &[&str]) -> Self {
+    /// Serve `bodies`, each wrapped in a `200 OK` JSON response.
+    fn new(bodies: &[&str]) -> Self {
+        let responses: Vec<String> = bodies.iter().map(|body| http_200(body)).collect();
+        Self::raw(&responses.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+
+    /// Serve complete HTTP responses verbatim.
+    ///
+    /// Needed by the download tests, which depend on the status line and on
+    /// headers — `Content-Disposition` above all — that the JSON wrapper in
+    /// [`Self::new`] would replace.
+    fn raw(responses: &[&str]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
         let addr = listener.local_addr().expect("stub server address");
-        let responses: Vec<String> = responses.iter().map(|body| http_200(body)).collect();
+        let responses: Vec<String> = responses.iter().map(|r| (*r).to_string()).collect();
 
         let (sender, requests) = channel();
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -104,6 +115,62 @@ impl Drop for ScriptedServer {
 fn http_200(body: &str) -> String {
     format!(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// A binary response, optionally naming the file the way the API does.
+fn http_binary(body: &str, disposition: Option<&str>) -> String {
+    let disposition = disposition
+        .map(|value| format!("content-disposition: {value}\r\n"))
+        .unwrap_or_default();
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\n{disposition}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// Like [`exchange`], but runs the command inside `directory`.
+///
+/// `download` writes into the current directory when told nothing else, so a
+/// test of that path has to own the directory it runs in — otherwise it drops
+/// files into the repository.
+fn exchange_in(directory: &Path, responses: &[&str], args: &[&str]) -> (Vec<String>, Output) {
+    let server = ScriptedServer::raw(responses);
+    let home = logged_in_home(&server.base_url);
+    let output = Command::new(env!("CARGO_BIN_EXE_memorylake"))
+        .current_dir(directory)
+        .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env_remove("MEMORYLAKE_API_KEY")
+        .env_remove("MEMORYLAKE_BASE_URL")
+        .env_remove("MEMORYLAKE_WORKSPACE")
+        .args(args)
+        .output()
+        .expect("spawn memorylake");
+    let requests = server.collected();
+    let _ = fs::remove_dir_all(&home);
+    (requests, output)
+}
+
+/// A scratch directory the caller owns for the duration of a test.
+fn scratch_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "memorylake-dl-{tag}-{}-{:?}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("create scratch dir");
+    dir
+}
+
+fn http_404(body: &str) -> String {
+    format!(
+        "HTTP/1.1 404 Not Found\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -544,4 +611,252 @@ fn server_errors_are_surfaced_verbatim() {
     let stderr = stderr_of(&output);
     assert!(stderr.contains("project not found"), "{stderr}");
     assert!(stderr.contains("[PROJECT_NOT_FOUND]"), "{stderr}");
+}
+
+const DOWNLOAD_PATH: &str =
+    "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/doc-1/download";
+
+#[test]
+fn download_requests_the_documented_path() {
+    let dir = scratch_dir("path");
+    let (requests, output) = exchange_in(
+        &dir,
+        &[&http_binary(
+            "file body",
+            Some(r#"attachment; filename="notes.txt""#),
+        )],
+        &[
+            "project",
+            "document",
+            "download",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(
+        request_line(&requests[0]),
+        format!("GET {DOWNLOAD_PATH} HTTP/1.1"),
+        "unexpected request line"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn download_names_the_file_from_content_disposition() {
+    // Without this the caller would have to know the name in advance, which is
+    // the whole point of the server sending one.
+    let dir = scratch_dir("named");
+    let (_, output) = exchange_in(
+        &dir,
+        &[&http_binary(
+            "file body",
+            Some(r#"attachment; filename="notes.txt""#),
+        )],
+        &[
+            "project",
+            "document",
+            "download",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(
+        fs::read_to_string(dir.join("notes.txt")).expect("file written under the server's name"),
+        "file body"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn download_writes_bytes_to_stdout_when_asked() {
+    // Piping is the reason `-o -` exists, so stdout must carry the file and
+    // nothing else — the summary belongs on stderr.
+    let dir = scratch_dir("stdout");
+    let (_, output) = exchange_in(
+        &dir,
+        &[&http_binary(
+            "piped body",
+            Some(r#"attachment; filename="notes.txt""#),
+        )],
+        &[
+            "project",
+            "document",
+            "download",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+            "-o",
+            "-",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(stdout_of(&output), "piped body");
+    assert!(
+        stderr_of(&output).contains("bytes to stdout"),
+        "the summary belongs on stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(
+        !dir.join("notes.txt").exists(),
+        "streaming to stdout must not also write a file"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn download_refuses_to_overwrite_without_force() {
+    let dir = scratch_dir("clobber");
+    fs::write(dir.join("notes.txt"), "do not lose me").expect("seed the destination");
+
+    let (_, output) = exchange_in(
+        &dir,
+        &[&http_binary(
+            "new body",
+            Some(r#"attachment; filename="notes.txt""#),
+        )],
+        &[
+            "project",
+            "document",
+            "download",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+        ],
+    );
+    assert!(!output.status.success(), "overwriting must fail");
+    assert!(
+        stderr_of(&output).contains("--force"),
+        "the error names the way out: {}",
+        stderr_of(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("notes.txt")).expect("read"),
+        "do not lose me",
+        "the existing file must survive"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn download_overwrites_with_force() {
+    let dir = scratch_dir("force");
+    fs::write(dir.join("notes.txt"), "stale").expect("seed the destination");
+
+    let (_, output) = exchange_in(
+        &dir,
+        &[&http_binary(
+            "fresh body",
+            Some(r#"attachment; filename="notes.txt""#),
+        )],
+        &[
+            "project",
+            "document",
+            "download",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+            "--force",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        fs::read_to_string(dir.join("notes.txt")).expect("read"),
+        "fresh body"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn download_without_a_server_name_asks_for_output() {
+    // Guessing a name would put a file somewhere the caller did not choose.
+    let dir = scratch_dir("unnamed");
+    let (_, output) = exchange_in(
+        &dir,
+        &[&http_binary("body", None)],
+        &[
+            "project",
+            "document",
+            "download",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "an unnamed file must not be guessed"
+    );
+    assert!(
+        stderr_of(&output).contains("--output"),
+        "the error says how to proceed: {}",
+        stderr_of(&output)
+    );
+
+    let leftovers: Vec<_> = fs::read_dir(&dir)
+        .expect("read scratch dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "a failed download must leave nothing behind: {leftovers:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn download_leaves_no_partial_file_when_the_server_errors() {
+    let dir = scratch_dir("error");
+    let (_, output) = exchange_in(
+        &dir,
+        &[&http_404(
+            r#"{"success":false,"message":"Document not found","error_code":"NOT_FOUND"}"#,
+        )],
+        &[
+            "project",
+            "document",
+            "download",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+        ],
+    );
+    assert!(!output.status.success(), "a 404 must fail the command");
+    assert!(
+        stderr_of(&output).contains("Document not found"),
+        "the server's message reaches the caller: {}",
+        stderr_of(&output)
+    );
+
+    let leftovers: Vec<_> = fs::read_dir(&dir)
+        .expect("read scratch dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the temporary file must be cleaned up: {leftovers:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }

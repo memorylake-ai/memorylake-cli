@@ -9,7 +9,7 @@ pub mod error;
 #[cfg(test)]
 mod test_support;
 
-pub use client::{Client, PartUploadError};
+pub use client::{Client, Downloaded, PartUploadError};
 pub use config::{
     ApiKeySource, AuthStatus, BaseUrlSource, CN_BASE_URL, DEFAULT_BASE_URL, DEFAULT_PROFILE,
     ENV_API_KEY, ENV_BASE_URL, ENV_CONFIG_DIR, ENV_WORKSPACE, FileConfig, Paths, ProfileConfig,

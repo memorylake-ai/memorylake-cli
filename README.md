@@ -148,8 +148,9 @@ memorylake proj doc import --project <id> <item-id>... \
   [--recursive] [--max-files 500] [--wait] [--timeout 600]
 
 memorylake proj doc list   --project <id> [--name FUZZY] [--page-size N]
-memorylake proj doc get    --project <id> <doc-id>
-memorylake proj doc delete --project <id> <doc-id>...
+memorylake proj doc get      --project <id> <doc-id>
+memorylake proj doc download --project <id> <doc-id> [-o PATH] [--force]
+memorylake proj doc delete   --project <id> <doc-id>...
 ```
 
 Upload files with `lib upload` first. A folder id needs `--recursive`, and
@@ -163,6 +164,10 @@ carries on server-side.
 The API answers `200` even when individual files fail, so the CLI prints the full
 payload and then exits non-zero if anything went wrong. Files already in the
 project count as duplicates, not failures.
+
+`download` writes the original file under the name the server reports, in the
+current directory. `-o` takes a file path or a directory, and `-o -` streams to
+stdout for piping. An existing file is never replaced without `--force`.
 
 ### Facts
 
