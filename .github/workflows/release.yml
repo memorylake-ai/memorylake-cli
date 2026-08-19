@@ -38,7 +38,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+      # Stamp the tag into the binary so `memorylake version` reports which
+      # release it is. Without this every build claims the crate version, which
+      # has been 0.1.0 since the first release and cannot distinguish an
+      # upgraded install from a stale one.
       - name: Build
+        env:
+          MEMORYLAKE_RELEASE: ${{ github.ref_name }}
         run: cargo build --release -p memorylake-cli --target ${{ matrix.target }}
       # Unix ships .tar.gz; Windows ships .zip, which Expand-Archive handles
       # natively so the PowerShell installer needs no external tools.

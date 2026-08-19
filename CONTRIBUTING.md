@@ -87,3 +87,8 @@ attaches them with SHA-256 checksums to the GitHub Release. Unix ships
 The installers in `scripts/` download whatever `latest` resolves to, so a
 release that adds a command the scripts guide people through should be tagged
 promptly after merging.
+
+The workflow stamps the tag into the binary through `MEMORYLAKE_RELEASE`, which
+is what `memorylake version` reports. Local builds have no stamp and report
+`0.1.0 (dev build)` instead — the crate version has stayed at 0.1.0 across every
+release, so on its own it cannot say which build is which.
