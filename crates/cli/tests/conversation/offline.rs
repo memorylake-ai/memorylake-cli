@@ -337,8 +337,37 @@ fn message_append_wait_needs_a_workspace_but_a_plain_append_does_not() {
         "no workspace given",
     );
 
-    // Without --wait the same command must not ask for a workspace at all: it
-    // should get as far as the network and fail there instead.
+    // Naming the parent removes the only other reason to need one, so this must
+    // reach the network and fail there instead.
+    let home = logged_in_home(UNREACHABLE);
+    let args = [
+        "conversation",
+        "message",
+        "append",
+        "conv-1",
+        "--actor",
+        "actor-1",
+        "--custom-id",
+        "msg-1",
+        "--text",
+        "hi",
+        "--parent",
+        "conv-entry-7",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        !err.contains("no workspace given"),
+        "an append that names its parent must not require a workspace: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn message_append_without_a_parent_needs_a_workspace_to_find_one() {
+    // The API requires `parent_message_id`, and the conversation's head — the
+    // only place to get it — is reported by a workspace-scoped endpoint. The
+    // error has to say both how to supply a workspace and how to avoid needing
+    // one at all.
     let home = logged_in_home(UNREACHABLE);
     let args = [
         "conversation",
@@ -353,9 +382,14 @@ fn message_append_wait_needs_a_workspace_but_a_plain_append_does_not() {
         "hi",
     ];
     let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("no workspace given"), "{err}");
     assert!(
-        !err.contains("no workspace given"),
-        "a plain append must not require a workspace: {err}"
+        err.contains("--parent"),
+        "the error names the way to skip the lookup: {err}"
+    );
+    assert!(
+        !err.contains("could not connect"),
+        "the check happens before any request: {err}"
     );
     let _ = fs::remove_dir_all(&home);
 }

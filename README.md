@@ -208,6 +208,10 @@ Message content is a list of typed blocks. Each `--text` becomes one `TEXT`
 block; use `--content-json` / `--content-file` for `FILE`, `IMAGE`, `THINKING`,
 `TOOL_USE` and `TOOL_RESULT`.
 
+Every message names the one it follows. Without `--parent` the command looks the
+conversation's latest message up for you, which is why it needs a workspace then
+— pass `--parent <id>` to skip the lookup.
+
 Appends to one conversation are serialized, so two at once leave one caller with
 a `409`. Retrying is safe because `--custom-id` makes it idempotent — the same id
 returns the message created the first time. After a `409`, re-read `msg list` and

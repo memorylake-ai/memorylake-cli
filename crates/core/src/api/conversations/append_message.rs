@@ -22,12 +22,14 @@ pub struct AppendMessageRequest {
     pub custom_id: String,
     /// Ordered content blocks.
     pub content: Vec<ContentBlock>,
-    /// Message this one replies to.
+    /// Message this one replies to — the conversation's current head.
     ///
-    /// Omitted, the message lands after the conversation's latest one. Set it
-    /// to control ordering explicitly — in particular when recovering from a
-    /// 409, where the correct parent is the latest message as of the retry.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Always sent, `null` included: the API requires the field, and accepts a
+    /// null only for the very first message in a conversation. Appending to a
+    /// conversation that already has messages without naming its head is
+    /// rejected with a 409, so callers resolve the head first — it is
+    /// `current_message_id` on the conversation, or the `id` returned by the
+    /// previous append.
     pub parent_message_id: Option<String>,
     /// Caller-supplied timestamp (ISO 8601); server time when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,6 +40,9 @@ pub struct AppendMessageRequest {
 }
 
 /// Append a message to `conversation_id`.
+///
+/// `parent_message_id` names the message this one follows and is not optional
+/// in practice: only the first message in a conversation may pass `None`.
 ///
 /// The returned [`Message`] is **not** a full echo of what was stored: the
 /// append response leaves `metadata`, `timestamp` and `actor_type` null even
@@ -78,15 +83,17 @@ mod tests {
     }
 
     #[test]
-    fn a_minimal_body_sends_only_the_required_fields() {
-        // An omitted `parent_message_id` means "append after the latest
-        // message"; sending it as null would name a message instead.
+    fn a_minimal_body_still_carries_a_null_parent() {
+        // The API requires the field. Omitting it is rejected on any
+        // conversation that already has a message, so it is always sent — null
+        // meaning "this is the first one".
         assert_eq!(
             serde_json::to_value(minimal()).expect("serialize"),
             json!({
                 "actor_id": "actor-1",
                 "custom_id": "msg-42",
-                "content": [{"block_type": "TEXT", "text": "hello"}]
+                "content": [{"block_type": "TEXT", "text": "hello"}],
+                "parent_message_id": null
             })
         );
     }
