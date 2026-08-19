@@ -354,15 +354,44 @@ fn run_message(
             timeout,
         } => {
             let content = build_content(texts, content_json, content_file.as_deref())?;
-            // Resolved before the append, not inside the `if wait` below:
-            // appending is not idempotent from the caller's point of view, so
-            // discovering a missing workspace afterwards would leave the
-            // message stored and the command failed. Only --wait needs one, so
-            // a plain append still asks for nothing.
-            let wait_workspace = if wait {
-                Some(require_workspace(paths, profile, workspace)?)
+
+            // A workspace is needed for two things here, and both must be
+            // settled before the append: it is not idempotent from the caller's
+            // point of view, so failing afterwards would leave the message
+            // stored and the command failed.
+            //
+            //  * `--wait` polls the workspace-scoped cook-status endpoint.
+            //  * Without `--parent`, the conversation's head has to be looked
+            //    up, and it is only reported by the workspace-scoped get.
+            //
+            // A plain append that names its parent needs no workspace at all,
+            // which is why this is resolved on demand rather than up front.
+            let needs_workspace = wait || parent_message_id.is_none();
+            let workspace = if needs_workspace {
+                Some(require_workspace(paths, profile, workspace).context(
+                    "appending after the conversation's latest message needs a workspace to \
+                     look that message up; name it with --parent <MESSAGE_ID> to skip the lookup",
+                )?)
             } else {
                 None
+            };
+
+            // The API requires `parent_message_id` and accepts a null only for
+            // the very first message, so resolve the head rather than leaving
+            // it out: appending to a conversation that already has messages
+            // without naming its head is a 409.
+            let parent_message_id = match parent_message_id {
+                Some(parent) => Some(parent),
+                None => {
+                    let workspace = workspace
+                        .as_deref()
+                        .expect("a workspace is resolved whenever --parent is absent");
+                    get_conversation(client, workspace, &conversation)
+                        .with_context(|| {
+                            format!("look up the latest message in conversation `{conversation}`")
+                        })?
+                        .current_message_id
+                }
             };
 
             let request = AppendMessageRequest {
@@ -380,8 +409,11 @@ fn run_message(
             // timeout.
             println!("{}", serde_json::to_string_pretty(&data)?);
 
-            if let Some(workspace) = wait_workspace {
-                let poller = ApiCookPoller::new(client, &workspace, &conversation);
+            if wait {
+                let workspace = workspace
+                    .as_deref()
+                    .expect("a workspace is resolved whenever --wait is given");
+                let poller = ApiCookPoller::new(client, workspace, &conversation);
                 let outcome = wait_for_cook(&poller, Duration::from_secs(timeout))?;
                 if outcome == WaitOutcome::TimedOut {
                     bail!(

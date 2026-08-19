@@ -4,13 +4,122 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use reqwest::blocking::{Body, Client as HttpClient};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue};
+use reqwest::header::{
+    AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue,
+};
 use reqwest::{StatusCode, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+
+/// What a completed download reported about itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Downloaded {
+    /// Name the server suggested, already reduced to a bare file name.
+    ///
+    /// `None` when the server sent no usable `Content-Disposition`; the caller
+    /// then has to name the file itself.
+    pub filename: Option<String>,
+    /// `Content-Type` the server reported, if any.
+    pub content_type: Option<String>,
+    /// Bytes written to the destination.
+    pub bytes: u64,
+}
+
+/// Extract a file name from a `Content-Disposition` header value.
+///
+/// Prefers RFC 5987's `filename*` over plain `filename`, because only the
+/// former can carry non-ASCII names; the servers observed send both.
+///
+/// The result is always reduced to a bare file name. The value is chosen by the
+/// server, and it lands on the caller's disk: `../../.ssh/authorized_keys` is a
+/// path traversal, and an absolute path is an overwrite of the server's
+/// choosing. Anything that still looks like a path after stripping components
+/// yields `None` rather than a guess, leaving the caller to name the file.
+fn filename_from_content_disposition(header: &str) -> Option<String> {
+    let mut fallback = None;
+
+    for part in header.split(';') {
+        let part = part.trim();
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim().trim_matches('"');
+
+        if key == "filename*" {
+            // `UTF-8''name%20with%20spaces` — charset and language are dropped;
+            // the percent-encoded name is what matters.
+            let encoded = value
+                .rsplit_once("''")
+                .map(|(_, name)| name)
+                .unwrap_or(value);
+            if let Some(name) = sanitize_filename(&percent_decode(encoded)) {
+                return Some(name);
+            }
+        } else if key == "filename" {
+            fallback = sanitize_filename(value);
+        }
+    }
+
+    fallback
+}
+
+/// Reduce a server-supplied name to a bare, safe file name.
+fn sanitize_filename(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    // Take the last segment under either separator: a Windows client must not
+    // trust a `\` any more than a Unix one trusts `/`.
+    let name = name
+        .rsplit(['/', '\\'])
+        .next()
+        .map(str::trim)
+        .unwrap_or_default();
+
+    // `.` and `..` name directories, and a leading NUL or control character has
+    // no business in a file name.
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('\0')
+        || name.chars().any(char::is_control)
+    {
+        return None;
+    }
+
+    Some(name.to_string())
+}
+
+/// Decode percent-escapes in a `filename*` value.
+///
+/// Deliberately small: this decodes one header field, not arbitrary URLs, and
+/// invalid escapes are left alone rather than failing the download.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+            if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// Thin authenticated HTTP client for MemoryLake v3 APIs.
 #[derive(Debug, Clone)]
@@ -100,6 +209,67 @@ impl Client {
             .headers(self.auth_headers()?)
             .build()?;
         self.send(request)
+    }
+
+    /// Stream a binary response body into `writer`.
+    ///
+    /// Unlike every other method here, the success path is not a JSON envelope
+    /// — it is the file itself — so the body is copied out in chunks rather
+    /// than buffered and parsed. Errors still arrive as envelopes, and are
+    /// decoded the usual way.
+    ///
+    /// Redirects are followed, which this endpoint requires: the API answers
+    /// `303` pointing at storage. `reqwest` strips `Authorization` when a
+    /// redirect crosses to another host, so the MemoryLake key is never handed
+    /// to the storage provider — which needs no such thing, the signature being
+    /// in the URL.
+    pub fn download_to<W: std::io::Write>(&self, path: &str, writer: &mut W) -> Result<Downloaded> {
+        let url = self.url(path);
+        let request = self.http.get(&url).headers(self.auth_headers()?).build()?;
+        let mut response = self.execute(request)?;
+
+        let status = response.status();
+        // The final URL after redirects is a pre-signed storage link whose
+        // query string is a working credential; it must never be logged as-is.
+        let final_url = redact_presigned(response.url().as_str()).into_owned();
+        tracing::trace!(status = status.as_u16(), url = %final_url, "download response");
+
+        if !status.is_success() {
+            // An error is an ordinary envelope, so hand it to the shared
+            // decoder for a message consistent with the rest of the API. It
+            // always errors on a non-success status; the other arm exists so
+            // that invariant cannot turn into a panic.
+            return match validate_envelope(response) {
+                Err(err) => Err(err),
+                Ok(_) => Err(Error::Api {
+                    message: format!("download failed with status {status}"),
+                    code: None,
+                }),
+            };
+        }
+
+        let filename = response
+            .headers()
+            .get(CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(filename_from_content_disposition);
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+
+        let bytes = std::io::copy(&mut response, writer).map_err(|source| Error::Io {
+            action: "write downloaded content",
+            path: std::path::PathBuf::from("<writer>"),
+            source,
+        })?;
+
+        Ok(Downloaded {
+            filename,
+            content_type,
+            bytes,
+        })
     }
 
     /// Perform a DELETE whose successful response carries no usable payload.
@@ -440,10 +610,19 @@ fn format_http_response(status: StatusCode, body: &str) -> String {
 /// Pre-signed storage URLs reach us in two places: `upload_url` in a
 /// create-upload response, and `x_attrs` entries such as thumbnail links on
 /// ordinary items. Both end up in trace logs and error messages.
-const CREDENTIAL_QUERY_PARAMS: [&str; 3] = [
+const CREDENTIAL_QUERY_PARAMS: [&str; 5] = [
+    // SigV4, used by the upload URLs.
     "x-amz-signature",
     "x-amz-credential",
     "x-amz-security-token",
+    // SigV2, used by the document download redirect. Different scheme, same
+    // consequence if it reaches a log: `Signature` plus `AWSAccessKeyId` is a
+    // working credential until `Expires` passes.
+    //
+    // `signature` also occurs inside `x-amz-signature`; the scan takes the
+    // earliest match, so the longer name still wins there.
+    "awsaccesskeyid",
+    "signature",
 ];
 
 /// Blank out the values of credential-bearing query parameters in `text`.
@@ -454,7 +633,10 @@ const CREDENTIAL_QUERY_PARAMS: [&str; 3] = [
 fn redact_presigned(text: &str) -> Cow<'_, str> {
     // ASCII-lowercasing preserves byte length, so indices map back to `text`.
     let lower = text.to_ascii_lowercase();
-    if !lower.contains("x-amz-") {
+    if !CREDENTIAL_QUERY_PARAMS
+        .iter()
+        .any(|param| lower.contains(param))
+    {
         return Cow::Borrowed(text);
     }
 
@@ -657,6 +839,134 @@ mod tests {
         assert!(redacted.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
         assert!(redacted.contains("X-Amz-Expires=17999"));
         assert!(!redacted.contains("AKIAEXAMPLE"));
+    }
+
+    #[test]
+    fn content_disposition_yields_the_measured_filename() {
+        // Exactly what the download endpoint sent on 2026-08-19.
+        let header = "attachment; filename=\"payload.txt\"; filename*=UTF-8''payload.txt";
+        assert_eq!(
+            filename_from_content_disposition(header),
+            Some("payload.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn content_disposition_prefers_the_encoded_form() {
+        // Only `filename*` can carry non-ASCII, so it wins when both are sent
+        // and disagree.
+        let header = "attachment; filename=\"report.pdf\"; filename*=UTF-8''%E6%8A%A5%E5%91%8A.pdf";
+        assert_eq!(
+            filename_from_content_disposition(header),
+            Some("报告.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn content_disposition_falls_back_to_the_plain_form() {
+        assert_eq!(
+            filename_from_content_disposition("attachment; filename=notes.md"),
+            Some("notes.md".to_string())
+        );
+        assert_eq!(
+            filename_from_content_disposition("attachment; filename=\"with spaces.txt\""),
+            Some("with spaces.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn content_disposition_without_a_name_yields_nothing() {
+        assert_eq!(filename_from_content_disposition("attachment"), None);
+        assert_eq!(filename_from_content_disposition("inline"), None);
+        assert_eq!(filename_from_content_disposition(""), None);
+        assert_eq!(
+            filename_from_content_disposition("attachment; filename=\"\""),
+            None
+        );
+    }
+
+    #[test]
+    fn a_server_supplied_name_cannot_escape_the_target_directory() {
+        // The name is chosen by the server and used to create a file. A
+        // traversal or an absolute path would let it pick the location.
+        for header in [
+            r#"attachment; filename="../../.ssh/authorized_keys""#,
+            r#"attachment; filename="/etc/passwd""#,
+            r#"attachment; filename="..\..\Windows\System32\evil.dll""#,
+            r#"attachment; filename*=UTF-8''..%2F..%2Fescaped.txt"#,
+        ] {
+            let name = filename_from_content_disposition(header);
+            let name = name.as_deref().unwrap_or_default();
+            assert!(
+                !name.contains('/') && !name.contains('\\'),
+                "{header} produced a path: {name:?}"
+            );
+            assert!(name != ".." && name != ".", "{header} produced {name:?}");
+        }
+    }
+
+    #[test]
+    fn a_traversal_keeps_the_harmless_tail() {
+        // Stripping directories leaves a usable name; only the location is
+        // rejected, not the download.
+        assert_eq!(
+            filename_from_content_disposition(r#"attachment; filename="../../report.pdf""#),
+            Some("report.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_only_a_path_yields_nothing() {
+        // Nothing usable is left after stripping, so the caller must name it.
+        assert_eq!(
+            filename_from_content_disposition(r#"attachment; filename="../..""#),
+            None
+        );
+        assert_eq!(
+            filename_from_content_disposition(r#"attachment; filename="/""#),
+            None
+        );
+    }
+
+    #[test]
+    fn control_characters_are_rejected() {
+        assert_eq!(
+            filename_from_content_disposition("attachment; filename=\"bad\nname.txt\""),
+            None
+        );
+    }
+
+    #[test]
+    fn percent_decoding_leaves_invalid_escapes_alone() {
+        // A malformed escape must not fail the download; the name is a
+        // convenience, not a contract.
+        assert_eq!(percent_decode("100%off.txt"), "100%off.txt");
+        assert_eq!(percent_decode("a%zz.txt"), "a%zz.txt");
+        assert_eq!(percent_decode("ok%20name.txt"), "ok name.txt");
+    }
+
+    #[test]
+    fn redact_presigned_masks_the_sigv2_download_redirect() {
+        // Shape measured 2026-08-19: the document download 303 points at a
+        // SigV2 URL, which carries no `X-Amz-` parameter at all. `Signature`
+        // plus `AWSAccessKeyId` is a usable credential until `Expires` passes,
+        // so neither may reach a log.
+        let url = "https://bloom-s3.s3.amazonaws.com/drive/d/sc-a/inode-b/1\
+                   ?response-content-disposition=attachment%3B%20filename%3D%22payload.txt%22\
+                   &AWSAccessKeyId=AKIARLSQLXURHEIDN4OZ&Signature=2zUYV0rOm6chhHldtDp1MYFmZm0%3D\
+                   &Expires=1787120029";
+        let redacted = redact_presigned(url);
+
+        assert!(!redacted.contains("AKIARLSQLXURHEIDN4OZ"), "{redacted}");
+        assert!(
+            !redacted.contains("2zUYV0rOm6chhHldtDp1MYFmZm0"),
+            "{redacted}"
+        );
+        assert!(redacted.contains("AWSAccessKeyId=REDACTED"), "{redacted}");
+        assert!(redacted.contains("Signature=REDACTED"), "{redacted}");
+        // Everything else stays readable, or the trace stops being useful.
+        assert!(redacted.contains("Expires=1787120029"), "{redacted}");
+        assert!(redacted.contains("filename"), "{redacted}");
     }
 
     #[test]

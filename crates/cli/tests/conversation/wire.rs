@@ -261,6 +261,10 @@ fn message_append_takes_no_workspace_segment() {
             "msg-42",
             "--text",
             "hello",
+            // Naming the parent keeps this to a single request: without it the
+            // command first looks up the conversation's head.
+            "--parent",
+            "conv-entry-7",
         ],
     );
     assert_success(&output, &["conversation", "message", "append"]);
@@ -288,6 +292,8 @@ fn message_append_turns_each_text_flag_into_one_text_block() {
             "first",
             "--text",
             "second",
+            "--parent",
+            "conv-entry-7",
         ],
     );
     assert_eq!(
@@ -298,9 +304,10 @@ fn message_append_turns_each_text_flag_into_one_text_block() {
             "content": [
                 {"block_type": "TEXT", "text": "first"},
                 {"block_type": "TEXT", "text": "second"}
-            ]
+            ],
+            "parent_message_id": "conv-entry-7"
         }),
-        "unset optionals stay absent; an absent parent means `append at the end`"
+        "unset optionals stay absent, but the parent is always sent"
     );
 }
 
@@ -366,6 +373,8 @@ fn append_wait_polls_cook_status_until_it_reports_finished() {
             "msg-42",
             "--text",
             "hello",
+            "--parent",
+            "conv-entry-7",
             "--wait",
             "--workspace",
             "ws-1",
@@ -410,6 +419,8 @@ fn append_wait_fails_when_the_timeout_elapses_first() {
             "msg-42",
             "--text",
             "hello",
+            "--parent",
+            "conv-entry-7",
             "--wait",
             "--workspace",
             "ws-1",
@@ -449,6 +460,8 @@ fn append_without_wait_sends_exactly_one_request() {
             "msg-42",
             "--text",
             "hello",
+            "--parent",
+            "conv-entry-7",
         ],
     );
     assert_success(&output, &["conversation", "message", "append"]);
@@ -491,4 +504,81 @@ fn ids_are_percent_encoded_into_their_own_segment() {
         "GET /api/v3/conversations/conv%2F..%2Fx/messages HTTP/1.1",
         "a traversal attempt must not escape its segment"
     );
+}
+
+#[test]
+fn append_without_a_parent_looks_up_the_head_first() {
+    // The API requires `parent_message_id` and rejects an append that omits it
+    // on a conversation that already has messages. Rather than pass that on to
+    // the caller, the command reads the conversation and uses the head it
+    // reports.
+    let (requests, output) = exchange_sequence(
+        &[
+            r#"{"success":true,"data":{"id":"conv-1","current_message_id":"conv-entry-9"}}"#,
+            MESSAGE,
+        ],
+        &[
+            "conversation",
+            "message",
+            "append",
+            "conv-1",
+            "--actor",
+            "actor-1",
+            "--custom-id",
+            "msg-42",
+            "--text",
+            "hello",
+            "--workspace",
+            "ws-1",
+        ],
+    );
+    assert_success(&output, &["conversation", "message", "append"]);
+
+    assert_eq!(
+        request_line(&requests[0]),
+        "GET /api/v3/workspaces/ws-1/memories/conversations/conv-1 HTTP/1.1",
+        "the head is read from the conversation"
+    );
+    assert_eq!(
+        request_line(&requests[1]),
+        "POST /api/v3/conversations/conv-1/messages HTTP/1.1"
+    );
+    assert_eq!(
+        body_of(&requests[1])["parent_message_id"],
+        "conv-entry-9",
+        "the head reported by the conversation is sent as the parent"
+    );
+}
+
+#[test]
+fn the_first_message_in_a_conversation_sends_a_null_parent() {
+    // An empty conversation reports no head. The field is still required, so
+    // it goes out as null rather than being dropped.
+    let (requests, output) = exchange_sequence(
+        &[r#"{"success":true,"data":{"id":"conv-1"}}"#, MESSAGE],
+        &[
+            "conversation",
+            "message",
+            "append",
+            "conv-1",
+            "--actor",
+            "actor-1",
+            "--custom-id",
+            "msg-1",
+            "--text",
+            "first",
+            "--workspace",
+            "ws-1",
+        ],
+    );
+    assert_success(&output, &["conversation", "message", "append"]);
+
+    let body = body_of(&requests[1]);
+    assert!(
+        body.as_object()
+            .expect("object body")
+            .contains_key("parent_message_id"),
+        "the field must be present even when null: {body}"
+    );
+    assert_eq!(body["parent_message_id"], serde_json::Value::Null);
 }

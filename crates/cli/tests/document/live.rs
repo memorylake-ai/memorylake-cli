@@ -398,3 +398,111 @@ fn recursive_import_pulls_in_every_file_under_the_folder() {
     delete_project(&home, &workspace, &project);
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn download_round_trips_the_uploaded_bytes() {
+    // The download endpoint answers 303 with a pre-signed storage URL rather
+    // than the bytes, so the only way to know the whole chain works — redirect
+    // followed, credentials not carried across, content intact — is to upload
+    // known content and compare what comes back.
+    let api_key = require_api_key();
+    let home = temp_home();
+    login(&home, &api_key);
+
+    let workspace = create_workspace(&home, "dl");
+    let project = create_project(&home, &workspace, "download");
+    let folder = make_scratch_folder(&home, "cli-docs-download");
+
+    let (source_dir, source_path) = scratch_text_file("cli-docs-download");
+    let expected = fs::read(&source_path).expect("read the file being uploaded");
+    let source = source_path.to_str().expect("utf-8 scratch path");
+    let args = [
+        "lib",
+        "upload",
+        source,
+        "--parent",
+        folder.as_str(),
+        "--name",
+        "download-me.txt",
+    ];
+    let uploaded = json(&assert_success(&run(&home, &args), &args));
+    let item_id = field(&uploaded, "item_id").to_string();
+    let _ = fs::remove_dir_all(&source_dir);
+
+    let args = [
+        "project",
+        "document",
+        "import",
+        "--workspace",
+        workspace.as_str(),
+        "--project",
+        project.as_str(),
+        item_id.as_str(),
+        "--wait",
+    ];
+    assert_success(&run(&home, &args), &args);
+
+    let args = [
+        "project",
+        "document",
+        "list",
+        "--workspace",
+        workspace.as_str(),
+        "--project",
+        project.as_str(),
+    ];
+    let listing = json(&assert_success(&run(&home, &args), &args));
+    let document_id = listing["items"][0]["id"]
+        .as_str()
+        .expect("the imported document is listed")
+        .to_string();
+
+    // Download into a directory this test owns, under the name the server
+    // reports — the path a caller gets when they pass no --output.
+    let destination = home.join("downloads");
+    fs::create_dir_all(&destination).expect("create download directory");
+    let args = [
+        "project",
+        "document",
+        "download",
+        "--workspace",
+        workspace.as_str(),
+        "--project",
+        project.as_str(),
+        document_id.as_str(),
+        "--output",
+        destination.to_str().expect("utf-8 destination"),
+    ];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(
+        stdout.contains("download-me.txt"),
+        "the server's name is used and reported: {stdout}"
+    );
+
+    let written = destination.join("download-me.txt");
+    let actual = fs::read(&written).expect("the downloaded file exists");
+    assert_eq!(
+        actual, expected,
+        "downloaded bytes differ from what was uploaded"
+    );
+
+    // A second download must not silently replace the first.
+    let output = run(&home, &args);
+    assert!(
+        !output.status.success(),
+        "an existing file must not be overwritten without --force"
+    );
+
+    let mut forced = args.to_vec();
+    forced.push("--force");
+    assert_success(&run(&home, &forced), &forced);
+    assert_eq!(
+        fs::read(&written).expect("read after --force"),
+        expected,
+        "--force rewrites the same content"
+    );
+
+    delete_scratch_folder(&home, &folder);
+    delete_project(&home, &workspace, &project);
+    let _ = fs::remove_dir_all(&home);
+}
