@@ -8,11 +8,11 @@
 
         irm https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.ps1 | iex
 
-    Credentials can be supplied so the install finishes without prompting — what
+    Credentials can be supplied so the install finishes without prompting -- what
     a web console hands out, and what CI needs. `irm | iex` cannot pass
     parameters to a script, so these come from the environment:
 
-        $env:MEMORYLAKE_API_KEY='sk-…'; $env:MEMORYLAKE_WORKSPACE='ws-…'; irm … | iex
+        $env:MEMORYLAKE_API_KEY='sk-...'; $env:MEMORYLAKE_WORKSPACE='ws-...'; irm ... | iex
 
     Environment overrides:
         MEMORYLAKE_API_KEY       log in with this key, no prompting
@@ -72,12 +72,12 @@ function Stop-WithError([string]$Message) {
 #
 # Two sources, in that order, because neither works everywhere:
 #
-# * `RuntimeInformation::OSArchitecture` is the accurate one — it reports the
-#   *OS* architecture even from an emulated process — but it is a .NET Core API.
+# * `RuntimeInformation::OSArchitecture` is the accurate one -- it reports the
+#   *OS* architecture even from an emulated process -- but it is a .NET Core API.
 #   Windows PowerShell 5.1 runs on .NET Framework, where the type is missing and
 #   the expression yields nothing at all.
 # * The environment variables always exist. `PROCESSOR_ARCHITECTURE` alone is
-#   the process architecture, which is wrong for a 32-bit shell on a 64-bit OS —
+#   the process architecture, which is wrong for a 32-bit shell on a 64-bit OS --
 #   but that is exactly when `PROCESSOR_ARCHITEW6432` is set, and it holds the
 #   OS architecture. Preferring it when present covers the gap.
 function Get-Target {
@@ -112,8 +112,8 @@ function Get-Target {
 #
 # Reads the releases API rather than the redirect on /releases/latest. The
 # redirect is cheaper, but getting the Location header out of it differs by
-# runtime — Windows PowerShell 5.1 hands back a Dictionary where `.Location`
-# is not a property, PowerShell 7 an HttpResponseMessage — and quietly yielding
+# runtime -- Windows PowerShell 5.1 hands back a Dictionary where `.Location`
+# is not a property, PowerShell 7 an HttpResponseMessage -- and quietly yielding
 # nothing is worse than one extra request. `Invoke-RestMethod` behaves the same
 # on both.
 function Resolve-Version([string]$Requested) {
@@ -212,7 +212,7 @@ function Install-Memorylake {
 #
 # `irm | iex` leaves stdin usable for prompts, unlike the Unix `curl | sh` case,
 # so the CLI's own interactive commands are simply invoked. When the host is not
-# interactive — a CI runner, a provisioning script — the commands are printed
+# interactive -- a CI runner, a provisioning script -- the commands are printed
 # instead, so nothing blocks on a prompt nobody can answer.
 #
 # Skipped entirely when MEMORYLAKE_NO_SETUP is set.
@@ -280,7 +280,7 @@ function Invoke-Setup([string]$BinPath) {
     }
 
     Write-Info ''
-    Write-Info "Let's get you set up. Ctrl-C to skip — you can run these later."
+    Write-Info "Let's get you set up. Ctrl-C to skip -- you can run these later."
     Write-Info ''
 
     # `auth login` prompts for the key and validates it before storing anything.
@@ -299,7 +299,7 @@ function Invoke-Setup([string]$BinPath) {
 
 # Remember a default workspace: the supplied one, or one the user picks.
 #
-# A missing workspace never fails the install — the CLI works without one, it
+# A missing workspace never fails the install -- the CLI works without one, it
 # just wants `--workspace` on every call.
 function Set-DefaultWorkspace([string]$BinPath) {
     if (-not [string]::IsNullOrWhiteSpace($Workspace)) {
@@ -313,7 +313,7 @@ function Set-DefaultWorkspace([string]$BinPath) {
     }
 
     # `workspace use` with no argument lists the account's workspaces and lets
-    # the user choose — nobody has a workspace id memorised on day one.
+    # the user choose -- nobody has a workspace id memorised on day one.
     Write-Info ''
     & $BinPath workspace use
     if ($LASTEXITCODE -ne 0) {
@@ -324,7 +324,7 @@ function Set-DefaultWorkspace([string]$BinPath) {
 }
 
 # Tell the user how to reach the binary, and add it to the user PATH when it is
-# not already there. Only the user-scoped PATH is touched — a machine-scoped
+# not already there. Only the user-scoped PATH is touched -- a machine-scoped
 # change would need elevation and affect every account.
 function Show-PathHint {
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

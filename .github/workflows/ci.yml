@@ -165,6 +165,22 @@ jobs:
       # line, parses cleanly under 7 and fails under 5.1, which swallows the
       # function header as an argument and then cannot find a closing brace.
       # That shipped once because only 7 was checked here.
+      # Windows PowerShell 5.1 reads a .ps1 with no BOM as ANSI, not UTF-8. An
+      # em dash then decodes as `a€"` under cp1252 — and that trailing byte is
+      # a smart quote, which PowerShell accepts as a string delimiter. One
+      # em dash in the wrong place therefore unbalances the quotes and the
+      # parse fails somewhere else entirely. Keeping the file ASCII avoids the
+      # question; a BOM would too, but silently, and only until someone strips
+      # it.
+      - name: install.ps1 stays ASCII
+        shell: bash
+        run: |
+          if LC_ALL=C grep -n '[^[:print:][:space:]]' scripts/install.ps1; then
+            echo "non-ASCII byte in install.ps1 — Windows PowerShell 5.1 reads this file as ANSI"
+            exit 1
+          fi
+          echo "install.ps1 is ASCII"
+
       - name: Parse scripts/install.ps1 under Windows PowerShell 5.1
         shell: powershell
         run: |
