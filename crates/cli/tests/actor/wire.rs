@@ -43,6 +43,42 @@ fn list_calls_the_account_wide_endpoint() {
 }
 
 #[test]
+fn list_repeats_the_tags_parameter_once_per_tag() {
+    let (request, output) = exchange(EMPTY_PAGE, &["actor", "list", "--tags", "vip,cn"]);
+    assert_success(&output, &["actor", "list", "--tags"]);
+
+    let line = request_line(&request);
+    assert!(line.contains("tags=vip"), "{line}");
+    assert!(line.contains("tags=cn"), "{line}");
+    assert!(
+        !line.contains("tags=vip%2Ccn") && !line.contains("tags=vip,cn"),
+        "tags must be sent as repeated parameters, not one joined value: {line}"
+    );
+}
+
+#[test]
+fn list_sends_no_tags_parameter_when_the_flag_is_absent() {
+    let (request, _) = exchange(EMPTY_PAGE, &["actor", "list"]);
+    assert!(!request_line(&request).contains("tags"), "{request}");
+}
+
+#[test]
+fn workspace_scoped_list_filters_by_tag_too() {
+    let (request, output) = exchange(
+        EMPTY_PAGE,
+        &["actor", "list", "--workspace", "ws-1", "--tags", "vip"],
+    );
+    assert_success(&output, &["actor", "list", "--workspace", "--tags"]);
+
+    let line = request_line(&request);
+    assert!(
+        line.starts_with("GET /api/v3/workspaces/ws-1/actors?"),
+        "{line}"
+    );
+    assert!(line.contains("tags=vip"), "{line}");
+}
+
+#[test]
 fn list_with_workspace_calls_the_workspace_scoped_endpoint() {
     let (request, output) = exchange(
         EMPTY_PAGE,
@@ -114,6 +150,29 @@ fn create_omits_flags_that_were_not_passed() {
     assert!(!request.contains("actor_type"), "{request}");
     assert!(!request.contains("description"), "{request}");
     assert!(!request.contains("metadata"), "{request}");
+    assert!(!request.contains("tags"), "{request}");
+}
+
+#[test]
+fn create_sends_tags_as_a_json_array() {
+    let (request, output) = exchange(
+        ONE_ACTOR,
+        &[
+            "actor",
+            "create",
+            "--custom-id",
+            "user-1",
+            "--display-name",
+            "Alice",
+            "--tags",
+            "vip, cn",
+        ],
+    );
+    assert_success(&output, &["actor", "create", "--tags"]);
+    assert!(
+        request.contains(r#""tags":["vip","cn"]"#),
+        "tags must be a JSON array of trimmed strings: {request}"
+    );
 }
 
 #[test]
@@ -160,6 +219,54 @@ fn update_patches_only_the_fields_passed() {
         !request.contains("display_name"),
         "an omitted field must not be sent: {request}"
     );
+    assert!(
+        !request.contains("tags"),
+        "an omitted tag list must not be sent, or the server would replace the stored tags: {request}"
+    );
+}
+
+#[test]
+fn update_replaces_tags_with_the_list_passed() {
+    let (request, output) = exchange(ONE_ACTOR, &["actor", "update", "act-1", "--tags", "gold"]);
+    assert_success(&output, &["actor", "update", "--tags"]);
+
+    let line = request_line(&request);
+    assert!(line.starts_with("PATCH /api/v3/actors/act-1 "), "{line}");
+    assert!(request.contains(r#"{"tags":["gold"]}"#), "{request}");
+}
+
+#[test]
+fn clear_tags_sends_an_empty_array() {
+    // Omitting `tags` means "leave them alone", so clearing has to be an
+    // explicit empty list on the wire.
+    let (request, output) = exchange(ONE_ACTOR, &["actor", "update", "act-1", "--clear-tags"]);
+    assert_success(&output, &["actor", "update", "--clear-tags"]);
+    assert!(request.contains(r#"{"tags":[]}"#), "{request}");
+}
+
+#[test]
+fn tags_and_status_from_the_server_reach_the_output() {
+    // Both fields were previously dropped on the floor: the CLI re-serializes
+    // the decoded struct, so a field it does not know about never prints.
+    let (_, output) = exchange(
+        r#"{"success":true,"data":{"items":[{"actor_id":"act-1","display_name":"Ada","tags":["vip","cn"],"status":"ACTIVE","bound_at":"2026-08-19T09:14:37Z"}],"continuation_token":null}}"#,
+        &["actor", "list", "--workspace", "ws-1"],
+    );
+    let stdout = assert_success(&output, &["actor", "list", "--workspace"]);
+    assert!(stdout.contains("\"vip\""), "{stdout}");
+    assert!(stdout.contains("\"cn\""), "{stdout}");
+    assert!(stdout.contains("\"status\": \"ACTIVE\""), "{stdout}");
+}
+
+#[test]
+fn actor_tags_from_the_server_reach_the_output() {
+    let (_, output) = exchange(
+        r#"{"success":true,"data":{"id":"act-1","actor_type":"HUMAN","display_name":"Ada","tags":["vip"]}}"#,
+        &["actor", "get", "act-1"],
+    );
+    let stdout = assert_success(&output, &["actor", "get"]);
+    assert!(stdout.contains("\"tags\""), "{stdout}");
+    assert!(stdout.contains("\"vip\""), "{stdout}");
 }
 
 #[test]

@@ -21,8 +21,19 @@ pub struct CreateActorRequest {
     /// Optional free-text role or purpose.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional labels used to group and filter actors, e.g. `vip` or `cn`.
+    ///
+    /// The server trims each entry, drops duplicates, and rejects a tag that is
+    /// empty, longer than 64 characters, or contains a comma. At most 20 are
+    /// accepted. Matching is exact and case-sensitive, so `VIP` and `vip` are
+    /// two different tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     /// Optional metadata object. Typed as a map so a non-object value cannot
     /// be sent.
+    ///
+    /// Use `tags` instead for values that need to be filtered on -- metadata is
+    /// not filterable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
@@ -43,6 +54,7 @@ mod tests {
             display_name: "Alice Chen".to_string(),
             actor_type: None,
             description: None,
+            tags: None,
             metadata: None,
         };
         assert_eq!(
@@ -58,6 +70,7 @@ mod tests {
             display_name: "Intake Bot".to_string(),
             actor_type: Some(ActorType::Assistant),
             description: Some("automated intake".to_string()),
+            tags: None,
             metadata: None,
         };
         let json = serde_json::to_string(&request).unwrap();
@@ -65,6 +78,42 @@ mod tests {
         assert!(
             json.contains(r#""description":"automated intake""#),
             "{json}"
+        );
+    }
+
+    #[test]
+    fn create_request_serializes_tags_as_an_array() {
+        let request = CreateActorRequest {
+            custom_id: "user-2".to_string(),
+            display_name: "Bob".to_string(),
+            actor_type: None,
+            description: None,
+            tags: Some(vec!["vip".to_string(), "cn".to_string()]),
+            metadata: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""tags":["vip","cn"]"#), "{json}");
+    }
+
+    #[test]
+    fn create_request_sends_an_empty_tag_list_when_given_one() {
+        // An empty list is accepted by the API and means the same as no tags.
+        // It is still sent rather than dropped, because dropping it would make
+        // `Some(vec![])` and `None` indistinguishable on the wire and the
+        // caller asked for one of them specifically.
+        let request = CreateActorRequest {
+            custom_id: "user-3".to_string(),
+            display_name: "Cleo".to_string(),
+            actor_type: None,
+            description: None,
+            tags: Some(Vec::new()),
+            metadata: None,
+        };
+        assert!(
+            serde_json::to_string(&request)
+                .unwrap()
+                .contains(r#""tags":[]"#),
+            "an explicit empty list must reach the wire"
         );
     }
 }

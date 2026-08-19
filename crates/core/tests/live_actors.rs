@@ -84,6 +84,7 @@ fn create_live_actor(client: &Client, suffix: &str) -> Actor {
             display_name: format!("CLI Live Actor {suffix}"),
             actor_type: Some(ActorType::Human),
             description: Some("created by memorylake-cli live test".into()),
+            tags: Some(vec!["cli-live".into(), "vip".into()]),
             metadata: Some(metadata(&[("tier", "premium"), ("region", "us-west")])),
         },
     )
@@ -105,6 +106,11 @@ fn create_get_update_and_delete_actor() {
     );
     assert_eq!(created.actor_type, ActorType::Human);
     assert_eq!(created.display_name, format!("CLI Live Actor {suffix}"));
+    assert_eq!(
+        created.tags,
+        vec!["cli-live".to_string(), "vip".to_string()],
+        "tags sent on create must come back on the created actor"
+    );
 
     let by_id = get_actor(&client, &created.id).expect("get by id");
     assert_eq!(by_id.id, created.id);
@@ -141,6 +147,38 @@ fn create_get_update_and_delete_actor() {
     assert!(
         updated_metadata.get("region").is_none(),
         "metadata must be replaced wholesale, not merged: {updated_metadata}"
+    );
+    assert_eq!(
+        updated.tags,
+        vec!["cli-live".to_string(), "vip".to_string()],
+        "an update that does not mention tags must leave them alone"
+    );
+
+    // Tags replace wholesale too, and an empty list is how they are removed.
+    let retagged = update_actor(
+        &client,
+        &created.id,
+        &UpdateActorRequest {
+            tags: Some(vec!["gold".into()]),
+            ..UpdateActorRequest::default()
+        },
+    )
+    .expect("replace tags");
+    assert_eq!(retagged.tags, vec!["gold".to_string()]);
+
+    let untagged = update_actor(
+        &client,
+        &created.id,
+        &UpdateActorRequest {
+            tags: Some(Vec::new()),
+            ..UpdateActorRequest::default()
+        },
+    )
+    .expect("clear tags");
+    assert!(
+        untagged.tags.is_empty(),
+        "an empty list must remove every tag, not be ignored: {:?}",
+        untagged.tags
     );
 
     delete_actor(&client, &created.id).expect("delete actor");

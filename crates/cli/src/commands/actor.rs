@@ -1,6 +1,7 @@
 //! `memorylake actor` commands.
 
 use super::require_workspace;
+use super::search::split_csv;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use memorylake_core::api::actors::{
@@ -35,6 +36,14 @@ impl From<ActorTypeArg> for ActorType {
     }
 }
 
+/// One `--tags` flag's worth of labels, already split and validated.
+///
+/// Wrapped for the same reason as `IdList`: clap's derive reads a bare
+/// `Option<Vec<T>>` as a repeatable flag yielding one `T` per occurrence, which
+/// does not match a parser that returns the whole list from a single value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagList(Vec<String>);
+
 /// Workspace and actor pair shared by `bind` and `unbind`.
 #[derive(Debug, Args)]
 pub struct BindingArgs {
@@ -65,6 +74,12 @@ pub enum ActorCommand {
         /// Fuzzy filter by display name (partial match).
         #[arg(long = "name")]
         display_name_fuzzy: Option<String>,
+        /// Filter by tag, comma-separated, e.g. `vip,cn`.
+        ///
+        /// Several tags are combined with AND: only actors carrying every one
+        /// are returned. Matching is exact and case-sensitive.
+        #[arg(long, value_parser = parse_tag_list)]
+        tags: Option<TagList>,
         /// List the actors bound to this workspace instead of all actors.
         ///
         /// Items are workspace bindings (`actor_id`, `bound_at`, ...), which is
@@ -86,6 +101,12 @@ pub enum ActorCommand {
         /// Optional description of the actor's role or purpose.
         #[arg(long)]
         description: Option<String>,
+        /// Labels to attach, comma-separated, e.g. `vip,cn`.
+        ///
+        /// Up to 20, each 1-64 characters. Use these rather than --metadata for
+        /// anything you want to filter on later.
+        #[arg(long, value_parser = parse_tag_list)]
+        tags: Option<TagList>,
         /// Metadata as a JSON object, e.g. '{"tier":"premium"}'.
         #[arg(long, value_parser = parse_metadata_object)]
         metadata: Option<Map<String, Value>>,
@@ -108,6 +129,13 @@ pub enum ActorCommand {
         /// New description.
         #[arg(long)]
         description: Option<String>,
+        /// New tags, comma-separated. REPLACES the actor's tags entirely —
+        /// list every tag you want to keep, because the server does not merge.
+        #[arg(long, value_parser = parse_tag_list, conflicts_with = "clear_tags")]
+        tags: Option<TagList>,
+        /// Remove every tag from the actor.
+        #[arg(long)]
+        clear_tags: bool,
         /// Metadata as a JSON object. REPLACES the stored metadata entirely —
         /// include every key you want to keep, because the server does not
         /// merge.
@@ -142,6 +170,7 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
             continuation_token,
             actor_type,
             display_name_fuzzy,
+            tags,
             workspace,
         } => {
             let params = ListActorsParams {
@@ -149,6 +178,7 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
                 continuation_token,
                 actor_type: actor_type.map(ActorType::from),
                 display_name_fuzzy,
+                tags: tags.map(|list| list.0),
             };
             match workspace {
                 Some(workspace_id) => {
@@ -167,6 +197,7 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
             display_name,
             actor_type,
             description,
+            tags,
             metadata,
         } => {
             let data = create_actor(
@@ -176,6 +207,7 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
                     display_name,
                     actor_type: actor_type.map(ActorType::from),
                     description,
+                    tags: tags.map(|list| list.0),
                     metadata,
                 },
             )
@@ -194,11 +226,14 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
             id,
             display_name,
             description,
+            tags,
+            clear_tags,
             metadata,
         } => {
             let request = UpdateActorRequest {
                 display_name,
                 description,
+                tags: resolve_tag_update(tags, clear_tags),
                 metadata,
             };
             let data = update_actor(&client, &id, &request)
@@ -231,6 +266,8 @@ fn validate(command: &ActorCommand) -> Result<()> {
     if let ActorCommand::Update {
         display_name,
         description,
+        tags,
+        clear_tags,
         metadata,
         ..
     } = command
@@ -238,15 +275,42 @@ fn validate(command: &ActorCommand) -> Result<()> {
         let request = UpdateActorRequest {
             display_name: display_name.clone(),
             description: description.clone(),
+            tags: resolve_tag_update(tags.clone(), *clear_tags),
             metadata: metadata.clone(),
         };
         if request.is_empty() {
             bail!(
-                "`actor update` requires at least one of --display-name, --description, or --metadata"
+                "`actor update` requires at least one of --display-name, --description, --tags, --clear-tags, or --metadata"
             );
         }
     }
     Ok(())
+}
+
+/// Turn the two tag flags into the one field the API takes.
+///
+/// `--tags` sets the list, `--clear-tags` sends an empty one, and neither leaves
+/// the stored tags alone. The distinction matters: an omitted `tags` is what
+/// tells the server not to touch them, so "clear" cannot be expressed by simply
+/// passing nothing.
+fn resolve_tag_update(tags: Option<TagList>, clear: bool) -> Option<Vec<String>> {
+    match tags {
+        // clap rejects `--tags` alongside `--clear-tags`, so the two cannot
+        // disagree by the time this runs.
+        Some(list) => Some(list.0),
+        None if clear => Some(Vec::new()),
+        None => None,
+    }
+}
+
+/// Parse a `--tags` value as a comma-separated list of labels.
+///
+/// Splitting on commas is lossless here rather than a convention: the API
+/// rejects a tag containing a comma, so a comma can only ever be a separator.
+/// Length and count limits are left to the server, which reports them precisely
+/// (`tags[0] A tag must be 1 to 64 characters long`).
+fn parse_tag_list(raw: &str) -> std::result::Result<TagList, String> {
+    split_csv(raw).map(TagList)
 }
 
 /// Parse a `--metadata` value as a JSON object.
@@ -315,27 +379,103 @@ mod tests {
         }
     }
 
-    #[test]
-    fn validate_rejects_update_without_any_field() {
-        let err = validate(&ActorCommand::Update {
+    /// An `actor update` carrying only the fields a test cares about.
+    ///
+    /// Spelled out rather than built with `..`: `ActorCommand` is an enum, and
+    /// record-update syntax does not apply to variants.
+    fn update_with(
+        tags: Option<TagList>,
+        clear_tags: bool,
+        description: Option<&str>,
+    ) -> ActorCommand {
+        ActorCommand::Update {
             id: "act-1".to_string(),
             display_name: None,
-            description: None,
+            description: description.map(str::to_string),
+            tags,
+            clear_tags,
             metadata: None,
-        })
-        .expect_err("an empty update must be rejected");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_update_without_any_field() {
+        let err = validate(&update_with(None, false, None))
+            .expect_err("an empty update must be rejected");
         assert!(err.to_string().contains("at least one of"), "{err}");
+        assert!(err.to_string().contains("--tags"), "{err}");
+        assert!(err.to_string().contains("--clear-tags"), "{err}");
     }
 
     #[test]
     fn validate_accepts_update_with_one_field() {
-        validate(&ActorCommand::Update {
-            id: "act-1".to_string(),
-            display_name: None,
-            description: Some("updated".to_string()),
-            metadata: None,
-        })
-        .expect("a single field is enough");
+        validate(&update_with(None, false, Some("updated"))).expect("a single field is enough");
+    }
+
+    #[test]
+    fn validate_accepts_tags_as_the_only_field() {
+        validate(&update_with(
+            Some(TagList(vec!["vip".to_string()])),
+            false,
+            None,
+        ))
+        .expect("--tags alone is a real update");
+    }
+
+    #[test]
+    fn validate_accepts_clear_tags_as_the_only_field() {
+        // `--clear-tags` sends `"tags": []`, which is a change, so it must not
+        // be mistaken for an empty request.
+        validate(&update_with(None, true, None)).expect("--clear-tags alone is a real update");
+    }
+
+    #[test]
+    fn resolve_tag_update_distinguishes_clear_from_untouched() {
+        assert_eq!(resolve_tag_update(None, false), None, "neither flag");
+        assert_eq!(
+            resolve_tag_update(None, true),
+            Some(Vec::new()),
+            "--clear-tags must send an empty list, not nothing"
+        );
+        assert_eq!(
+            resolve_tag_update(Some(TagList(vec!["a".to_string()])), false),
+            Some(vec!["a".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_tag_list_splits_on_commas_and_trims() {
+        assert_eq!(
+            parse_tag_list(" vip , cn ").expect("valid list"),
+            TagList(vec!["vip".to_string(), "cn".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_tag_list_keeps_a_single_tag() {
+        assert_eq!(
+            parse_tag_list("vip").expect("single tag"),
+            TagList(vec!["vip".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_tag_list_rejects_empty_and_doubled_commas() {
+        // `--tags ""` is far more likely a mistake than a request to clear, and
+        // clearing has its own flag, so it must not silently mean either.
+        assert!(parse_tag_list("").is_err());
+        assert!(parse_tag_list("   ").is_err());
+        let err = parse_tag_list("vip,,cn").expect_err("a doubled comma must be rejected");
+        assert!(err.contains("empty entry"), "{err}");
+    }
+
+    #[test]
+    fn parse_tag_list_preserves_case() {
+        // The API matches tags exactly, so `VIP` must not be folded to `vip`.
+        assert_eq!(
+            parse_tag_list("VIP").expect("valid"),
+            TagList(vec!["VIP".to_string()])
+        );
     }
 
     #[test]

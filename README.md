@@ -128,11 +128,13 @@ bound to a workspace to participate there.
 
 ```bash
 memorylake actor create --custom-id user-001 --display-name "Alice Chen" \
-  [--type HUMAN|ASSISTANT] [--description TEXT] [--metadata '{"tier":"premium"}']
+  [--type HUMAN|ASSISTANT] [--description TEXT] [--tags vip,cn] \
+  [--metadata '{"tier":"premium"}']
 
-memorylake actor list [--type HUMAN|ASSISTANT] [--name FUZZY] [--page-size N]
+memorylake actor list [--type HUMAN|ASSISTANT] [--name FUZZY] [--tags vip,cn] [--page-size N]
 memorylake actor get <id> [--by-custom-id]
-memorylake actor update <id> [--display-name NAME] [--description D] [--metadata JSON]
+memorylake actor update <id> [--display-name NAME] [--description D] \
+  [--tags vip,cn | --clear-tags] [--metadata JSON]
 memorylake actor delete <id>
 
 memorylake actor bind   --actor <id> [--workspace <id>]
@@ -142,6 +144,19 @@ memorylake actor list   --workspace <id>        # bindings, not actors
 
 `--custom-id` is unique account-wide. On update, `--metadata` **replaces** the
 stored value rather than merging into it.
+
+Tags are short labels for grouping and filtering: up to 20 per actor, each 1-64
+characters, no commas. Matching is exact and case-sensitive — `VIP` and `vip` are
+two different tags. Prefer them over `--metadata` for anything you want to filter
+on, because metadata is not filterable.
+
+```bash
+memorylake actor list --tags vip          # actors tagged vip
+memorylake actor list --tags vip,cn       # tagged BOTH vip and cn, not either
+```
+
+`--tags` on update replaces the whole list, like `--metadata`; `--clear-tags`
+removes every tag. Leaving both out keeps the actor's tags as they are.
 
 ### Projects
 
