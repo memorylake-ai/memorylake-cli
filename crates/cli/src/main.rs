@@ -18,10 +18,22 @@ use commands::project::{ProjectCommand, run as run_project};
 use commands::search::{SearchArgs, run as run_search};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
 
+/// What `--version` and `version` report.
+///
+/// Release builds are stamped with their tag by the release workflow, because
+/// the crate version alone cannot answer "which build is this?" — it has stayed
+/// at 0.1.0 across every release, so it could not tell an upgraded install from
+/// a stale one. A build without the stamp says so rather than claiming a
+/// release it is not.
+const VERSION: &str = match option_env!("MEMORYLAKE_RELEASE") {
+    Some(release) => release,
+    None => concat!(env!("CARGO_PKG_VERSION"), " (dev build)"),
+};
+
 #[derive(Debug, Parser)]
 #[command(
     name = "memorylake",
-    version,
+    version = VERSION,
     about = "Command-line interface for MemoryLake"
 )]
 struct Cli {
@@ -108,7 +120,7 @@ fn main() -> Result<()> {
         Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
         Commands::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{VERSION}");
         }
     }
 

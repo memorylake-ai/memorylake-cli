@@ -33,6 +33,19 @@ Prefer not to pipe a script into your shell? Download an archive from the
 [releases page](https://github.com/memorylake-ai/memorylake-cli/releases), check
 it against its `.sha256`, and put `memorylake` on your `PATH`.
 
+### Upgrading
+
+Re-run the same install command. It replaces the binary in place and leaves your
+credentials and workspace alone — an install that is already logged in is not
+asked to set anything up again.
+
+```bash
+memorylake version    # v20260818.1 — which release this is
+```
+
+A build that was not produced by the release workflow says so (`0.1.0 (dev
+build)`), so it cannot be mistaken for one.
+
 ## Getting started
 
 ```bash
