@@ -160,6 +160,22 @@ jobs:
       # The PowerShell installer runs on users' machines via `irm | iex`, so it
       # is checked where it actually runs: parsing, the checksum gate, and — in
       # the steps below — a real end-to-end install under both PowerShell hosts.
+      # Parse under Windows PowerShell 5.1 as well as 7. Their parsers differ:
+      # a command missing its final argument, with a `function … {` on the next
+      # line, parses cleanly under 7 and fails under 5.1, which swallows the
+      # function header as an argument and then cannot find a closing brace.
+      # That shipped once because only 7 was checked here.
+      - name: Parse scripts/install.ps1 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "host: $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts\install.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Host "parse error: $_" }; exit 1 }
+          Write-Host 'install.ps1 parses cleanly under 5.1'
+
       - name: Validate scripts/install.ps1
         shell: pwsh
         run: |

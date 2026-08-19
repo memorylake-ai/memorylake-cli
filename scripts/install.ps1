@@ -57,7 +57,7 @@ $InstallDir = Get-EnvOrDefault 'MEMORYLAKE_INSTALL_DIR' (Join-Path $env:LOCALAPP
 $InstallName = Get-EnvOrDefault 'MEMORYLAKE_INSTALL_NAME' $BinName
 $ApiKey = Get-EnvOrDefault 'MEMORYLAKE_API_KEY' ''
 $Workspace = Get-EnvOrDefault 'MEMORYLAKE_WORKSPACE' ''
-$BaseUrl = Get-EnvOrDefault 'MEMORYLAKE_BASE_URL' 
+$BaseUrl = Get-EnvOrDefault "MEMORYLAKE_BASE_URL" ""
 
 function Write-Info([string]$Message) {
     Write-Host $Message
