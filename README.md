@@ -90,7 +90,8 @@ after it. Pass it explicitly to override for a single command.
 ## Commands
 
 Aliases: `ws` = `workspace`, `proj` = `project`, `lib` = `library`,
-`doc` = `document`, `conv` = `conversation`, `msg` = `message`.
+`doc` = `document`, `conv` = `conversation`, `msg` = `message`,
+`key` = `api-key`, `invite` = `invitation`.
 
 ### Auth
 
@@ -339,6 +340,48 @@ Returns matched `documents` and `facts` as two separate sets rather than one
 ranked list. Filters take one comma-separated value each (`--projects a,b`), and
 omitting a filter searches everything in that dimension. `--top-k` caps results
 per type. There is no pagination.
+
+### Team management
+
+The team your API key belongs to — its API keys, members, invitations and
+usage — is managed with the same key and endpoint as everything above. The team
+is fixed by the key: nothing here takes a team parameter, and each command is
+authorized by what the key's creator may do in the console.
+
+```bash
+memorylake team get
+memorylake team rename --name "New Name"        # owner only
+
+memorylake key list [--name FUZZY] [--page-size N] [--continuation-token TOKEN]
+memorylake key get <id>
+memorylake key create --name ci [--member <principal-id>] [--expires-at UNIX_SECONDS]
+memorylake key rotate <id>
+memorylake key revoke <id>
+
+memorylake member list [--name FUZZY] [--page-size N]
+memorylake member create --name "CI Bot" --role tenant_member   # virtual member
+memorylake member set-role <principal-id> --role tenant_admin
+memorylake member remove <principal-id>
+
+memorylake invite create --email person@example.com --role tenant_member
+memorylake invite list [--status pending|accepted|rejected|expired|revoked]
+memorylake invite revoke <id>
+
+memorylake usage [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
+```
+
+`key create` and `key rotate` print the full key **exactly once** — list and get
+only ever return its prefix, and an idempotent replay omits it too, so capture
+it from the first response.
+
+A *virtual member* is a login-less identity for automations: create one with
+`member create`, then issue it a key with `key create --member <principal-id>`.
+That key acts with the virtual member's role instead of yours, so a CI job can
+hold exactly the permissions it needs.
+
+Every write takes `--idempotency-key VALUE`. Retrying with the same value
+replays the first result instead of repeating the write — no duplicate key,
+member, or invitation email.
 
 ## Configuration
 

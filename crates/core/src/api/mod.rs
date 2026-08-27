@@ -1,6 +1,7 @@
 //! MemoryLake API bindings.
 
 pub mod actors;
+pub mod admin;
 pub mod agents;
 pub mod conversations;
 pub mod documents;
