@@ -2,17 +2,39 @@
 
 pub mod actor;
 pub mod agent;
+pub mod api_key;
 pub mod auth;
 pub mod conversation;
 pub mod fact;
+pub mod invitation;
 pub mod library;
+pub mod member;
 
 pub mod project;
 pub mod search;
+pub mod team;
+pub mod usage;
 pub mod workspace;
 
-use anyhow::{Result, bail};
-use memorylake_core::{Paths, resolve_profile_workspace};
+use anyhow::{Context, Result, bail};
+use memorylake_core::{Client, Paths, ResolveOverrides, resolve, resolve_profile_workspace};
+
+/// Resolve credentials and build the authenticated API client.
+///
+/// The team-management commands share this instead of each repeating the
+/// paths → resolve → client chain the older command modules carry inline.
+pub fn api_client(profile: Option<String>, base_url: Option<String>) -> Result<Client> {
+    let paths = Paths::default_home().context("resolve MemoryLake config paths")?;
+    let runtime = resolve(&paths, &ResolveOverrides { profile, base_url })
+        .context("resolve API credentials")?;
+    Client::new(&runtime.base_url, &runtime.api_key).context("build API client")
+}
+
+/// Print an API payload the way every command here does: pretty JSON.
+pub fn print_json<T: serde::Serialize>(data: &T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(data)?);
+    Ok(())
+}
 
 /// Resolve the workspace a command should act on.
 ///

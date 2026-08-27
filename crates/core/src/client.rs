@@ -168,10 +168,22 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
+        self.post_data_with_headers(path, body, &[])
+    }
+
+    /// [`Self::post_data`] with extra per-request headers (e.g. `Idempotency-Key`).
+    pub fn post_data_with_headers<T, B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
         let url = self.url(path);
-        let request = self
-            .http
-            .post(&url)
+        let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
             .build()?;
@@ -184,10 +196,22 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
+        self.patch_data_with_headers(path, body, &[])
+    }
+
+    /// [`Self::patch_data`] with extra per-request headers (e.g. `Idempotency-Key`).
+    pub fn patch_data_with_headers<T, B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
         let url = self.url(path);
-        let request = self
-            .http
-            .patch(&url)
+        let request = apply_headers(self.http.patch(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
             .build()?;
@@ -202,10 +226,16 @@ impl Client {
     where
         T: DeserializeOwned,
     {
+        self.delete_data_with_headers(path, &[])
+    }
+
+    /// [`Self::delete_data`] with extra per-request headers (e.g. `Idempotency-Key`).
+    pub fn delete_data_with_headers<T>(&self, path: &str, headers: &[(&str, &str)]) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
         let url = self.url(path);
-        let request = self
-            .http
-            .delete(&url)
+        let request = apply_headers(self.http.delete(&url), headers)
             .headers(self.auth_headers()?)
             .build()?;
         self.send(request)
@@ -406,6 +436,22 @@ impl Client {
         headers.insert(AUTHORIZATION, value);
         Ok(headers)
     }
+}
+
+/// Apply extra per-request headers to a builder.
+///
+/// An invalid name or value is not swallowed: `reqwest` records it on the
+/// builder and surfaces it as an error from `build()`, so a bad
+/// `Idempotency-Key` fails the request loudly instead of being silently
+/// dropped.
+fn apply_headers(
+    mut builder: reqwest::blocking::RequestBuilder,
+    headers: &[(&str, &str)],
+) -> reqwest::blocking::RequestBuilder {
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    builder
 }
 
 /// Why a single pre-signed part upload attempt failed.
@@ -1163,6 +1209,32 @@ mod tests {
         assert!(
             !logged.contains("sk_supersecret_7890"),
             "raw API key leaked into trace output: {logged}"
+        );
+    }
+
+    #[test]
+    fn extra_headers_reach_the_wire() {
+        // The management-plane writes ride on this: an Idempotency-Key that
+        // silently fell off would turn a replayed retry into a second key.
+        let server = StubServer::new("200 OK", r#"{"success":true,"data":{}}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let _: Value = client
+            .post_data_with_headers(
+                "/admin/v1/api-keys",
+                &serde_json::json!({"name": "ci"}),
+                &[("Idempotency-Key", "idem-123")],
+            )
+            .expect("post with extra headers succeeds");
+
+        let request = server.received().to_ascii_lowercase();
+        assert!(
+            request.contains("idempotency-key: idem-123"),
+            "extra header missing from the wire:\n{request}"
+        );
+        assert!(
+            request.contains("authorization: "),
+            "extra headers must not displace auth:\n{request}"
         );
     }
 

@@ -6,6 +6,7 @@
 //! tests/
 //!   cli_commands.rs      # this harness
 //!   common/              # shared process helpers
+//!   admin/{offline,wire}.rs   # team / api-key / member / invitation / usage
 //!   meta/                # version, --help, …
 //!   actor/{offline,live}.rs
 //!   library/{offline,live}.rs
@@ -24,6 +25,7 @@
 //! clean up the objects they create in the real workspace.
 
 mod actor;
+mod admin;
 mod agent;
 mod auth;
 mod common;

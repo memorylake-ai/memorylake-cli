@@ -723,6 +723,7 @@ dependencies = [
  "dotenvy",
  "libc",
  "memorylake-core",
+ "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",

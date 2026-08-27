@@ -10,12 +10,17 @@ use tracing_subscriber::EnvFilter;
 
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
+use commands::api_key::{ApiKeyCommand, run as run_api_key};
 use commands::auth::{AuthCommand, run as run_auth};
 use commands::conversation::{ConversationCommand, run as run_conversation};
 use commands::fact::{FactCommand, run as run_fact};
+use commands::invitation::{InvitationCommand, run as run_invitation};
 use commands::library::{LibraryCommand, run as run_library};
+use commands::member::{MemberCommand, run as run_member};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::search::{SearchArgs, run as run_search};
+use commands::team::{TeamCommand, run as run_team};
+use commands::usage::{UsageArgs, run as run_usage};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
 
 /// What `--version` and `version` report.
@@ -101,6 +106,30 @@ enum Commands {
     },
     /// Search memories in a workspace.
     Search(SearchArgs),
+    /// Show and rename the team this API key belongs to.
+    Team {
+        #[command(subcommand)]
+        command: TeamCommand,
+    },
+    /// Manage the team's API keys.
+    #[command(visible_alias = "key")]
+    ApiKey {
+        #[command(subcommand)]
+        command: ApiKeyCommand,
+    },
+    /// Manage the team roster and virtual members.
+    Member {
+        #[command(subcommand)]
+        command: MemberCommand,
+    },
+    /// Invite people to the team and manage pending invitations.
+    #[command(visible_alias = "invite")]
+    Invitation {
+        #[command(subcommand)]
+        command: InvitationCommand,
+    },
+    /// Show the team's quota and usage.
+    Usage(UsageArgs),
     /// Print the CLI version.
     Version,
 }
@@ -119,6 +148,11 @@ fn main() -> Result<()> {
         Commands::Conversation { command } => run_conversation(command, cli.profile, cli.base_url)?,
         Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
+        Commands::Team { command } => run_team(command, cli.profile, cli.base_url)?,
+        Commands::ApiKey { command } => run_api_key(command, cli.profile, cli.base_url)?,
+        Commands::Member { command } => run_member(command, cli.profile, cli.base_url)?,
+        Commands::Invitation { command } => run_invitation(command, cli.profile, cli.base_url)?,
+        Commands::Usage(args) => run_usage(args, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{VERSION}");
         }
