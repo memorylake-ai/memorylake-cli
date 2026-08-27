@@ -11,6 +11,7 @@ pub mod library;
 pub mod member;
 
 pub mod project;
+pub mod role;
 pub mod search;
 pub mod team;
 pub mod usage;

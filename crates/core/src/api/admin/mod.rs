@@ -16,6 +16,7 @@ mod api_keys;
 mod invitations;
 mod members;
 mod path;
+mod roles;
 mod team;
 mod types;
 mod usage;
@@ -30,6 +31,7 @@ pub use invitations::{
 pub use members::{
     CreateMemberRequest, create_member, list_members, remove_member, set_member_role,
 };
+pub use roles::{Role, RoleList, list_roles};
 pub use team::{get_team, rename_team};
 pub use types::{
     ApiKey, ApiKeyCreated, Invitation, ListParams, Member, Page, Team, Usage, UsageByModel,

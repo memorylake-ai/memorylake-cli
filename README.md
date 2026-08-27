@@ -358,6 +358,7 @@ memorylake key create --name ci [--member <principal-id>] [--expires-at UNIX_SEC
 memorylake key rotate <id>
 memorylake key revoke <id>
 
+memorylake role list                    # what --role below accepts
 memorylake member list [--name FUZZY] [--page-size N]
 memorylake member create --name "CI Bot" --role tenant_member   # virtual member
 memorylake member set-role <principal-id> --role tenant_admin

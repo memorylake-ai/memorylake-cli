@@ -13,6 +13,7 @@ fn every_management_command_family_requires_login() {
         ["team", "get"].as_slice(),
         ["api-key", "list"].as_slice(),
         ["member", "list"].as_slice(),
+        ["role", "list"].as_slice(),
         ["invitation", "list"].as_slice(),
         ["usage"].as_slice(),
     ] {
