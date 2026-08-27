@@ -142,6 +142,19 @@ fn the_key_alias_reaches_the_same_endpoint() {
 }
 
 #[test]
+fn role_list_reads_the_catalog() {
+    let roles = r#"{"success":true,"data":{"roles":[{"key":"tenant_owner","label":"Owner","built_in":true,"assignable":false,"admin_grant_only":false},{"key":"tenant_custom_a1","label":"Ops","description":"billing","built_in":false,"assignable":true,"admin_grant_only":false,"parent_role_key":"tenant_member"}]}}"#;
+    let (request, output) = exchange(roles, &["role", "list"]);
+    let stdout = assert_success(&output, &["role", "list"]);
+
+    assert_eq!(request_line(&request), "GET /admin/v1/roles HTTP/1.1");
+    assert!(
+        stdout.contains("tenant_custom_a1") && stdout.contains("admin_grant_only"),
+        "catalog not printed: {stdout}"
+    );
+}
+
+#[test]
 fn member_list_reads_the_roster() {
     let (request, output) = exchange(EMPTY_PAGE, &["member", "list"]);
     assert_success(&output, &["member", "list"]);

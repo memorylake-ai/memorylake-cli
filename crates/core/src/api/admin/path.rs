@@ -10,6 +10,7 @@ pub(super) const TEAM: &str = "/admin/v1/team";
 pub(super) const API_KEYS: &str = "/admin/v1/api-keys";
 pub(super) const MEMBERS: &str = "/admin/v1/members";
 pub(super) const INVITATIONS: &str = "/admin/v1/invitations";
+pub(super) const ROLES: &str = "/admin/v1/roles";
 pub(super) const USAGE: &str = "/admin/v1/usage";
 
 pub(super) fn api_key(id: &str) -> String {

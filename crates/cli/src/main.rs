@@ -18,6 +18,7 @@ use commands::invitation::{InvitationCommand, run as run_invitation};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::member::{MemberCommand, run as run_member};
 use commands::project::{ProjectCommand, run as run_project};
+use commands::role::{RoleCommand, run as run_role};
 use commands::search::{SearchArgs, run as run_search};
 use commands::team::{TeamCommand, run as run_team};
 use commands::usage::{UsageArgs, run as run_usage};
@@ -122,6 +123,11 @@ enum Commands {
         #[command(subcommand)]
         command: MemberCommand,
     },
+    /// List the roles members and invitees can hold.
+    Role {
+        #[command(subcommand)]
+        command: RoleCommand,
+    },
     /// Invite people to the team and manage pending invitations.
     #[command(visible_alias = "invite")]
     Invitation {
@@ -151,6 +157,7 @@ fn main() -> Result<()> {
         Commands::Team { command } => run_team(command, cli.profile, cli.base_url)?,
         Commands::ApiKey { command } => run_api_key(command, cli.profile, cli.base_url)?,
         Commands::Member { command } => run_member(command, cli.profile, cli.base_url)?,
+        Commands::Role { command } => run_role(command, cli.profile, cli.base_url)?,
         Commands::Invitation { command } => run_invitation(command, cli.profile, cli.base_url)?,
         Commands::Usage(args) => run_usage(args, cli.profile, cli.base_url)?,
         Commands::Version => {

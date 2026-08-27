@@ -156,6 +156,47 @@ fn every_read_endpoint_answers_and_the_team_joins_its_roster() {
 }
 
 #[test]
+fn the_role_catalog_matches_what_the_writes_enforce() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let args = ["role", "list"];
+    let output = run(&home, &args);
+    // GET /admin/v1/roles ships with apiservice#73. Until that deploys, the
+    // path answers the envelope 404 — report it and stop rather than fail a
+    // suite that cannot see the endpoint yet. Once deployed, this branch goes
+    // dead and the assertions below take over for good.
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            err.contains("404"),
+            "role list failed for a reason other than not-yet-deployed: {err}"
+        );
+        eprintln!("role list: endpoint not deployed yet (404); skipping the catalog assertions");
+        let _ = fs::remove_dir_all(&home);
+        return;
+    }
+    let stdout = assert_success(&output, &args);
+    let catalog = parse(&stdout, "role list");
+    let roles = catalog.get("roles").and_then(|v| v.as_array()).unwrap();
+    assert!(roles.len() >= 3, "built-ins missing: {stdout}");
+
+    // The catalog's promises must match the write endpoints' behaviour: the
+    // owner row says unassignable, and the built-ins lead in fixed order.
+    assert_eq!(str_field(&roles[0], "key"), "tenant_owner");
+    assert_eq!(roles[0].get("assignable"), Some(&serde_json::json!(false)));
+    assert_eq!(str_field(&roles[1], "key"), "tenant_admin");
+    assert_eq!(
+        roles[1].get("admin_grant_only"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(str_field(&roles[2], "key"), "tenant_member");
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
 fn usage_honours_the_period_and_its_cap() {
     let api_key = require_api_key();
     let home = temp_home();
