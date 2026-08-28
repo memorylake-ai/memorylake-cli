@@ -294,6 +294,39 @@ fn actor_lifecycle_end_to_end() {
     let _ = fs::remove_dir_all(&home);
 }
 
+/// `actor me` names a real actor, not an alias.
+///
+/// Creates nothing, so it needs no guard.
+#[test]
+fn actor_me_returns_a_resolvable_actor() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let me = json_of(&home, &["actor", "me"]);
+    let id = me["id"].as_str().expect("me returns an id").to_string();
+    assert!(!id.is_empty());
+
+    // The point of the cross-check: prove the id addresses the same actor
+    // everywhere else, rather than being an alias only this endpoint knows.
+    let fetched = json_of(&home, &["actor", "get", id.as_str()]);
+    assert_eq!(fetched["id"], Value::String(id.clone()));
+    assert_eq!(
+        fetched["display_name"], me["display_name"],
+        "`actor me` and `actor get` must describe the same actor"
+    );
+
+    // Documented and measured: a result says nothing about workspace
+    // membership. Asserting the shape of `tags` here keeps `me` honest about
+    // returning the same record `get` does.
+    assert!(
+        me["tags"].is_array(),
+        "tags must be present as an array: {me}"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
+
 /// Tags, end to end: what the server stores, how it filters, and what each of
 /// the two tag flags does.
 ///
