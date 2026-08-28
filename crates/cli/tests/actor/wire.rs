@@ -5,7 +5,7 @@
 //! prove the endpoints exist; these prove the CLI calls the documented ones.
 
 use crate::common::assert_success;
-use crate::common::stub::{exchange, request_line};
+use crate::common::stub::{exchange, exchange_sequence, request_body, request_line};
 
 const EMPTY_PAGE: &str = r#"{"success":true,"data":{"items":[],"continuation_token":null}}"#;
 const ONE_ACTOR: &str = r#"{"success":true,"data":{"id":"act-1","custom_id":"user-1","actor_type":"HUMAN","display_name":"Alice"}}"#;
@@ -172,6 +172,62 @@ fn create_sends_tags_as_a_json_array() {
     assert!(
         request.contains(r#""tags":["vip","cn"]"#),
         "tags must be a JSON array of trimmed strings: {request}"
+    );
+}
+
+#[test]
+fn me_calls_the_defaults_endpoint_exactly_once() {
+    // One request, not a list-then-filter: the whole point of the endpoint is
+    // that the server names the actor, so a fan-out would defeat it.
+    let (requests, output) = exchange_sequence(&[ONE_ACTOR], &["actor", "me"]);
+    assert_success(&output, &["actor", "me"]);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+
+    let line = request_line(&requests[0]);
+    assert_eq!(line.split(' ').next(), Some("GET"), "{line}");
+    assert_eq!(
+        line.split(' ').nth(1),
+        Some("/api/v3/defaults/my-actor"),
+        "no query string is sent: {line}"
+    );
+    assert!(
+        request_body(&requests[0]).is_empty(),
+        "a GET must carry no body: {:?}",
+        request_body(&requests[0])
+    );
+}
+
+#[test]
+fn me_prints_the_actor_as_json_like_get_does() {
+    let (_, output) = exchange(
+        r#"{"success":true,"data":{"id":"act-1","custom_id":"user::abc","actor_type":"HUMAN","display_name":"Ada","created_by":"user::abc"}}"#,
+        &["actor", "me"],
+    );
+    let stdout = assert_success(&output, &["actor", "me"]);
+    assert!(stdout.contains("\"id\": \"act-1\""), "{stdout}");
+    assert!(stdout.contains("\"custom_id\": \"user::abc\""), "{stdout}");
+    // `created_by` is sent by the API; dropping it would make it invisible.
+    assert!(stdout.contains("\"created_by\": \"user::abc\""), "{stdout}");
+}
+
+#[test]
+fn me_on_an_older_deployment_says_so_rather_than_not_found() {
+    // A 404 here can only mean the route is absent -- every key has an actor --
+    // so a bare "NOT_FOUND" would read as "you have no actor", the opposite of
+    // the truth.
+    let (_, output) = exchange(
+        r#"{"success":false,"message":"No static resource api/v3/defaults/my-actor.","error_code":"NOT_FOUND"}"#,
+        &["actor", "me"],
+    );
+    assert!(!output.status.success(), "a 404 must fail the command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("deployment") && stderr.contains("/api/v3/defaults/my-actor"),
+        "the error must blame the deployment and name the endpoint: {stderr}"
+    );
+    assert!(
+        stderr.contains("No static resource"),
+        "the server's own message must survive for diagnosis: {stderr}"
     );
 }
 

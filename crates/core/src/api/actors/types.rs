@@ -92,6 +92,13 @@ pub struct Actor {
     /// Creation timestamp (ISO 8601).
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Id of the user or agent that created this actor, in the API's subject
+    /// form (`user::…`, `sa::…`).
+    ///
+    /// Absent for actors created before the server began recording it, so this
+    /// stays optional rather than being treated as always present.
+    #[serde(default)]
+    pub created_by: Option<String>,
     /// Last update timestamp (ISO 8601).
     #[serde(default)]
     pub updated_at: Option<String>,

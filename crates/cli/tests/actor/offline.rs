@@ -110,6 +110,37 @@ fn tags_must_not_be_empty_or_have_doubled_commas() {
 }
 
 #[test]
+fn me_takes_no_arguments() {
+    let home = temp_home();
+    // A positional or a flag must be a usage error, not silently ignored --
+    // `actor me act-1` most likely means the caller wanted `actor get act-1`.
+    for args in [
+        ["actor", "me", "act-1"].as_slice(),
+        ["actor", "me", "--workspace", "ws-1"].as_slice(),
+        ["actor", "me", "--by-custom-id"].as_slice(),
+    ] {
+        let err = assert_failure(&run(&home, args), args);
+        assert!(
+            err.contains("unexpected argument") || err.contains("Usage"),
+            "unexpected error output for {args:?}: {err}"
+        );
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn me_without_login_fails_like_the_others() {
+    let home = temp_home();
+    let args = ["actor", "me"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("not logged in") || err.contains("resolve API credentials"),
+        "unexpected error output: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
 fn metadata_must_be_valid_json() {
     let home = temp_home();
     let args = [
@@ -178,7 +209,7 @@ fn help_lists_actor_subcommands() {
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(output.status.success(), "actor --help failed: {stdout}");
     for subcommand in [
-        "list", "create", "get", "update", "delete", "bind", "unbind",
+        "list", "create", "get", "me", "update", "delete", "bind", "unbind",
     ] {
         assert!(
             stdout.contains(subcommand),

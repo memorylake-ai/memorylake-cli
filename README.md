@@ -133,6 +133,7 @@ memorylake actor create --custom-id user-001 --display-name "Alice Chen" \
   [--metadata '{"tier":"premium"}']
 
 memorylake actor list [--type HUMAN|ASSISTANT] [--name FUZZY] [--tags vip,cn] [--page-size N]
+memorylake actor me
 memorylake actor get <id> [--by-custom-id]
 memorylake actor update <id> [--display-name NAME] [--description D] \
   [--tags vip,cn | --clear-tags] [--metadata JSON]
@@ -145,6 +146,17 @@ memorylake actor list   --workspace <id>        # bindings, not actors
 
 `--custom-id` is unique account-wide. On update, `--metadata` **replaces** the
 stored value rather than merging into it.
+
+`actor me` reports the actor your API key represents, so a script never has to
+guess which of several human actors is yours:
+
+```bash
+memorylake actor me | jq -r .id
+```
+
+**It is not necessarily bound to a workspace** — the actor comes with the
+account, while joining a workspace is a separate step. To know who can write in
+one, use `actor list --workspace <id>`; to put this actor there, `actor bind`.
 
 Tags are short labels for grouping and filtering: up to 20 per actor, each 1-64
 characters, no commas. Matching is exact and case-sensitive — `VIP` and `vip` are

@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use memorylake_core::api::actors::{
     ActorType, CreateActorRequest, ListActorsParams, UpdateActorRequest, bind_actor, create_actor,
-    delete_actor, get_actor, get_actor_by_custom_id, list_actors, list_workspace_actors,
-    unbind_actor, update_actor,
+    delete_actor, get_actor, get_actor_by_custom_id, get_my_actor, list_actors,
+    list_workspace_actors, unbind_actor, update_actor,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 use serde_json::{Map, Value};
@@ -111,6 +111,11 @@ pub enum ActorCommand {
         #[arg(long, value_parser = parse_metadata_object)]
         metadata: Option<Map<String, Value>>,
     },
+    /// Show the actor representing the current API key.
+    ///
+    /// A result does not mean that actor is bound to any workspace -- it often
+    /// is not. Use `actor list --workspace <id>` to see who can write there.
+    Me,
     /// Get a single actor by id.
     Get {
         /// Actor id (or custom_id when `--by-custom-id` is set).
@@ -212,6 +217,10 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
                 },
             )
             .context("create actor")?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+        ActorCommand::Me => {
+            let data = get_my_actor(&client).context("get my actor")?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         ActorCommand::Get { id, by_custom_id } => {
