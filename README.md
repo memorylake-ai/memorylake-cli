@@ -68,6 +68,35 @@ asked to set anything up again.
 memorylake version    # v20260818.1 — which release this is
 ```
 
+### macOS quick actions
+
+On a Mac, a second one-liner adds system-wide shortcuts on top of the CLI:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install-macos-quick-actions.sh | sh
+```
+
+| Gesture | What happens |
+|---|---|
+| ⌃⌥⌘S on selected text, in any app | appends it to a "macOS clips" conversation; the server turns it into memory |
+| ⌃⌥⌘L on selected text | searches the workspace and shows the results in a dialog |
+| right-click a file in Finder → Quick Actions → Upload to MemoryLake | uploads it and imports it into a project you pick |
+
+Nothing is asked: the actor comes from your API key, the workspace from what the
+CLI is set to, and a project named "MemoryLake Quick Actions" is created for the
+clips (reused on every later run; `--project` points at one of your own). A pop
+sound confirms the shortcut was received and a chime confirms success, so the
+feedback does not depend on notification settings. `--save-key` and
+`--search-key` change the shortcuts (`^` control, `~` option, `@` command, `$`
+shift), `--lang zh|en` the menu language, and `--uninstall` removes it all,
+leaving the server alone. The first use asks macOS for permission to control
+System Events and to post notifications.
+
+Menu items and shortcuts appear in apps that expose their selection as text to
+macOS Services — browsers, editors, chat apps, Notes, Mail. Some apps reserve
+combinations for themselves; if a shortcut does nothing in one app but works in
+another, rebind it.
+
 A build that was not produced by the release workflow says so (`0.1.0 (dev
 build)`), so it cannot be mistaken for one.
 

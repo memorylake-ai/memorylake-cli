@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shellcheck
-        run: shellcheck -s sh scripts/install.sh
+        run: shellcheck -s sh scripts/install.sh scripts/install-macos-quick-actions.sh
       - name: Checksum gate holds in every shell
         run: |
           set -eu
