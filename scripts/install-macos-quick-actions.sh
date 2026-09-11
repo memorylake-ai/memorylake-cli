@@ -148,7 +148,7 @@ json() { osascript -l JavaScript "$QA_DIR/json.js" "$@"; }
 # Fetched first because the installer itself parses JSON with json.js.
 
 mkdir -p "$QA_DIR" "$SERVICES_DIR" "$(dirname "$LOG_FILE")"
-here="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+here="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || here=""
 if [ -z "$SOURCE" ]; then
     if [ -n "$here" ] && [ -f "$here/quick-actions/json.js" ]; then
         SOURCE="$here/quick-actions"          # running from a checkout
