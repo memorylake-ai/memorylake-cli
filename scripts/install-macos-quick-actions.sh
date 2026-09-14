@@ -219,8 +219,6 @@ MSG_SAVE_FAILED="MemoryLake 保存失败"
 MSG_SEE_LOG="详情见 ~/Library/Logs/memorylake-quick-actions.log"
 MSG_SEARCH_FAILED="MemoryLake 搜索失败"
 MSG_SEARCH_TITLE="MemoryLake 搜索："
-MSG_COPY="拷贝结果"
-MSG_CLOSE="关闭"
 MSG_NO_FILES="没有可上传的文件（不支持文件夹）"
 MSG_PROJECTS_FAILED="获取 project 列表失败"
 MSG_NO_PROJECTS="workspace 里还没有 project"
@@ -246,8 +244,6 @@ MSG_SAVE_FAILED="MemoryLake save failed"
 MSG_SEE_LOG="See ~/Library/Logs/memorylake-quick-actions.log"
 MSG_SEARCH_FAILED="MemoryLake search failed"
 MSG_SEARCH_TITLE="MemoryLake: "
-MSG_COPY="Copy results"
-MSG_CLOSE="Close"
 MSG_NO_FILES="No files to upload (folders are not supported)"
 MSG_PROJECTS_FAILED="Could not list projects"
 MSG_NO_PROJECTS="The workspace has no projects yet"
@@ -279,6 +275,11 @@ UI_LANG="$LANG_CHOICE"
 TOP_K=5
 QA_DIR="$QA_DIR"
 . "\$QA_DIR/messages.sh"
+
+# Services run with no locale at all. Without one zsh slices strings by byte,
+# a character cut in half makes osascript decode the whole dialog script in the
+# system legacy encoding (GB18030 on a Chinese Mac), and everything shows as mojibake.
+export LANG="\${LANG:-en_US.UTF-8}"
 
 json() { osascript -l JavaScript "\$QA_DIR/json.js" "\$@"; }
 # Sounds are immediate and ignore Focus mode, unlike notifications: Pop when the

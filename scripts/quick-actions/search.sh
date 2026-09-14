@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Quick action: search MemoryLake for the selected text and show the results.
+# Quick action: search MemoryLake for the selected text and open the results as
+# a plain-text document, so any line can be selected and copied.
 set -u
 . "${0:A:h}/config.sh"
 
@@ -18,16 +19,17 @@ if [ $? -ne 0 ] || [ -z "$raw" ]; then
 fi
 echo "=== $(date '+%F %T') search q=${query:0:60}" >> "$LOG"
 
-body="$(printf '%s' "$raw" | json search "$UI_LANG")"
-esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
-q="$(esc "${query:0:60}")"; b="$(esc "$body")"
+# One file per search, in the user's cache; old ones are cleaned up on the way.
+dir="$HOME/Library/Caches/memorylake-quick-actions"
+mkdir -p "$dir"
+find "$dir" -name 'search-*.txt' -mtime +1 -delete 2>/dev/null
+file="$dir/search-$(date +%Y%m%d-%H%M%S).txt"
+{
+  printf '%s%s\n%s\n\n' "$MSG_SEARCH_TITLE" "$query" "$(date '+%F %T')"
+  printf '%s' "$raw" | json search "$UI_LANG"
+  printf '\n'
+} > "$file"
 
-# Activate System Events first, or the dialog opens behind the current window.
-choice="$(osascript <<APPLESCRIPT
-tell application "System Events" to activate
-set r to display dialog "$b" with title "$MSG_SEARCH_TITLE$q" buttons {"$MSG_COPY", "$MSG_CLOSE"} default button "$MSG_CLOSE" giving up after 120
-return button returned of r
-APPLESCRIPT
-)"
-[ "$choice" = "$MSG_COPY" ] && printf '%s' "$body" | pbcopy
+# TextEdit: real text, selectable, ⌘W to dismiss.
+open -e "$file"
 exit 0
