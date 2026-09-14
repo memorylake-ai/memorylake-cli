@@ -57,6 +57,7 @@ fn help_lists_every_agent_subcommand() {
     let stdout = assert_success(&run(&home, &args), &args);
     for subcommand in [
         "list", "create", "get", "update", "delete", "version", "bind", "unbind", "bindings",
+        "card", "send", "task",
     ] {
         assert!(
             stdout.contains(subcommand),
@@ -365,5 +366,177 @@ fn bind_and_bindings_require_a_workspace() {
         assert_no_request_attempted(&err);
     }
 
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a2a_commands_require_a_workspace() {
+    let home = temp_home();
+    seed_credentials(&home);
+
+    for args in [
+        vec!["agent", "card", "agt-1"],
+        vec!["agent", "send", "agt-1", "--text", "hi"],
+        vec!["agent", "task", "list", "agt-1"],
+        vec!["agent", "task", "get", "agt-1", "run-1"],
+        vec!["agent", "task", "cancel", "agt-1", "run-1"],
+        vec![
+            "agent", "task", "feedback", "agt-1", "run-1", "--rating", "up",
+        ],
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(
+            err.contains("--workspace"),
+            "unexpected error for {args:?}: {err}"
+        );
+        assert_no_request_attempted(&err);
+    }
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn send_requires_exactly_one_message_source() {
+    let home = temp_home();
+    seed_credentials(&home);
+
+    let args = ["agent", "send", "agt-1", "--workspace", "ws-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("--text"), "{err}");
+    assert_no_request_attempted(&err);
+
+    let args = [
+        "agent",
+        "send",
+        "agt-1",
+        "--workspace",
+        "ws-1",
+        "--text",
+        "hi",
+        "--message-json",
+        r#"[{"text":"hi"}]"#,
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("pass only one"), "{err}");
+    assert_no_request_attempted(&err);
+
+    let args = [
+        "agent",
+        "send",
+        "agt-1",
+        "--workspace",
+        "ws-1",
+        "--message-json",
+        r#"{"text":"hi"}"#,
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("JSON array"), "{err}");
+    assert_no_request_attempted(&err);
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn send_rejects_stream_together_with_no_wait() {
+    let home = temp_home();
+    let args = [
+        "agent",
+        "send",
+        "agt-1",
+        "--workspace",
+        "ws-1",
+        "--text",
+        "hi",
+        "--stream",
+        "--no-wait",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("--stream") && err.contains("--no-wait"),
+        "clap should name both flags: {err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn send_rejects_metadata_json_that_duplicates_a_flag() {
+    let home = temp_home();
+    seed_credentials(&home);
+    let args = [
+        "agent",
+        "send",
+        "agt-1",
+        "--workspace",
+        "ws-1",
+        "--text",
+        "hi",
+        "--skip-memory",
+        "--metadata-json",
+        r#"{"skipMemory":false}"#,
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("skipMemory") && err.contains("--skip-memory"),
+        "{err}"
+    );
+    assert_no_request_attempted(&err);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn task_feedback_validates_its_arguments_locally() {
+    let home = temp_home();
+    seed_credentials(&home);
+
+    let args = [
+        "agent",
+        "task",
+        "feedback",
+        "agt-1",
+        "run-1",
+        "--workspace",
+        "ws-1",
+        "--rating",
+        "meh",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("up") && err.contains("down"), "{err}");
+
+    let long = "x".repeat(2001);
+    let args = [
+        "agent",
+        "task",
+        "feedback",
+        "agt-1",
+        "run-1",
+        "--workspace",
+        "ws-1",
+        "--rating",
+        "up",
+        "--comment",
+        long.as_str(),
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("2001 characters"), "{err}");
+    assert_no_request_attempted(&err);
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn task_list_rejects_a_page_size_over_the_api_limit() {
+    let home = temp_home();
+    let args = [
+        "agent",
+        "task",
+        "list",
+        "agt-1",
+        "--workspace",
+        "ws-1",
+        "--page-size",
+        "101",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("101"), "{err}");
     let _ = fs::remove_dir_all(&home);
 }

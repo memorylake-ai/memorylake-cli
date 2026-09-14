@@ -69,6 +69,46 @@ impl StubServer {
         }
     }
 
+    /// Answer one request with a `text/event-stream`, writing `events` one
+    /// frame at a time with a pause in between.
+    ///
+    /// The pauses matter: they make each frame arrive in its own read, so a
+    /// command that only works when the whole body is buffered fails here.
+    fn event_stream(events: &[&str]) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
+        let addr = listener.local_addr().expect("stub server address");
+        let frames: Vec<String> = events
+            .iter()
+            .map(|event| format!("data:{event}\n\n"))
+            .collect();
+
+        let (sender, requests) = channel();
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let request = read_http_request(&mut stream);
+            let _ = sender.send(request);
+            let head =
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.flush();
+            for frame in frames {
+                std::thread::sleep(Duration::from_millis(20));
+                let _ = stream.write_all(frame.as_bytes());
+                let _ = stream.flush();
+            }
+            // No content-length: the body ends when the connection does.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        });
+
+        Self {
+            base_url: format!("http://{addr}"),
+            requests,
+            handle: Some(handle),
+        }
+    }
+
     fn received(&self) -> String {
         match self.requests.recv_timeout(Duration::from_secs(10)) {
             Ok(request) => request,
@@ -231,4 +271,34 @@ pub fn request_body(request: &str) -> &str {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .unwrap_or_default()
+}
+
+/// Run one command against a stub that answers with a server-sent event
+/// stream of `events` (one JSON document each), from a `$HOME` that already
+/// remembers `workspace`.
+pub fn exchange_event_stream_with_remembered_workspace(
+    events: &[&str],
+    workspace: &str,
+    args: &[&str],
+) -> (String, Output) {
+    let server = StubServer::event_stream(events);
+    let home = logged_in_home_with_workspace(&server.base_url, workspace);
+    let output = run(&home, args);
+    let request = server.received();
+    let _ = fs::remove_dir_all(&home);
+    (request, output)
+}
+
+/// A header's value from a raw HTTP request, matched case-insensitively.
+pub fn request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{}:", name.to_ascii_lowercase());
+    request
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .starts_with(&needle)
+                .then(|| line[needle.len()..].trim())
+        })
 }

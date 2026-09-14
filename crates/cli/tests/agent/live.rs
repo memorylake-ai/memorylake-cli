@@ -332,3 +332,176 @@ fn bound_agent_ids(bindings: &Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+/// The account's default workspace and the built-in agent bound to it.
+///
+/// Every account has both, so the A2A tests need no fixture of their own —
+/// and creating one would not do: a freshly created agent has no runtime to
+/// answer over A2A until it is configured with a model.
+fn default_workspace_and_agent(home: &Path) -> (String, String) {
+    let ws_args = ["ws", "list", "--page-size", "100"];
+    let workspaces = parse_json(&assert_success(&run(home, &ws_args), &ws_args), "ws list");
+    let workspace = workspaces["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|ws| ws["custom_id"] == "_sys_default_workspace")
+        .map(|ws| str_field(ws, "id", "ws list").to_string())
+        .expect("account has a default workspace");
+
+    let bound_args = ["agent", "bindings", "--workspace", workspace.as_str()];
+    let bound = parse_json(
+        &assert_success(&run(home, &bound_args), &bound_args),
+        "bindings",
+    );
+    let agent = bound["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|b| b["custom_id"] == "_sys_builtin_default_agent")
+        .map(|b| str_field(b, "agent_id", "bindings").to_string())
+        .expect("default agent is bound to the default workspace");
+
+    (workspace, agent)
+}
+
+#[test]
+fn a2a_round_trip_against_the_default_agent() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+    let (workspace, agent) = default_workspace_and_agent(&home);
+    let ws = workspace.as_str();
+    let agent = agent.as_str();
+
+    // 1. The card names the v1.0 HTTP+JSON binding this CLI speaks.
+    let card_args = ["agent", "card", agent, "--workspace", ws];
+    let card = parse_json(&assert_success(&run(&home, &card_args), &card_args), "card");
+    let interfaces = card["supportedInterfaces"].as_array().expect("interfaces");
+    assert!(
+        interfaces.iter().any(|i| {
+            i["protocolBinding"] == "HTTP+JSON"
+                && i["protocolVersion"] == "1.0"
+                && i["url"].as_str().is_some_and(|u| u.ends_with("/a2a"))
+        }),
+        "card advertises no v1.0 HTTP+JSON binding on the unversioned path: {card}"
+    );
+
+    // 2. A blocking send prints the reply and names the task on stderr.
+    //    `--skip-memory` keeps the probe out of the account's memories.
+    let send_args = [
+        "agent",
+        "send",
+        agent,
+        "--workspace",
+        ws,
+        "--text",
+        "Reply with exactly the word PONG and nothing else.",
+        "--skip-memory",
+    ];
+    let output = run(&home, &send_args);
+    let stdout = assert_success(&output, &send_args);
+    assert!(
+        stdout.to_uppercase().contains("PONG"),
+        "reply should contain PONG: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let task_id = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("task "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("stderr names no task: {stderr}"))
+        .to_string();
+    assert!(stderr.contains("TASK_STATE_COMPLETED"), "{stderr}");
+
+    // 3. The task can be read back, and it appears in the listing.
+    let get_args = [
+        "agent",
+        "task",
+        "get",
+        agent,
+        task_id.as_str(),
+        "--workspace",
+        ws,
+    ];
+    let task = parse_json(
+        &assert_success(&run(&home, &get_args), &get_args),
+        "task get",
+    );
+    assert_eq!(str_field(&task, "id", "task get"), task_id);
+
+    let list_args = [
+        "agent",
+        "task",
+        "list",
+        agent,
+        "--workspace",
+        ws,
+        "--page-size",
+        "1",
+    ];
+    let page = parse_json(
+        &assert_success(&run(&home, &list_args), &list_args),
+        "task list",
+    );
+    assert_eq!(page["tasks"].as_array().map(Vec::len), Some(1), "{page}");
+
+    // 4. Feedback lands in the task's metadata and reads back with the
+    //    extension header `task get` sends.
+    let feedback_args = [
+        "agent",
+        "task",
+        "feedback",
+        agent,
+        task_id.as_str(),
+        "--workspace",
+        ws,
+        "--rating",
+        "up",
+        "--comment",
+        "memorylake-cli live test",
+    ];
+    assert_success(&run(&home, &feedback_args), &feedback_args);
+    let task = parse_json(
+        &assert_success(&run(&home, &get_args), &get_args),
+        "task get after feedback",
+    );
+    assert_eq!(
+        task["metadata"]["task-feedback/v1"]["rating"], "up",
+        "rating missing after feedback: {task}"
+    );
+
+    // 5. Cancelling a finished task is refused with the A2A reason.
+    let cancel_args = [
+        "agent",
+        "task",
+        "cancel",
+        agent,
+        task_id.as_str(),
+        "--workspace",
+        ws,
+    ];
+    let err = assert_failure(&run(&home, &cancel_args), &cancel_args);
+    assert!(err.contains("TASK_NOT_CANCELABLE"), "{err}");
+
+    // 6. Streaming prints the reply once, not once per token plus the artifact.
+    let stream_args = [
+        "agent",
+        "send",
+        agent,
+        "--workspace",
+        ws,
+        "--text",
+        "Reply with exactly the word PONG and nothing else.",
+        "--skip-memory",
+        "--stream",
+    ];
+    let stdout = assert_success(&run(&home, &stream_args), &stream_args);
+    assert_eq!(
+        stdout.to_uppercase().matches("PONG").count(),
+        1,
+        "streamed reply printed more than once: {stdout:?}"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}

@@ -5,6 +5,7 @@ pub mod client;
 pub mod config;
 pub mod credentials;
 pub mod error;
+pub mod sse;
 
 #[cfg(test)]
 mod test_support;

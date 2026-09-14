@@ -4,7 +4,10 @@
 //! [`update_agent`]. Agent *configuration* (model, policies, prompt, …) is
 //! immutable: changing it means creating a new version with
 //! [`create_agent_version`].
+//!
+//! Talking *to* a bound agent goes through the A2A protocol in [`a2a`].
 
+pub mod a2a;
 mod bind;
 mod create;
 mod create_version;
