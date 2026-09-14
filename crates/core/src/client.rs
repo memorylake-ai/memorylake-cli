@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use reqwest::blocking::{Body, Client as HttpClient};
 use reqwest::header::{
-    AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue,
+    ACCEPT, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue,
 };
 use reqwest::{StatusCode, Url};
 use serde::Serialize;
@@ -13,6 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::sse::EventStream;
 
 /// What a completed download reported about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +303,98 @@ impl Client {
         })
     }
 
+    /// Perform a GET against an endpoint whose success body is a bare JSON
+    /// document rather than a MemoryLake envelope.
+    ///
+    /// The A2A endpoints speak the A2A protocol's own shapes on success but
+    /// still answer errors as a MemoryLake envelope, so a non-2xx response is
+    /// handed to the envelope decoder for a message consistent with the rest
+    /// of the API, and a 2xx body is returned as-is.
+    pub fn get_json_with_headers(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        headers: &[(&str, &str)],
+    ) -> Result<Value> {
+        let url = self.url(path);
+        let mut builder = apply_headers(self.http.get(&url), headers).headers(self.auth_headers()?);
+        for (key, value) in query {
+            builder = builder.query(&[(key, value)]);
+        }
+        decode_bare_json(self.execute(builder.build()?)?)
+    }
+
+    /// [`Self::get_json_with_headers`] for a POST with a JSON body.
+    pub fn post_json_with_headers<B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<Value>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path);
+        let request = apply_headers(self.http.post(&url), headers)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .build()?;
+        decode_bare_json(self.execute(request)?)
+    }
+
+    /// Perform a POST whose success response is a `text/event-stream`, and
+    /// return the events as they arrive.
+    ///
+    /// Errors follow the same rule as [`Self::get_json_with_headers`]: a
+    /// non-2xx status, or a 2xx that is not an event stream, is decoded as a
+    /// MemoryLake envelope. The latter has been observed on the A2A stream
+    /// endpoint, which answers a permission failure with a plain JSON body.
+    pub fn post_event_stream<B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<EventStream<std::io::BufReader<reqwest::blocking::Response>>>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path);
+        let request = apply_headers(self.http.post(&url), headers)
+            .headers(self.auth_headers()?)
+            .header(ACCEPT, "text/event-stream")
+            .json(body)
+            .build()?;
+        let response = self.execute(request)?;
+
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        tracing::trace!(status = status.as_u16(), url = %url, content_type, "stream response");
+
+        if !status.is_success() || !content_type.starts_with("text/event-stream") {
+            return match validate_envelope(response) {
+                Err(err) => Err(err),
+                Ok(_) => Err(Error::Api {
+                    message: format!(
+                        "expected a text/event-stream from {url}, got {} with status {status}",
+                        if content_type.is_empty() {
+                            "no content type"
+                        } else {
+                            content_type.as_str()
+                        }
+                    ),
+                    code: None,
+                }),
+            };
+        }
+
+        Ok(EventStream::new(std::io::BufReader::new(response)))
+    }
+
     /// Perform a DELETE whose successful response carries no usable payload.
     ///
     /// Prefer this over `delete_data::<()>` for endpoints documented to answer
@@ -556,6 +649,15 @@ fn validate_envelope(response: reqwest::blocking::Response) -> Result<(Value, Re
         "HTTP response"
     );
 
+    validate_envelope_body(status, url, body)
+}
+
+/// [`validate_envelope`] on a body that has already been read.
+fn validate_envelope_body(
+    status: StatusCode,
+    url: Url,
+    body: String,
+) -> Result<(Value, ResponseContext)> {
     if let Ok(auth_err) = serde_json::from_str::<AuthErrorEnvelope>(&body) {
         let server_msg = auth_err
             .error
@@ -630,6 +732,50 @@ where
         ),
         code: None,
     })
+}
+
+/// Return a 2xx body as JSON, or decode a non-2xx body as an error envelope.
+///
+/// For endpoints that do not wrap successful responses. `validate_envelope`
+/// always errors on a non-success status; the other arm exists so that
+/// invariant cannot turn into a panic.
+fn decode_bare_json(response: reqwest::blocking::Response) -> Result<Value> {
+    let status = response.status();
+    if !status.is_success() {
+        return match validate_envelope(response) {
+            Err(err) => Err(err),
+            Ok(_) => Err(Error::Api {
+                message: format!("request failed with status {status}"),
+                code: None,
+            }),
+        };
+    }
+
+    let url = response.url().clone();
+    let body = response.text().map_err(Error::from)?;
+    tracing::trace!(status = status.as_u16(), url = %url, body = %body, "HTTP response");
+
+    let value: Value = serde_json::from_str(&body).map_err(|err| Error::Api {
+        message: format!(
+            "unexpected response from {url} (expected JSON; error: {err})\n{}",
+            format_http_response(status, &body)
+        ),
+        code: None,
+    })?;
+
+    // A failed envelope behind a 2xx must not pass for a protocol document:
+    // the endpoints this serves never emit a `success` key of their own.
+    if value.get("success") == Some(&Value::Bool(false)) {
+        return match validate_envelope_body(status, url, body) {
+            Err(err) => Err(err),
+            Ok(_) => Err(Error::Api {
+                message: "request failed".into(),
+                code: None,
+            }),
+        };
+    }
+
+    Ok(value)
 }
 
 fn format_http_response(status: StatusCode, body: &str) -> String {

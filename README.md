@@ -339,6 +339,54 @@ field works without upgrading the CLI. `--from-version latest|N` starts from an
 existing version and applies your overrides on top, replacing whole top-level
 keys rather than deep-merging.
 
+### Talking to an agent (A2A)
+
+Every agent bound to a workspace answers over the
+[A2A protocol](https://a2a-protocol.org). The CLI speaks A2A v1.0 over
+HTTP+JSON; `--workspace` defaults to the remembered one, as for `agent bind`.
+
+```bash
+memorylake agent card <agent-id> [--workspace <id>]
+
+memorylake agent send <agent-id> --text "..." [--text "..."] \
+  [--context CTX] [--task TASK] [--stream | --no-wait] [--raw] \
+  [--actor ID] [--project ID] [--read-only-project ID]... [--skip-memory] \
+  [--metadata-json '{"overrides":{...}}'] [--workspace <id>]
+memorylake agent send <agent-id> --message-json '[{"text":"..."},{"url":"...","mediaType":"image/png"}]'
+memorylake agent send <agent-id> --message-file parts.json
+
+memorylake agent task list <agent-id> [--context CTX] [--status STATE] \
+  [--page-size N] [--page-token TOK] [--after TIMESTAMP] [--history-length N] [--artifacts]
+memorylake agent task get      <agent-id> <task-id> [--history-length N]
+memorylake agent task cancel   <agent-id> <task-id>
+memorylake agent task feedback <agent-id> <task-id> --rating up|down [--comment TEXT]
+```
+
+`send` waits for the answer and prints the reply text on stdout; the task id,
+context id and final state go to stderr, so a script can pipe the reply and
+still know how to continue:
+
+```
+$ memorylake agent send agent-… --text "Summarize yesterday's standup"
+The team agreed to …
+task run-…  context 5fdb…  state TASK_STATE_COMPLETED
+```
+
+Pass `--context` to keep talking in the same thread. A task that ends in
+`TASK_STATE_INPUT_REQUIRED` needs more from you: reply with `--task <id>
+--context <id>`. `--stream` prints the reply as it is produced; `--no-wait`
+returns the task as soon as it exists (poll it with `agent task get`); `--raw`
+prints the protocol response as JSON instead of the reply text.
+
+The `--actor`, `--project`, `--read-only-project` and `--skip-memory` flags set
+MemoryLake's extension of the request (`metadata.memorylake`): whose message it
+is, which projects the agent may read and write, and whether the exchange is
+remembered at all. Anything else the extension accepts, such as `overrides`,
+goes through `--metadata-json`.
+
+Feedback is a MemoryLake extension to A2A. `task feedback` records a rating on
+the task; `task get` reads it back under `metadata."task-feedback/v1"`.
+
 ### Search
 
 ```bash

@@ -2,8 +2,10 @@
 //!
 //! Agent *identity* (name, description, metadata) changes in place via
 //! `agent update`. Agent *configuration* (model, policies, prompt, …) is
-//! immutable and changes only by creating a new version.
+//! immutable and changes only by creating a new version. Talking to a bound
+//! agent (`card`, `send`, `task`) goes over A2A and lives in [`a2a`].
 
+mod a2a;
 mod body;
 
 use anyhow::{Context, Result};
@@ -17,6 +19,7 @@ use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 use std::path::PathBuf;
 
 use super::require_workspace;
+use a2a::{SendArgs, TaskCommand, run_card, run_send, run_task, task_workspace_flag};
 use body::{FromVersion, load_config_body, reject_config_fields, require_field, set_scalar};
 
 /// Agent subcommands.
@@ -137,6 +140,26 @@ pub enum AgentCommand {
         /// Fuzzy filter by agent name (partial match).
         #[arg(long = "name")]
         name_fuzzy: Option<String>,
+    },
+    /// Show an agent's A2A card: capabilities, protocol bindings, extensions.
+    Card {
+        /// Agent id (must be bound to the workspace).
+        agent_id: String,
+        /// Workspace the agent is bound in.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Send a message to an agent and print its reply.
+    ///
+    /// Waits for the answer by default. The reply text goes to stdout; the
+    /// task and context ids needed to continue go to stderr.
+    Send(SendArgs),
+    /// Inspect, cancel and rate the tasks an agent has run.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
     },
 }
 
@@ -302,6 +325,22 @@ pub fn run(command: AgentCommand, profile: Option<String>, base_url: Option<Stri
             )
             .with_context(|| format!("list agents bound to workspace `{workspace}`"))?;
             println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+        AgentCommand::Card {
+            agent_id,
+            workspace,
+        } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
+            run_card(&client, &workspace, &agent_id)?;
+        }
+        AgentCommand::Send(args) => {
+            let workspace = require_workspace(&paths, &runtime.profile, args.workspace.clone())?;
+            run_send(&client, &workspace, args)?;
+        }
+        AgentCommand::Task { command } => {
+            let workspace =
+                require_workspace(&paths, &runtime.profile, task_workspace_flag(&command))?;
+            run_task(&client, &workspace, command)?;
         }
     }
 
