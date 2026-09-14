@@ -19,10 +19,11 @@ if [ $? -ne 0 ] || [ -z "$raw" ]; then
 fi
 echo "=== $(date '+%F %T') search q=${query:0:60}" >> "$LOG"
 
-# One file per search, in the user's cache; old ones are cleaned up on the way.
-dir="$HOME/Library/Caches/memorylake-quick-actions"
+# One file per search in the per-user temp dir, which macOS purges on reboot and
+# after three idle days; anything older than an hour goes on the next search.
+dir="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)memorylake-quick-actions"
 mkdir -p "$dir"
-find "$dir" -name 'search-*.txt' -mtime +1 -delete 2>/dev/null
+find "$dir" -name 'search-*.txt' -mmin +60 -delete 2>/dev/null
 file="$dir/search-$(date +%Y%m%d-%H%M%S).txt"
 {
   printf '%s%s\n%s\n\n' "$MSG_SEARCH_TITLE" "$query" "$(date '+%F %T')"
