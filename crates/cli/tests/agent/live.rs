@@ -339,15 +339,28 @@ fn bound_agent_ids(bindings: &Value) -> Vec<String> {
 /// and creating one would not do: a freshly created agent has no runtime to
 /// answer over A2A until it is configured with a model.
 fn default_workspace_and_agent(home: &Path) -> (String, String) {
-    let ws_args = ["ws", "list", "--page-size", "100"];
-    let workspaces = parse_json(&assert_success(&run(home, &ws_args), &ws_args), "ws list");
-    let workspace = workspaces["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .find(|ws| ws["custom_id"] == "_sys_default_workspace")
-        .map(|ws| str_field(ws, "id", "ws list").to_string())
-        .expect("account has a default workspace");
+    // The CI account carries hundreds of scratch workspaces from earlier runs,
+    // so the default one may sit several pages in.
+    let mut token: Option<String> = None;
+    let workspace = loop {
+        let mut ws_args = vec!["ws", "list", "--page-size", "100"];
+        if let Some(token) = &token {
+            ws_args.extend(["--continuation-token", token.as_str()]);
+        }
+        let page = parse_json(&assert_success(&run(home, &ws_args), &ws_args), "ws list");
+        if let Some(found) = page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|ws| ws["custom_id"] == "_sys_default_workspace")
+        {
+            break str_field(found, "id", "ws list").to_string();
+        }
+        match page["continuation_token"].as_str() {
+            Some(next) if !next.is_empty() => token = Some(next.to_string()),
+            _ => panic!("account has no `_sys_default_workspace` on any page"),
+        }
+    };
 
     let bound_args = ["agent", "bindings", "--workspace", workspace.as_str()];
     let bound = parse_json(
