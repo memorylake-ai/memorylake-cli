@@ -1,6 +1,12 @@
-# memorylake-cli
+<p align="center">
+  <a href="https://memorylake.ai">
+    <img src=".github/assets/readme-hero.png" alt="MemoryLake CLI — Connect every agent to MemoryLake" width="100%">
+  </a>
+</p>
 
-[![CI](https://github.com/memorylake-ai/memorylake-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/memorylake-ai/memorylake-cli/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/memorylake-ai/memorylake-cli/actions/workflows/ci.yml"><img src="https://github.com/memorylake-ai/memorylake-cli/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
 
 Command-line interface for [MemoryLake](https://app.memorylake.ai). Upload files,
 store and search memories, and manage the workspaces, projects, actors and agents
@@ -72,6 +78,10 @@ A build that was not produced by the release workflow says so (`0.1.0 (dev
 build)`), so it cannot be mistaken for one.
 
 ## Getting started
+
+<p align="center">
+  <img src=".github/assets/readme-demo.png" alt="Upload it. Remember it. Recall it anywhere. — memorylake lib upload, memorylake fact add, memorylake search" width="100%">
+</p>
 
 ```bash
 memorylake auth login          # pick an endpoint, then paste your API key
