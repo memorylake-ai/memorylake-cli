@@ -547,6 +547,10 @@ returns the task as soon as it exists (poll it with `agent task get`, or follow
 it with `agent task subscribe`, which prints like `--stream`); `--raw` prints the
 protocol response as JSON instead of the reply text.
 
+A task that ends `FAILED`, `CANCELED` or `REJECTED` exits non-zero. So does a
+stream that closes before its task settles; the error names the
+`agent task subscribe` command that picks it up again.
+
 The `--actor`, `--project`, `--read-only-project` and `--skip-memory` flags set
 MemoryLake's extension of the request (`metadata.memorylake`): whose message it
 is, which projects the agent may read and write, and whether the exchange is
