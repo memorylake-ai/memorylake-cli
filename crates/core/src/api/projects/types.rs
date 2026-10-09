@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 pub struct Industry {
     /// Industry identifier.
     pub id: String,
-    /// Display name.
-    pub name: String,
+    /// Display name. Not marked required by the API, and an industry without
+    /// one must not fail decoding the project it is attached to.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Optional description.
     #[serde(default)]
     pub description: Option<String>,
@@ -76,7 +78,7 @@ mod tests {
         assert_eq!(project.custom_id.as_deref(), Some("demo-1"));
         assert_eq!(project.industries.len(), 1);
         assert_eq!(project.industries[0].id, "ind-1");
-        assert_eq!(project.industries[0].name, "Tech");
+        assert_eq!(project.industries[0].name.as_deref(), Some("Tech"));
     }
 
     #[test]
@@ -127,6 +129,6 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&original).expect("serialize"))
                 .expect("re-deserialize");
         assert_eq!(original, round_tripped);
-        assert_eq!(round_tripped.industries[0].name, "Tech");
+        assert_eq!(round_tripped.industries[0].name.as_deref(), Some("Tech"));
     }
 }

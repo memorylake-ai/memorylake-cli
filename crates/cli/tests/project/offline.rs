@@ -61,41 +61,45 @@ fn get_help_offers_by_custom_id() {
 }
 
 #[test]
-fn create_help_exposes_no_metadata_or_industry_flags() {
-    // `metadata` and `industry_ids` exist in the API but are deliberately out
-    // of scope; these assertions keep them from creeping in unnoticed.
+fn create_help_exposes_no_metadata_flag() {
+    // `metadata` exists in the API but is deliberately out of scope; this
+    // assertion keeps it from creeping in unnoticed.
     let home = temp_home();
     let args = ["project", "create", "--help"];
     let stdout = assert_success(&run(&home, &args), &args);
-    for flag in ["--workspace", "--name", "--custom-id", "--description"] {
+    for flag in [
+        "--workspace",
+        "--name",
+        "--custom-id",
+        "--description",
+        "--industry-ids",
+    ] {
         assert!(
             stdout.contains(flag),
             "`project create` missing {flag}: {stdout}"
         );
     }
-    for flag in ["--metadata", "--industry-id", "--industry-ids"] {
-        assert!(
-            !stdout.contains(flag),
-            "`project create` should not expose {flag}: {stdout}"
-        );
-    }
+    assert!(
+        !stdout.contains("--metadata"),
+        "`project create` should not expose --metadata: {stdout}"
+    );
     let _ = fs::remove_dir_all(&home);
 }
 
 #[test]
-fn update_help_exposes_only_name_and_description() {
+fn update_help_exposes_name_description_and_industries() {
     let home = temp_home();
     let args = ["project", "update", "--help"];
     let stdout = assert_success(&run(&home, &args), &args);
     assert!(stdout.contains("--workspace"), "{stdout}");
     assert!(stdout.contains("--name"), "{stdout}");
     assert!(stdout.contains("--description"), "{stdout}");
-    for flag in ["--industry-id", "--industry-ids", "--by-custom-id"] {
-        assert!(
-            !stdout.contains(flag),
-            "`project update` should not expose {flag}: {stdout}"
-        );
-    }
+    assert!(stdout.contains("--industry-ids"), "{stdout}");
+    assert!(stdout.contains("--clear-industries"), "{stdout}");
+    assert!(
+        !stdout.contains("--by-custom-id"),
+        "`project update` should not expose --by-custom-id: {stdout}"
+    );
     let _ = fs::remove_dir_all(&home);
 }
 
