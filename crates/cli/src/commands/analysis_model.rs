@@ -36,6 +36,10 @@ pub enum AnalysisModelCommand {
     ///
     /// Use a template's `type` with `create --type`, and its `entity_types[].code`
     /// values with `entry ... --entity-type`.
+    ///
+    /// Currently answers 500 on production (measured 2026-10-09). The known
+    /// values are `ASK_DATA`, and `few_shot`, `biz_rule`, `general`,
+    /// `drilldown_entity`.
     Templates {
         /// Workspace to ask in. The answer is the same for every workspace.
         ///
@@ -565,16 +569,31 @@ fn toggle_entry(
         disabled,
         entity_type,
     };
-    let verb = if disabled { "Disabled" } else { "Enabled" };
+    // The context names the attempted action, never the outcome: it is the
+    // first line of the error, and "disabled entry" would read as success.
+    let (action, done) = if disabled {
+        ("disable", "Disabled")
+    } else {
+        ("enable", "Enabled")
+    };
     set_entry_disabled(client, &workspace, &scope.model, &id, &request)
-        .with_context(|| format!("{} entry `{id}`", verb.to_lowercase()))?;
-    println!("{verb} entry `{id}` of analysis model `{}`", scope.model);
+        .with_context(|| format!("{action} entry `{id}`"))?;
+    println!("{done} entry `{id}` of analysis model `{}`", scope.model);
     Ok(())
 }
 
 /// Reject commands that cannot produce a meaningful request.
 fn validate(command: &AnalysisModelCommand) -> Result<()> {
     match command {
+        // `GET .../analysis-models/templates` is a literal route, so a model
+        // whose custom_id is `templates` cannot be fetched by it.
+        AnalysisModelCommand::Get {
+            id, by_custom_id, ..
+        } if *by_custom_id && id == "templates" => {
+            bail!(
+                "a model with custom_id `templates` cannot be fetched by custom_id: the path collides with the templates endpoint; use its server-assigned id"
+            )
+        }
         AnalysisModelCommand::Update {
             name, description, ..
         } if name.is_none() && description.is_none() => {
@@ -665,6 +684,18 @@ mod tests {
         let err = parse_json_object_file("/definitely/not/here.json")
             .expect_err("a missing file must be rejected");
         assert!(err.contains("/definitely/not/here.json"), "{err}");
+    }
+
+    #[test]
+    fn validate_rejects_fetching_templates_by_custom_id() {
+        let get = |by_custom_id| AnalysisModelCommand::Get {
+            workspace: None,
+            id: "templates".to_string(),
+            by_custom_id,
+        };
+        let err = validate(&get(true)).expect_err("would hit the templates route");
+        assert!(err.to_string().contains("templates endpoint"), "{err}");
+        validate(&get(false)).expect("a server-assigned id is never `templates`");
     }
 
     #[test]

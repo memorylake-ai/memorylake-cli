@@ -58,8 +58,8 @@ pub struct AnalysisModel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisModelTemplate {
     /// Value to pass as `type` when creating a model.
-    #[serde(rename = "type")]
-    pub model_type: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub model_type: Option<String>,
     /// Display name per language tag, e.g. `{"en": "...", "zh": "..."}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Map<String, Value>>,
@@ -75,7 +75,8 @@ pub struct AnalysisModelTemplate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnowledgeEntryType {
     /// Value to pass as `entity_type` when adding knowledge.
-    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// Display name per language tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Map<String, Value>>,
@@ -188,7 +189,7 @@ mod tests {
             ]
         }"#;
         let template: AnalysisModelTemplate = serde_json::from_str(raw).expect("decode template");
-        assert_eq!(template.model_type, "ASK_DATA");
+        assert_eq!(template.model_type.as_deref(), Some("ASK_DATA"));
         assert_eq!(template.entity_types.len(), 2);
         assert_eq!(template.entity_types[0].vectorized, Some(true));
         assert_eq!(

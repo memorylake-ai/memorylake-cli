@@ -422,7 +422,8 @@ answer questions about that data: business rules, worked question-to-SQL
 examples, metric definitions and background notes, each stored as an *entry*.
 A model follows a template (`--type`, e.g. `ASK_DATA`) that decides which entry
 kinds (`--entity-type`: `few_shot`, `biz_rule`, `general`, `drilldown_entity`,
-…) it accepts; `templates` lists them. Alias: `am`.
+…) it accepts; `templates` lists them, though it currently answers 500 on
+production. Alias: `am`.
 
 ```bash
 memorylake am templates [--type ASK_DATA]

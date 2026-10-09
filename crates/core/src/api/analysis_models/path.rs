@@ -22,9 +22,9 @@ pub(super) fn models_path(workspace_id: &str) -> String {
 
 /// Path of the static template catalogue.
 ///
-/// `templates` is a literal segment, so a model whose id happened to be
-/// `templates` could not be addressed by [`model_path`] — the ids are opaque
-/// server-assigned hex strings, so that cannot occur in practice.
+/// `templates` is a literal segment, so [`model_path`] cannot address a model
+/// named `templates`. Server-assigned ids never are, but a caller-chosen
+/// `custom_id` can be; the CLI rejects that combination before sending.
 pub(super) fn templates_path(workspace_id: &str) -> String {
     format!("{}/templates", models_path(workspace_id))
 }
