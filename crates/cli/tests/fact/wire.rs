@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::common::assert_success;
 use crate::common::stub::{
-    exchange, exchange_with_remembered_workspace, exchange_with_stdin, request_body, request_line,
+    exchange, exchange_with_input, exchange_with_remembered_workspace, request_body, request_line,
 };
 
 const FACT: &str = r#"{"success":true,"data":{"id":"fact-1","fact":"t","metadata":{"k":"v"},"expired":false,"created_at":"2026-10-09T07:40:45Z","updated_at":"2026-10-09T07:41:00Z"}}"#;
@@ -432,8 +432,12 @@ fn instruction_set_reads_markdown_from_stdin() {
         "--file",
         "-",
     ];
-    let (request, output) =
-        exchange_with_stdin(SETTINGS, &args, "Records deadlines.\n\n## 包含\n- dates\n");
+    let (request, output) = exchange_with_input(
+        SETTINGS,
+        &args,
+        "Records deadlines.\n\n## 包含\n- dates\n",
+        &[],
+    );
     assert_success(&output, &args);
     assert_eq!(
         request_line(&request),

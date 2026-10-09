@@ -173,24 +173,25 @@ fn isolated(home: &Path, args: &[&str]) -> Command {
     command
 }
 
-/// [`run`] with `input` written to the child's stdin, for commands that read
-/// a document from `-`.
-pub fn run_with_stdin(home: &Path, args: &[&str], input: &str) -> Output {
+/// [`run`] with `stdin` written to the child's standard input and extra
+/// environment variables set, for commands that read a document, a password,
+/// or other input from `-` or the environment.
+pub fn run_with_input(home: &Path, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Output {
     use std::io::Write;
     use std::process::Stdio;
 
     let mut child = isolated(home, args)
+        .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")));
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(input.as_bytes())
-        .expect("write child stdin");
+    // A command that fails before reading stdin closes the pipe; that is the
+    // command's outcome to report, not a test failure here.
+    if let Some(mut pipe) = child.stdin.take() {
+        let _ = pipe.write_all(stdin.as_bytes());
+    }
     child
         .wait_with_output()
         .unwrap_or_else(|err| panic!("wait for memorylake {}: {err}", args.join(" ")))
@@ -217,7 +218,6 @@ pub fn assert_failure(output: &Output, args: &[&str]) -> String {
     );
     format!("{stdout}{stderr}")
 }
-
 
 /// Custom id of the one workspace that live tests needing *a* workspace share.
 ///
