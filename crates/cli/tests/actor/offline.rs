@@ -183,25 +183,6 @@ fn metadata_must_be_a_json_object() {
 }
 
 #[test]
-fn actor_type_flag_rejects_unknown_values() {
-    let home = temp_home();
-    // Lower-case is a typo, not a synonym: it must never reach the server.
-    for raw in ["human", "Human", "ROBOT"] {
-        let args = ["actor", "list", "--type", raw];
-        let err = assert_failure(&run(&home, &args), &args);
-        assert!(
-            err.contains(raw) && err.contains("HUMAN") && err.contains("ASSISTANT"),
-            "error should show the invalid value and the allowed ones, got: {err}"
-        );
-        assert!(
-            !err.contains("not logged in"),
-            "invalid --type must be rejected before credential resolution: {err}"
-        );
-    }
-    let _ = fs::remove_dir_all(&home);
-}
-
-#[test]
 fn help_lists_actor_subcommands() {
     let home = temp_home();
     let args = ["actor", "--help"];

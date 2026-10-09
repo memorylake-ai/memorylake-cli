@@ -139,10 +139,10 @@ bound to a workspace to participate there.
 
 ```bash
 memorylake actor create --custom-id user-001 --display-name "Alice Chen" \
-  [--type HUMAN|ASSISTANT] [--description TEXT] [--tags vip,cn] \
+  [--description TEXT] [--tags vip,cn] \
   [--metadata '{"tier":"premium"}']
 
-memorylake actor list [--type HUMAN|ASSISTANT] [--name FUZZY] [--tags vip,cn] [--page-size N]
+memorylake actor list [--name FUZZY] [--tags vip,cn] [--page-size N]
 memorylake actor me
 memorylake actor get <id> [--by-custom-id]
 memorylake actor update <id> [--display-name NAME] [--description D] \
@@ -255,8 +255,8 @@ memorylake fact list (--actors a,b | --projects a,b) [--page-size N]
 memorylake fact delete (--actor <id> | --project <id>) <fact-id>...
 ```
 
-Facts are stored verbatim and are searchable immediately. They are immutable — to
-change one, add the new statement and let the server resolve the conflict.
+Facts are stored verbatim and are searchable immediately. To change one, add the
+new statement and let the server resolve the conflict.
 `fact list` needs at least one of `--actors` / `--projects`.
 
 ### Conversations
@@ -403,13 +403,16 @@ the task; `task get` reads it back under `metadata."task-feedback/v1"`.
 memorylake search "what were the quarterly revenue figures"
 
 memorylake search "quarterly revenue" \
-  --projects proj-1,proj-2 --actors act-1 --types document,fact --top-k 10
+  --projects proj-1,proj-2 --actors act-1 --types document,fact,database --top-k 10
 ```
 
-Returns matched `documents` and `facts` as two separate sets rather than one
-ranked list. Filters take one comma-separated value each (`--projects a,b`), and
-omitting a filter searches everything in that dimension. `--top-k` caps results
-per type. There is no pagination.
+Returns one ranked list split into `documents`, `facts` and `databases`. Every
+entry carries a `rank` that is unique across the three, so sorting by it
+restores the overall order. Filters take one comma-separated value each
+(`--projects a,b`). Omitting `--projects` or `--types` searches all of them, but
+omitting `--actors` searches only your own actor's memories. `--top-k` (1-1000,
+default 10) caps the total across all types, not each type. There is no
+pagination.
 
 ### Team management
 

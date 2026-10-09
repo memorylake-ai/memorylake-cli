@@ -18,10 +18,10 @@ fn search_path(workspace_id: &str) -> String {
 
 /// Request body for a memory search.
 ///
-/// Every filter is skipped when `None`: the API treats an omitted filter as
-/// "no restriction", so sending `null` or `[]` would say something different.
-/// `top_k` is likewise omitted rather than defaulted here — the API documents
-/// no default, and guessing one client-side would silently override it.
+/// Every filter is skipped when `None`, so the server applies its own default
+/// rather than one guessed here: omitted `project_ids` and `memory_types` mean
+/// no restriction, but omitted `actor_ids` means the caller's own actor, not
+/// every actor. `top_k` is likewise left to the server (default 10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SearchMemoriesRequest {
     /// Natural language query.
@@ -29,13 +29,14 @@ pub struct SearchMemoriesRequest {
     /// Limit to these projects. Omitted means every project in the workspace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_ids: Option<Vec<String>>,
-    /// Limit to memories associated with these actors.
+    /// Search these actors' memories. Omitted means the caller's own actor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_ids: Option<Vec<String>>,
     /// Limit to these source types. Omitted means every type.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_types: Option<Vec<MemoryType>>,
-    /// Maximum results per source type.
+    /// Maximum results in total, shared by every searched memory type rather
+    /// than applied per type. The API accepts 1 to 1000 and defaults to 10.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<u32>,
 }
@@ -53,9 +54,9 @@ impl SearchMemoriesRequest {
     }
 }
 
-/// Search documents and facts across one workspace.
+/// Search documents, facts and databases across one workspace.
 ///
-/// The endpoint has no pagination; `top_k` caps results per source type.
+/// The endpoint has no pagination; `top_k` caps the total across all types.
 pub fn search_memories(
     client: &Client,
     workspace_id: &str,

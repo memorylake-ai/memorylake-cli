@@ -88,8 +88,6 @@ impl Live {
                     actor_name.as_str(),
                     "--display-name",
                     actor_name.as_str(),
-                    "--type",
-                    "HUMAN",
                 ],
             ),
             "actor create",

@@ -123,8 +123,6 @@ fn actor_lifecycle_end_to_end() {
             custom_id.as_str(),
             "--display-name",
             display_name.as_str(),
-            "--type",
-            "HUMAN",
             "--description",
             "created by memorylake-cli live test",
             "--metadata",
@@ -137,7 +135,6 @@ fn actor_lifecycle_end_to_end() {
         .to_string();
     let mut guard = ActorGuard::new(&home, &actor_id);
     assert_eq!(created["custom_id"], Value::String(custom_id.clone()));
-    assert_eq!(created["actor_type"], Value::String("HUMAN".to_string()));
     assert_eq!(created["display_name"], Value::String(display_name.clone()));
     assert_eq!(
         created["metadata"]["region"],

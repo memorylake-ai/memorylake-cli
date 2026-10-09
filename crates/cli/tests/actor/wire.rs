@@ -22,8 +22,6 @@ fn list_calls_the_account_wide_endpoint() {
             "2",
             "--continuation-token",
             "tok-1",
-            "--type",
-            "HUMAN",
             "--name",
             "Ali",
         ],
@@ -35,7 +33,6 @@ fn list_calls_the_account_wide_endpoint() {
     for expected in [
         "page_size=2",
         "continuation_token=tok-1",
-        "actor_type=HUMAN",
         "display_name_fuzzy=Ali",
     ] {
         assert!(line.contains(expected), "missing {expected} in {line}");
@@ -105,8 +102,6 @@ fn create_posts_the_documented_body() {
             "user-1",
             "--display-name",
             "Alice",
-            "--type",
-            "ASSISTANT",
             "--description",
             "intake bot",
             "--metadata",
@@ -123,7 +118,6 @@ fn create_posts_the_documented_body() {
     for expected in [
         r#""custom_id":"user-1""#,
         r#""display_name":"Alice""#,
-        r#""actor_type":"ASSISTANT""#,
         r#""description":"intake bot""#,
         r#""metadata":{"tier":"premium"}"#,
     ] {
@@ -147,7 +141,6 @@ fn create_omits_flags_that_were_not_passed() {
             "Alice",
         ],
     );
-    assert!(!request.contains("actor_type"), "{request}");
     assert!(!request.contains("description"), "{request}");
     assert!(!request.contains("metadata"), "{request}");
     assert!(!request.contains("tags"), "{request}");
@@ -393,6 +386,18 @@ fn unknown_actor_type_from_the_server_is_printed_not_rejected() {
         stdout.contains("\"actor_type\": \"SUPERVISOR\""),
         "unknown actor_type must round-trip into the output: {stdout}"
     );
+}
+
+#[test]
+fn an_actor_without_actor_type_still_prints() {
+    // The published API has dropped `actor_type`; a server that stops sending
+    // it must not turn every actor command into a decode error.
+    let (_, output) = exchange(
+        r#"{"success":true,"data":{"id":"act-1","display_name":"Ada","tags":[]}}"#,
+        &["actor", "get", "act-1"],
+    );
+    let stdout = assert_success(&output, &["actor", "get"]);
+    assert!(stdout.contains("\"id\": \"act-1\""), "{stdout}");
 }
 
 #[test]
