@@ -2,10 +2,12 @@
 
 pub mod actor;
 pub mod agent;
+pub mod analysis_model;
 pub mod api_key;
 pub mod auth;
 pub mod conversation;
 pub mod fact;
+pub mod industry;
 pub mod invitation;
 pub mod library;
 pub mod member;
