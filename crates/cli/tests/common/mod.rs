@@ -165,6 +165,40 @@ pub fn run(home: &Path, args: &[&str]) -> Output {
         .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
 }
 
+/// [`run`] with `stdin` piped to the child and extra environment variables
+/// set, for commands that read secrets from either.
+pub fn run_with_input(home: &Path, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut command = bin();
+    command
+        .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env_remove("HOMEDRIVE")
+        .env_remove("HOMEPATH")
+        .env_remove("MEMORYLAKE_API_KEY")
+        .env_remove("MEMORYLAKE_BASE_URL")
+        .env_remove("MEMORYLAKE_WORKSPACE")
+        .envs(envs.iter().copied())
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")));
+    // A command that fails before reading stdin closes the pipe; that is the
+    // command's outcome to report, not a test failure here.
+    if let Some(mut pipe) = child.stdin.take() {
+        let _ = pipe.write_all(stdin.as_bytes());
+    }
+    child
+        .wait_with_output()
+        .unwrap_or_else(|err| panic!("wait for memorylake {}: {err}", args.join(" ")))
+}
+
 pub fn assert_success(output: &Output, args: &[&str]) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();

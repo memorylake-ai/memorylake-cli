@@ -13,6 +13,8 @@ use commands::agent::{AgentCommand, run as run_agent};
 use commands::api_key::{ApiKeyCommand, run as run_api_key};
 use commands::auth::{AuthCommand, run as run_auth};
 use commands::conversation::{ConversationCommand, run as run_conversation};
+use commands::datasource::{DatasourceCommand, run as run_datasource};
+use commands::db_connection::{DbConnectionCommand, run as run_db_connection};
 use commands::fact::{FactCommand, run as run_fact};
 use commands::invitation::{InvitationCommand, run as run_invitation};
 use commands::library::{LibraryCommand, run as run_library};
@@ -105,6 +107,19 @@ enum Commands {
         #[command(subcommand)]
         command: FactCommand,
     },
+    /// Manage saved database connections (host, credentials).
+    #[command(visible_alias = "dbconn")]
+    DbConnection {
+        #[command(subcommand)]
+        command: DbConnectionCommand,
+    },
+    /// Manage database datasources: one indexed schema of a connection,
+    /// in a workspace.
+    #[command(visible_alias = "ds")]
+    Datasource {
+        #[command(subcommand)]
+        command: DatasourceCommand,
+    },
     /// Search memories in a workspace.
     Search(SearchArgs),
     /// Show and rename the team this API key belongs to.
@@ -153,6 +168,10 @@ fn main() -> Result<()> {
         Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
         Commands::Conversation { command } => run_conversation(command, cli.profile, cli.base_url)?,
         Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
+        Commands::DbConnection { command } => {
+            run_db_connection(command, cli.profile, cli.base_url)?
+        }
+        Commands::Datasource { command } => run_datasource(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
         Commands::Team { command } => run_team(command, cli.profile, cli.base_url)?,
         Commands::ApiKey { command } => run_api_key(command, cli.profile, cli.base_url)?,

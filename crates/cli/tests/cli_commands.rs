@@ -18,6 +18,9 @@
 //!   document/{offline,live}.rs
 //!   fact/{offline,live}.rs
 //!   conversation/{offline,wire,live}.rs
+//!   db_connection/{offline,wire,live}.rs
+//!   datasource/{offline,wire,live}.rs
+//!   database/{offline,wire,live}.rs   # project database
 //! ```
 //!
 //! Offline tests isolate config under a temporary `$HOME`.
@@ -30,6 +33,9 @@ mod agent;
 mod auth;
 mod common;
 mod conversation;
+mod database;
+mod datasource;
+mod db_connection;
 mod document;
 mod fact;
 mod library;

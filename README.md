@@ -245,6 +245,68 @@ project count as duplicates, not failures.
 current directory. `-o` takes a file path or a directory, and `-o -` streams to
 stdout for piping. An existing file is never replaced without `--force`.
 
+### Databases
+
+A project can use a relational database as memory. Three links make the chain:
+a **connection** (`db-connection`, account-wide) holds how to reach a database
+and its credentials; a **datasource** (`datasource`, in a workspace) picks one
+schema of a connection and indexes it; a **database memory** (`proj db`) adds a
+datasource of the project's workspace to the project. Create them in that order,
+and delete them in the reverse one — a connection or datasource still in use
+cannot be deleted.
+
+```bash
+memorylake dbconn test   --host H [--port 5432] --username U --database D --password-env PGPASSWORD
+memorylake dbconn create --name N --host H [--port P] --username U --database D \
+  (--password-env VAR | --password-stdin | --password-file PATH) [--description D] [--custom-id ID]
+memorylake dbconn list [--name FUZZY] [--page-size N] [--continuation-token TOKEN]
+memorylake dbconn get <id> [--by-custom-id]
+memorylake dbconn update <id> [--name N] [--description D] [--host H] [--port P] \
+  [--username U] [--database D] [password source]
+memorylake dbconn schemas <id>
+memorylake dbconn delete <id>
+
+memorylake ds create --connection <conn-id> --schema public --name N \
+  [--description D] [--custom-id ID] [--table-filter REGEX]
+memorylake ds list [--connection <conn-id>] [--name FUZZY] [--page-size N]
+memorylake ds get <id> [--by-custom-id]
+memorylake ds update <id> [--name N] [--description D] [--table-filter REGEX]
+memorylake ds build <id>
+memorylake ds tables <id> [--name FUZZY]
+memorylake ds columns <id> --table T
+memorylake ds annotate <id> --table T [--column C] [--comment TEXT] [--embedding true|false]
+memorylake ds annotate <id> (--edits '<json array>' | --edits-file edits.json)
+memorylake ds delete <id>
+
+memorylake proj db create --project <id> --datasource <ds-id> --name N \
+  [--instruction TEXT | --instruction-file PATH] [--analysis-model <id>]
+memorylake proj db list   --project <id> [--page-size N]
+memorylake proj db get    --project <id> <db-id>
+memorylake proj db update --project <id> <db-id> [--name N] \
+  [--instruction TEXT | --instruction-file PATH] [--analysis-model <id> | --clear-analysis-model]
+memorylake proj db reload --project <id> <db-id>
+memorylake proj db generate-instruction --project <id> <db-id>
+memorylake proj db delete --project <id> <db-id>
+```
+
+There is no `--password` flag, because a value there ends up in shell history.
+Pass the password through an environment variable, standard input, or a file, or
+type it at the prompt when running interactively. It is write-only: no command
+prints it, and `-vvv` traces show `REDACTED` in its place. Changing a
+connection's host, port, user or database means passing the password again.
+Run `dbconn test` before `create`: it saves nothing and names credential and
+reachability problems, while a failed `create` may only say `INTERNAL_ERROR`.
+
+A datasource covers exactly one schema for now; `dbconn schemas` lists the
+choices. Creating a datasource starts its first index build, and `ds build`
+starts another. Both run in the background — `ds get` shows a non-empty
+`building_version` until the build finishes. Annotations and `--embedding`
+changes take effect on the next build.
+
+`generate-instruction` drafts an instruction and prints it as
+`{"instruction": ...}` without saving it. To keep it, pipe it back in:
+`... generate-instruction ... | jq -r .instruction | memorylake proj db update ... --instruction-file -`.
+
 ### Facts
 
 A fact is one remembered statement, owned by exactly one actor or project.
