@@ -8,6 +8,10 @@ use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 /// Search memories in a workspace.
 ///
+/// Results come back as one ranked list split into `documents`, `facts` and
+/// `databases`; every entry carries a `rank` shared across the three, so
+/// sorting by it restores the overall order.
+///
 /// The filter flags each take one comma-separated value rather than being
 /// repeated, and every list is validated before any request goes out.
 #[derive(Debug, Args)]
@@ -23,14 +27,16 @@ pub struct SearchArgs {
     /// Limit to these projects (comma-separated). Defaults to every project.
     #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
     projects: Option<IdList>,
-    /// Limit to memories associated with these actors (comma-separated).
+    /// Search these actors' memories (comma-separated). Defaults to your own
+    /// actor, not every actor.
     #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
     actors: Option<IdList>,
-    /// Limit to these memory types (comma-separated): document, fact.
+    /// Limit to these memory types (comma-separated): document, fact, database.
     #[arg(long, value_name = "TYPES", value_parser = parse_memory_types)]
     types: Option<MemoryTypeList>,
-    /// Maximum results per source type. The server picks a default when unset.
-    #[arg(long)]
+    /// Maximum results in total, shared across every memory type (1-1000).
+    /// The server defaults to 10.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
     top_k: Option<u32>,
 }
 
@@ -198,6 +204,7 @@ mod tests {
     fn memory_types_accept_the_documented_values() {
         assert_eq!(types("document"), vec![MemoryType::Document]);
         assert_eq!(types("fact"), vec![MemoryType::Fact]);
+        assert_eq!(types("database"), vec![MemoryType::Database]);
         assert_eq!(
             types("document, fact"),
             vec![MemoryType::Document, MemoryType::Fact]

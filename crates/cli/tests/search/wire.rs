@@ -138,6 +138,25 @@ fn results_are_printed_as_pretty_json() {
 }
 
 #[test]
+fn block_fields_and_rank_reach_the_output() {
+    // Paragraph hits carry their text under `highlight.chunks`, not at the top
+    // level; none of it may be lost on the way to stdout.
+    let (_, output) = exchange(
+        r#"{"success":true,"data":{"documents":[{"rank":2,"document_id":"doc-1","items":[{"type":"paragraph","paragraph_id":"p-1","highlight":{"chunks":[{"id":"c-1","text":"1.2M","range":"p.4"}]}}]}],"facts":[{"rank":1,"id":"fact-1","score":1.0}]}}"#,
+        &["search", "--workspace", "ws-1", "revenue"],
+    );
+    let stdout = assert_success(&output, &["search"]);
+    let parsed: Value = serde_json::from_str(&stdout).expect("stdout should be JSON");
+
+    let item = &parsed["documents"][0]["items"][0];
+    assert_eq!(item["type"], "paragraph");
+    assert_eq!(item["paragraph_id"], "p-1");
+    assert_eq!(item["highlight"]["chunks"][0]["text"], "1.2M");
+    assert_eq!(parsed["documents"][0]["rank"], 2);
+    assert_eq!(parsed["facts"][0]["rank"], 1);
+}
+
+#[test]
 fn a_result_set_with_no_matches_still_succeeds() {
     let (_, output) = exchange(EMPTY_RESULTS, &["search", "--workspace", "ws-1", "nothing"]);
     let stdout = assert_success(&output, &["search"]);

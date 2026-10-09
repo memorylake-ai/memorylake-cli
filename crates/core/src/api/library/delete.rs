@@ -11,7 +11,8 @@ use super::paths::item_path;
 /// is irreversible and the server performs no confirmation step; deleting the
 /// workspace root is refused with `403 ACCESS_DENIED`.
 ///
-/// The response carries `success` and `message` but no `data`.
+/// Documented to answer with an empty `data` object, which
+/// [`Client::delete_empty`] accepts whether or not the field is present.
 pub fn delete_item(client: &Client, item_id: &str) -> Result<()> {
-    client.delete_data::<()>(&item_path(item_id))
+    client.delete_empty(&item_path(item_id))
 }

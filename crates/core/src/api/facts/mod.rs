@@ -7,9 +7,9 @@
 //! operation names that scope explicitly ([`FactScope`]). Unlike documents,
 //! facts have no processing pipeline: a stored fact is searchable immediately.
 //!
-//! Facts are immutable. There is no update endpoint — the server handles
-//! semantic conflicts between facts itself, so "updating" is simply storing
-//! the new statement with [`add_facts`].
+//! The API can edit a fact in place (`PATCH .../facts/{id}`), but this crate
+//! does not bind it yet. Storing the new statement with [`add_facts`] also
+//! works: the server resolves semantic conflicts between facts itself.
 
 mod add;
 mod forget;

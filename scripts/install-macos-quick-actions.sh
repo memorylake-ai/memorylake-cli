@@ -272,7 +272,8 @@ DEFAULT_PROJECT_NAME="$PROJECT_NAME"
 CONVERSATION="$CONVERSATION"
 LOG="$LOG_FILE"
 UI_LANG="$LANG_CHOICE"
-TOP_K=5
+# Total across facts and documents, not per type.
+TOP_K=10
 QA_DIR="$QA_DIR"
 . "\$QA_DIR/messages.sh"
 

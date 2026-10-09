@@ -10,9 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use memorylake_core::Client;
 use memorylake_core::api::actors::{
-    Actor, ActorType, CreateActorRequest, ListActorsParams, UpdateActorRequest, bind_actor,
-    create_actor, delete_actor, get_actor, get_actor_by_custom_id, list_actors,
-    list_workspace_actors, unbind_actor, update_actor,
+    Actor, CreateActorRequest, ListActorsParams, UpdateActorRequest, bind_actor, create_actor,
+    delete_actor, get_actor, get_actor_by_custom_id, list_actors, list_workspace_actors,
+    unbind_actor, update_actor,
 };
 use memorylake_core::api::workspaces::{CreateWorkspaceRequest, create_workspace};
 use serde_json::{Map, Value};
@@ -82,7 +82,6 @@ fn create_live_actor(client: &Client, suffix: &str) -> Actor {
         &CreateActorRequest {
             custom_id: format!("cli-live-actor-{suffix}"),
             display_name: format!("CLI Live Actor {suffix}"),
-            actor_type: Some(ActorType::Human),
             description: Some("created by memorylake-cli live test".into()),
             tags: Some(vec!["cli-live".into(), "vip".into()]),
             metadata: Some(metadata(&[("tier", "premium"), ("region", "us-west")])),
@@ -104,7 +103,6 @@ fn create_get_update_and_delete_actor() {
         created.custom_id.as_deref(),
         Some(format!("cli-live-actor-{suffix}").as_str())
     );
-    assert_eq!(created.actor_type, ActorType::Human);
     assert_eq!(created.display_name, format!("CLI Live Actor {suffix}"));
     assert_eq!(
         created.tags,
@@ -203,7 +201,6 @@ fn list_actors_finds_a_created_actor() {
         &client,
         &ListActorsParams {
             page_size: Some(50),
-            actor_type: Some(ActorType::Human),
             display_name_fuzzy: Some(created.display_name.clone()),
             ..ListActorsParams::default()
         },
