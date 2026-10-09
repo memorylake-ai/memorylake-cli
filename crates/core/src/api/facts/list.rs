@@ -1,5 +1,11 @@
 //! List workspace facts
 //! (`GET /api/v3/workspaces/{workspace_id}/memories/facts`).
+//!
+//! The per-scope listings (`GET .../actors/{id}/facts`,
+//! `.../projects/{id}/memories/facts`, `.../agents/{id}/facts`) are
+//! deliberately not bound: this endpoint takes the same `fact_fuzzy` filter
+//! and page-size range, covers any mix of the three scopes in one call, and
+//! additionally tags every fact with its owner.
 
 use serde::{Deserialize, Serialize};
 
@@ -9,33 +15,50 @@ use crate::error::Result;
 use super::path::workspace_facts_path;
 use super::types::Fact;
 
+/// Largest page the API accepts; larger values answer `INVALID_ARGUMENT`
+/// (measured 2026-10-09). The server default is 50.
+pub const MAX_FACT_PAGE_SIZE: u32 = 200;
+
+/// Most distinct owners (actors, projects, and agents together) one listing
+/// may name, per the API documentation.
+pub const MAX_FACT_LIST_OWNERS: usize = 50;
+
 /// Paginated fact list payload.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactList {
-    /// Facts on this page.
+    /// Facts on this page, newest first.
     #[serde(default)]
     pub items: Vec<Fact>,
     /// Exact cross-page count, when the server provides it.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<u64>,
     /// Token for the next page, if any.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_token: Option<String>,
 }
 
 /// Query parameters for listing facts.
 ///
-/// The endpoint requires **at least one** of `actor_ids` / `project_ids`:
-/// with neither filter it answers an empty page rather than "every fact in
-/// the workspace" (measured 2026-08-07, matching the memorylake-mcp
-/// mapping report). Callers enforce that before building a request.
+/// The endpoint requires **at least one** of `actor_ids` / `project_ids` /
+/// `agent_ids`, naming at most [`MAX_FACT_LIST_OWNERS`] distinct owners in
+/// total. With no owner it used to answer an empty page (measured
+/// 2026-08-07) and now answers `INVALID_ARGUMENT` (measured 2026-10-09).
+/// Callers enforce both limits before building a request.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListFactsParams {
     /// Limit to facts owned by these actors.
     pub actor_ids: Vec<String>,
     /// Limit to facts owned by these projects.
     pub project_ids: Vec<String>,
-    /// Page size. The server caps this at 50.
+    /// Limit to facts owned by these agents.
+    ///
+    /// An agent's facts are also reachable through `actor_ids` with the
+    /// agent's own actor id; they come back tagged with the agent as owner
+    /// either way (measured 2026-10-09).
+    pub agent_ids: Vec<String>,
+    /// Keep only facts whose text contains this substring.
+    pub fact_fuzzy: Option<String>,
+    /// Page size, 1 to [`MAX_FACT_PAGE_SIZE`]. The server defaults to 50.
     pub page_size: Option<u32>,
     /// Continuation token from a previous page.
     pub continuation_token: Option<String>,
@@ -53,6 +76,12 @@ impl ListFactsParams {
         }
         for project_id in &self.project_ids {
             query.push(("project_ids", project_id.clone()));
+        }
+        for agent_id in &self.agent_ids {
+            query.push(("agent_ids", agent_id.clone()));
+        }
+        if let Some(fuzzy) = &self.fact_fuzzy {
+            query.push(("fact_fuzzy", fuzzy.clone()));
         }
         if let Some(page_size) = self.page_size {
             query.push(("page_size", page_size.to_string()));
@@ -86,8 +115,10 @@ mod tests {
         let params = ListFactsParams {
             actor_ids: vec!["actor-1".into(), "actor-2".into()],
             project_ids: vec!["proj-1".into()],
-            page_size: Some(50),
-            continuation_token: None,
+            agent_ids: vec!["agent-1".into()],
+            fact_fuzzy: Some("editor".into()),
+            page_size: Some(200),
+            continuation_token: Some("tok".into()),
         };
         assert_eq!(
             params.to_query(),
@@ -95,7 +126,10 @@ mod tests {
                 ("actor_ids", "actor-1".to_string()),
                 ("actor_ids", "actor-2".to_string()),
                 ("project_ids", "proj-1".to_string()),
-                ("page_size", "50".to_string()),
+                ("agent_ids", "agent-1".to_string()),
+                ("fact_fuzzy", "editor".to_string()),
+                ("page_size", "200".to_string()),
+                ("continuation_token", "tok".to_string()),
             ]
         );
     }

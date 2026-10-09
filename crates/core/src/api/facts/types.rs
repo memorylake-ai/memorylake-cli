@@ -1,31 +1,35 @@
 //! Shared fact resource types.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// The single scope a fact belongs to.
 ///
-/// Facts are strictly owned: one fact lives under exactly one actor or one
-/// project, and every fact operation must name that scope. Reading and writing
-/// use the same two shapes, so this enum is shared by all of them.
+/// Facts are strictly owned: one fact lives under exactly one actor, project,
+/// or agent, and every fact operation must name that scope. The same three
+/// shapes also address a scope's memory conflicts and memory settings, so this
+/// enum is shared by all of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FactScope {
     /// Facts attributed to an actor (`actors/{id}/facts`).
     Actor(String),
     /// Facts attached to a project (`projects/{id}/memories/facts`).
     Project(String),
+    /// Facts attributed to an agent (`agents/{id}/facts`).
+    Agent(String),
 }
 
 /// The owning scope the API reports on a listed fact.
 ///
 /// Mirrors [`FactScope`] but stays stringly typed: `type` values other than
-/// `actor` / `project` added server-side must reach the caller unchanged
-/// rather than fail the whole page.
+/// `actor` / `project` / `agent` added server-side must reach the caller
+/// unchanged rather than fail the whole page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactOwner {
-    /// Scope kind: `actor` or `project` in every observed response.
+    /// Scope kind: `actor`, `project`, or `agent`.
     #[serde(rename = "type")]
     pub owner_type: String,
-    /// Id of the owning actor or project.
+    /// Id of the owning actor, project, or agent.
     pub id: String,
 }
 
@@ -34,27 +38,43 @@ pub struct FactOwner {
 /// The fact text lives under the wire key `fact` — the v2 API called it
 /// `content`, and mixing the two up decodes every fact as empty, so the field
 /// is named for the wire and documented here rather than renamed.
+///
+/// Absent optional fields stay absent when re-serialized, and fields this
+/// struct does not model (such as a search `score`) are kept in `extra`, so
+/// printing a decoded fact reproduces what the server sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fact {
     /// Server-assigned fact id.
     pub id: String,
     /// The fact text. Absent in no observed response, but optional so one
     /// malformed item cannot fail a whole page.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fact: Option<String>,
-    /// Owning scope. Present on workspace listings; creation responses omit it
-    /// because the scope is already named in the request path.
-    #[serde(default)]
+    /// Caller-defined metadata. Creation responses omit it; reads return `{}`
+    /// when none was set (measured 2026-10-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+    /// Owning scope. Present on workspace listings; per-scope reads and
+    /// creation responses omit it because the request path already names the
+    /// scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<FactOwner>,
-    /// Whether the fact has expired. Absent means false.
+    /// Whether the fact has expired. Absent means false. A forgotten fact
+    /// reads back through its trace as expired.
     #[serde(default)]
     pub expired: bool,
+    /// When the fact expires or expired, if ever (ISO 8601).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expiration_date: Option<String>,
     /// Creation timestamp (ISO 8601).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     /// Last update timestamp (ISO 8601).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// Fields not modeled above, preserved for output.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[cfg(test)]
@@ -101,6 +121,47 @@ mod tests {
             serde_json::from_str(r#"{"id": "fact-1", "fact": "t", "future_field": {"a": 1}}"#)
                 .expect("decode");
         assert_eq!(fact.fact.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn metadata_expiry_and_unmodeled_fields_survive_a_round_trip() {
+        // Shape measured live 2026-10-09 (the trace of a forgotten fact), plus
+        // a `score` the struct does not model.
+        let raw = serde_json::json!({
+            "id": "fact-08aa",
+            "fact": "probe",
+            "metadata": {"n": [1, 2]},
+            "expired": true,
+            "expiration_date": "2026-10-09T07:41:35.009856Z",
+            "created_at": "2026-10-09T07:40:45.972353Z",
+            "updated_at": "2026-10-09T07:41:35.009856Z",
+            "score": 0.5
+        });
+        let fact: Fact = serde_json::from_value(raw.clone()).expect("decode");
+        assert_eq!(
+            fact.metadata.as_ref().and_then(|map| map.get("n")),
+            Some(&serde_json::json!([1, 2]))
+        );
+        assert_eq!(serde_json::to_value(&fact).expect("encode"), raw);
+    }
+
+    #[test]
+    fn absent_fields_stay_absent_when_printed() {
+        let fact: Fact = serde_json::from_str(r#"{"id": "fact-1", "fact": "t"}"#).expect("decode");
+        assert_eq!(
+            serde_json::to_value(&fact).expect("encode"),
+            serde_json::json!({"id": "fact-1", "fact": "t", "expired": false})
+        );
+    }
+
+    #[test]
+    fn an_agent_owner_decodes() {
+        // Measured live 2026-10-09 on the workspace listing filtered by agent.
+        let fact: Fact = serde_json::from_str(
+            r#"{"id": "fact-1", "owner": {"type": "agent", "id": "agent-110f"}}"#,
+        )
+        .expect("decode");
+        assert_eq!(fact.owner.expect("owner").owner_type, "agent");
     }
 
     #[test]

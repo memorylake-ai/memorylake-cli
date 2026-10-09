@@ -100,7 +100,7 @@ enum Commands {
         #[command(subcommand)]
         command: ConversationCommand,
     },
-    /// Add, delete, and list memory facts.
+    /// Manage memory facts, their conflicts, and fact instructions.
     Fact {
         #[command(subcommand)]
         command: FactCommand,
