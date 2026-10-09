@@ -509,6 +509,54 @@ impl Client {
             .ok_or(PartUploadError::MissingETag)
     }
 
+    /// Upload a whole object to a single-shot pre-signed `upload_url`, sending
+    /// exactly the `headers` the slot was signed for.
+    ///
+    /// Unlike [`Self::put_presigned_part`], the slot dictates the headers: the
+    /// URL's signature covers them, so they are replayed verbatim and nothing
+    /// is guessed. The one exception is `Content-Type` — this client sends JSON
+    /// by default, so when the slot names none, `default_content_type` is used
+    /// instead of letting the JSON default leak onto a binary upload.
+    ///
+    /// No `Authorization` header is sent, for the same reason as part uploads.
+    /// `body` should carry a known length: storage backends reject the chunked
+    /// encoding an unsized body would fall back to.
+    pub fn put_presigned_object(
+        &self,
+        upload_url: &str,
+        headers: &BTreeMap<String, String>,
+        default_content_type: &str,
+        body: Body,
+    ) -> Result<()> {
+        let mut builder = self.http.put(upload_url);
+        if !headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(CONTENT_TYPE.as_str()))
+        {
+            builder = builder.header(CONTENT_TYPE, default_content_type);
+        }
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        let response = builder.body(body).send()?;
+
+        let status = response.status();
+        tracing::trace!(
+            status = status.as_u16(),
+            url = %redact_presigned(upload_url),
+            "object upload response"
+        );
+
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(Error::StorageUploadRefused {
+                status: status.as_u16(),
+                body: redact_presigned(body.trim()).into_owned(),
+            });
+        }
+        Ok(())
+    }
+
     fn url(&self, path: &str) -> String {
         let path = if path.starts_with('/') {
             path.to_string()
@@ -1016,6 +1064,86 @@ mod tests {
             .expect_err("missing ETag is an error");
         assert!(matches!(err, PartUploadError::MissingETag));
         assert!(!err.is_retryable());
+        let _ = server.join();
+    }
+
+    #[test]
+    fn object_upload_replays_the_signed_headers_without_authorization() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let headers = BTreeMap::from([
+            ("Content-Type".to_string(), "application/zip".to_string()),
+            ("x-amz-meta-origin".to_string(), "cli".to_string()),
+        ]);
+
+        client
+            .put_presigned_object(
+                &format!("{base}/bucket/k.zip?X-Amz-Signature=deadbeef"),
+                &headers,
+                "application/octet-stream",
+                Body::from(vec![b'P', b'K', 5, 6]),
+            )
+            .expect("object upload succeeds");
+
+        let request = server.join().expect("server thread");
+        let head = request.head.to_ascii_lowercase();
+        assert!(!request.has_header("authorization"), "{}", request.head);
+        assert!(head.contains("content-type: application/zip"), "{head}");
+        assert!(
+            !head.contains("application/json"),
+            "the JSON default must not leak onto the upload: {head}"
+        );
+        assert!(head.contains("x-amz-meta-origin: cli"), "{head}");
+        assert!(head.contains("content-length: 4"), "{head}");
+        assert_eq!(request.body, vec![b'P', b'K', 5, 6]);
+    }
+
+    #[test]
+    fn object_upload_falls_back_to_the_default_content_type() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+            )
+            .expect("object upload succeeds");
+
+        let head = server
+            .join()
+            .expect("server thread")
+            .head
+            .to_ascii_lowercase();
+        assert!(head.contains("content-type: application/zip"), "{head}");
+    }
+
+    #[test]
+    fn object_upload_reports_a_refusal_with_a_redacted_body() {
+        let body = "<Error>https://s3/x?X-Amz-Signature=secret</Error>";
+        let (base, server) = one_shot_server(format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let err = client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+            )
+            .expect_err("403 is an error");
+        match err {
+            Error::StorageUploadRefused { status, body } => {
+                assert_eq!(status, 403);
+                assert!(!body.contains("secret"), "{body}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
         let _ = server.join();
     }
 

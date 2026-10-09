@@ -124,6 +124,29 @@ pub enum Error {
         source: crate::client::PartUploadError,
     },
 
+    /// A local file cannot be used as a skill package.
+    #[error("{path} cannot be used as a skill package: {reason}")]
+    InvalidSkillPackage {
+        /// Path the caller supplied.
+        path: PathBuf,
+        /// What is wrong with it.
+        reason: String,
+    },
+
+    /// A single-shot pre-signed upload was refused by the storage backend.
+    ///
+    /// The signature is fixed, so resending to the same URL cannot help; the
+    /// caller has to request a fresh upload slot.
+    #[error(
+        "storage refused the upload (HTTP {status}); upload URLs are short-lived — re-run the command\n{body}"
+    )]
+    StorageUploadRefused {
+        /// Status returned by the storage backend.
+        status: u16,
+        /// Response body, with credential-bearing parameters redacted.
+        body: String,
+    },
+
     /// HTTP transport or protocol failure.
     #[error("{}", format_http_error(.0))]
     Http(#[from] reqwest::Error),

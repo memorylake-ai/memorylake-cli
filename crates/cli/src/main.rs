@@ -12,6 +12,7 @@ use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
 use commands::api_key::{ApiKeyCommand, run as run_api_key};
 use commands::auth::{AuthCommand, run as run_auth};
+use commands::boundary::{BoundaryCommand, run as run_boundary};
 use commands::conversation::{ConversationCommand, run as run_conversation};
 use commands::fact::{FactCommand, run as run_fact};
 use commands::invitation::{InvitationCommand, run as run_invitation};
@@ -20,6 +21,7 @@ use commands::member::{MemberCommand, run as run_member};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::role::{RoleCommand, run as run_role};
 use commands::search::{SearchArgs, run as run_search};
+use commands::skill::{SkillCommand, run as run_skill};
 use commands::team::{TeamCommand, run as run_team};
 use commands::usage::{UsageArgs, run as run_usage};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
@@ -94,6 +96,16 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Publish and manage skills agents can use.
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+    /// Manage saved search scopes (boundaries) within a workspace.
+    Boundary {
+        #[command(subcommand)]
+        command: BoundaryCommand,
+    },
     /// Manage conversations and their messages.
     #[command(visible_alias = "conv")]
     Conversation {
@@ -151,6 +163,8 @@ fn main() -> Result<()> {
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
         Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
         Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
+        Commands::Skill { command } => run_skill(command, cli.profile, cli.base_url)?,
+        Commands::Boundary { command } => run_boundary(command, cli.profile, cli.base_url)?,
         Commands::Conversation { command } => run_conversation(command, cli.profile, cli.base_url)?,
         Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,

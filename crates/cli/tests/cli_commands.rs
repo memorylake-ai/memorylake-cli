@@ -11,6 +11,8 @@
 //!   actor/{offline,live}.rs
 //!   library/{offline,live}.rs
 //!   agent/{offline,live}.rs
+//!   skill/{offline,wire,live}.rs
+//!   boundary/{offline,wire,live}.rs
 //!   auth/{offline,live}.rs
 //!   workspace/{offline,live}.rs
 //!   project/{offline,live}.rs
@@ -28,6 +30,7 @@ mod actor;
 mod admin;
 mod agent;
 mod auth;
+mod boundary;
 mod common;
 mod conversation;
 mod document;
@@ -37,4 +40,5 @@ mod library;
 mod meta;
 mod project;
 mod search;
+mod skill;
 mod workspace;
