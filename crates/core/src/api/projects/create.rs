@@ -10,8 +10,8 @@ use super::types::Project;
 
 /// Request body for creating a project.
 ///
-/// The endpoint also accepts `metadata` and `industry_ids`; neither is exposed
-/// yet, so neither is sent.
+/// The endpoint also accepts `metadata`; it is not exposed yet, so it is never
+/// sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CreateProjectRequest {
     /// Display name.
@@ -21,6 +21,10 @@ pub struct CreateProjectRequest {
     /// Optional description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Industry opendata ids to attach (see `/api/v1/industry-opendata`).
+    /// An unknown id is rejected with `INVALID_ARGUMENT`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub industry_ids: Option<Vec<String>>,
 }
 
 /// Create a project inside `workspace_id`.

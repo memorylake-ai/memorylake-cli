@@ -6,7 +6,8 @@
 //!    with a part plan: how many parts, how large each is, and a pre-signed URL
 //!    for each.
 //! 2. `PUT` each part's bytes to its URL, unauthenticated, and keep the `ETag`
-//!    the storage backend returns.
+//!    the storage backend returns, if any. A part without one is still
+//!    reported: the API forbids abandoning an upload over a missing `ETag`.
 //! 3. Finalize via [`create_file`](super::create_file), which is what actually
 //!    makes the file appear in the Library.
 //!
@@ -159,7 +160,7 @@ fn upload_part(
     part: &PartItem,
     offset: u64,
     total: u32,
-) -> Result<String> {
+) -> Result<Option<String>> {
     let mut delay = INITIAL_RETRY_DELAY;
     let mut attempt = 1;
 
@@ -387,7 +388,7 @@ mod tests {
         };
 
         let etag = upload_part(&client, &path, &part, 3, 3).expect("upload part");
-        assert_eq!(etag, "\"e2\"");
+        assert_eq!(etag.as_deref(), Some("e2"));
 
         // The bytes on the wire must be the part's own window, not the file
         // head and not a byte more than `size`.

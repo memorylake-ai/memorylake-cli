@@ -5,6 +5,7 @@ pub mod stub;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -141,6 +142,13 @@ pub fn login_args<'a>(
 }
 
 pub fn run(home: &Path, args: &[&str]) -> Output {
+    isolated(home, args)
+        .output()
+        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
+}
+
+/// The `memorylake` command for `args`, sandboxed to `home`.
+fn isolated(home: &Path, args: &[&str]) -> Command {
     // Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
     // at the directory holding config.toml / credentials.toml.
     //
@@ -151,7 +159,8 @@ pub fn run(home: &Path, args: &[&str]) -> Output {
     // user's config, so they could never see the credentials they had just
     // written. They are still set, so anything else resolving a home directory
     // stays inside the sandbox.
-    bin()
+    let mut command = bin();
+    command
         .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
         .env("HOME", home)
         .env("USERPROFILE", home)
@@ -160,9 +169,31 @@ pub fn run(home: &Path, args: &[&str]) -> Output {
         .env_remove("MEMORYLAKE_API_KEY")
         .env_remove("MEMORYLAKE_BASE_URL")
         .env_remove("MEMORYLAKE_WORKSPACE")
-        .args(args)
-        .output()
-        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
+        .args(args);
+    command
+}
+
+/// [`run`] with `input` written to the child's stdin, for commands that read
+/// a document from `-`.
+pub fn run_with_stdin(home: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = isolated(home, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")));
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("write child stdin");
+    child
+        .wait_with_output()
+        .unwrap_or_else(|err| panic!("wait for memorylake {}: {err}", args.join(" ")))
 }
 
 pub fn assert_success(output: &Output, args: &[&str]) -> String {
@@ -187,50 +218,72 @@ pub fn assert_failure(output: &Output, args: &[&str]) -> String {
     format!("{stdout}{stderr}")
 }
 
+
 /// Custom id of the one workspace that live tests needing *a* workspace share.
+///
+/// Fixed on purpose, with no override: tests write to this workspace (`ws
+/// update` replaces its description and metadata), so it must never be
+/// pointed at a workspace someone actually uses.
 const SCRATCH_WORKSPACE_CUSTOM_ID: &str = "mlcli-live-scratch";
 
-/// The shared scratch workspace's id, created on first use.
+/// The shared scratch workspace's id, created the first time it is missing.
 ///
 /// Workspaces cannot be deleted through this CLI (see issue #15), so a test
 /// that creates one per run leaves the account a little more cluttered every
 /// time. Tests that only need somewhere to put their own projects, folders or
-/// conversations look this one up by a fixed custom id instead, and create it
-/// once. `MEMORYLAKE_LIVE_WORKSPACE` (environment or `.env`) names a different
-/// custom id. `home` must already be logged in.
+/// conversations look this one up by a fixed custom id instead. `home` must
+/// already be logged in.
+///
+/// The id is resolved once per test process: `OnceLock::get_or_init` blocks
+/// concurrent callers until the first finishes, so parallel tests cannot race
+/// each other into the create. Only a `NOT_FOUND` lookup leads to a create;
+/// any other failure (5xx, timeout, bad key) fails the test rather than
+/// guessing. A duplicate custom id is refused with `409 CUSTOM_ID_CONFLICT`
+/// (measured 2026-10-09), so another process creating it first is caught by
+/// looking it up again.
 pub fn scratch_workspace(home: &Path) -> String {
-    load_dotenv();
-    let custom_id = std::env::var("MEMORYLAKE_LIVE_WORKSPACE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| SCRATCH_WORKSPACE_CUSTOM_ID.to_string());
+    static ID: OnceLock<String> = OnceLock::new();
+    ID.get_or_init(|| {
+        let custom_id = SCRATCH_WORKSPACE_CUSTOM_ID;
+        let lookup_args = ["ws", "get", custom_id, "--by-custom-id"];
+        let lookup = || -> Option<String> {
+            let output = run(home, &lookup_args);
+            if output.status.success() {
+                return Some(id_in(&output.stdout));
+            }
+            let err = assert_failure(&output, &lookup_args);
+            assert!(
+                err.contains("[NOT_FOUND]"),
+                "looking up the scratch workspace failed for a reason other than its absence:\n{err}"
+            );
+            None
+        };
+        if let Some(id) = lookup() {
+            return id;
+        }
 
-    let lookup = || {
-        let output = run(home, &["ws", "get", custom_id.as_str(), "--by-custom-id"]);
-        output.status.success().then(|| id_in(&output.stdout))
-    };
-    if let Some(id) = lookup() {
-        return id;
-    }
-    let args = [
-        "ws",
-        "create",
-        "--name",
-        custom_id.as_str(),
-        "--custom-id",
-        custom_id.as_str(),
-        "--description",
-        "Shared scratch workspace for memorylake-cli live tests",
-    ];
-    let output = run(home, &args);
-    if output.status.success() {
-        return id_in(&output.stdout);
-    }
-    // A concurrent test may have created it between the lookup and the create.
-    lookup().unwrap_or_else(|| {
-        assert_success(&output, &args);
-        unreachable!("create failed above")
+        let create_args = [
+            "ws",
+            "create",
+            "--name",
+            custom_id,
+            "--custom-id",
+            custom_id,
+            "--description",
+            "Shared scratch workspace for memorylake-cli live tests",
+        ];
+        let output = run(home, &create_args);
+        if output.status.success() {
+            return id_in(&output.stdout);
+        }
+        let err = assert_failure(&output, &create_args);
+        assert!(
+            err.contains("[CUSTOM_ID_CONFLICT]"),
+            "creating the scratch workspace failed:\n{err}"
+        );
+        lookup().expect("the workspace that conflicted is now found")
     })
+    .clone()
 }
 
 fn id_in(stdout: &[u8]) -> String {

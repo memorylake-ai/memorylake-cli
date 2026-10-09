@@ -46,8 +46,12 @@ pub struct CreateFileRequest {
 pub struct PartETag {
     /// 1-based part number, as assigned by the upload session.
     pub number: u32,
-    /// ETag exactly as the storage backend returned it, quotes included.
-    pub etag: String,
+    /// ETag the storage backend returned for the part, quotes stripped.
+    ///
+    /// `None` when the part upload came back without one; the field is then
+    /// omitted, which the API accepts in place of an ETag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -192,11 +196,11 @@ mod tests {
         let etags = vec![
             PartETag {
                 number: 1,
-                etag: "\"aaa\"".into(),
+                etag: Some("aaa".into()),
             },
             PartETag {
                 number: 2,
-                etag: "\"bbb\"".into(),
+                etag: None,
             },
         ];
         let body = CreateFileBody {
@@ -211,7 +215,7 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&body).unwrap(),
-            r#"{"item_type":"file","parent_item_id":"sc-a:inode-b","name":"big.bin","from":{"upload_id":"u-1","part_etags":[{"number":1,"etag":"\"aaa\""},{"number":2,"etag":"\"bbb\""}]},"name_conflict_strategy":"overwrite"}"#
+            r#"{"item_type":"file","parent_item_id":"sc-a:inode-b","name":"big.bin","from":{"upload_id":"u-1","part_etags":[{"number":1,"etag":"aaa"},{"number":2}]},"name_conflict_strategy":"overwrite"}"#
         );
     }
 }

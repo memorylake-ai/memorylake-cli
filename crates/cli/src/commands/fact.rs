@@ -1,41 +1,47 @@
 //! `memorylake fact` commands.
 //!
 //! Facts are single remembered statements, each owned by exactly one scope —
-//! an actor or a project. `add` and `delete` therefore take the scope as a
-//! required, mutually exclusive `--actor` / `--project` pair, mirroring the
-//! two endpoint shapes; `list` reads across the workspace and filters by
-//! owning scope instead.
+//! an actor, a project, or an agent. Every command that addresses one scope
+//! takes it as a required, mutually exclusive `--actor` / `--project` /
+//! `--agent` trio, mirroring the endpoint shapes; `list` reads across the
+//! workspace and filters by owning scope instead. Each scope's memory
+//! conflicts and fact instruction live under `fact conflict` and
+//! `fact instruction`.
+//!
+//! Every local check (scope flags, ranges, JSON shape) runs before
+//! credentials are resolved, so a malformed command fails the same way
+//! whether or not the caller is logged in.
+
+mod conflict;
+mod instruction;
+mod scope;
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::facts::{
-    AddFactsRequest, FactScope, ListFactsParams, add_facts, forget_fact, list_facts,
+    AddFactsRequest, ListFactsParams, MAX_FACT_PAGE_SIZE, UpdateFactRequest, add_facts,
+    forget_fact, get_fact, list_facts, trace_fact, update_fact,
 };
-use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
+use serde_json::{Map, Value};
 
-use super::require_workspace;
+use super::actor::parse_metadata_object;
+use super::print_json;
 use super::search::{IdList, parse_id_list};
+use conflict::ConflictCommand;
+use instruction::InstructionCommand;
+use scope::{ScopeArgs, Session};
 
 /// `fact` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum FactCommand {
     /// Store facts in one scope.
     ///
-    /// Facts are stored verbatim and are searchable immediately. Facts are
-    /// immutable — to update one, simply add the new statement; the server
-    /// resolves semantic conflicts between facts itself.
+    /// Facts are stored verbatim and are searchable immediately. To change an
+    /// existing fact use `fact update`; the server also detects facts that
+    /// contradict each other (see `fact conflict`).
     Add {
-        /// Workspace id the scope belongs to.
-        ///
-        /// Defaults to the workspace remembered by `workspace use`.
-        #[arg(long)]
-        workspace: Option<String>,
-        /// Store as this actor's facts. Exactly one of --actor / --project.
-        #[arg(long)]
-        actor: Option<String>,
-        /// Store as this project's facts. Exactly one of --actor / --project.
-        #[arg(long)]
-        project: Option<String>,
+        #[command(flatten)]
+        scope: ScopeArgs,
         /// Fact texts to store, one atomic statement each.
         #[arg(required = true, value_name = "TEXT")]
         facts: Vec<String>,
@@ -46,24 +52,59 @@ pub enum FactCommand {
     /// and reported individually. An id that does not exist in the scope
     /// lands in `not_found` instead of failing the others — facts live in
     /// exactly one scope, so a wrong-scope id is an expected outcome, not an
-    /// error.
+    /// error. A forgotten fact's history stays readable with `fact trace`.
     Delete {
-        /// Workspace id the scope belongs to.
-        ///
-        /// Defaults to the workspace remembered by `workspace use`.
-        #[arg(long)]
-        workspace: Option<String>,
-        /// Delete from this actor's facts. Exactly one of --actor / --project.
-        #[arg(long)]
-        actor: Option<String>,
-        /// Delete from this project's facts. Exactly one of --actor / --project.
-        #[arg(long)]
-        project: Option<String>,
+        #[command(flatten)]
+        scope: ScopeArgs,
         /// Fact ids to delete.
         #[arg(required = true, value_name = "FACT_ID")]
         fact_ids: Vec<String>,
     },
-    /// List facts across a workspace, filtered by owning scope.
+    /// Show one fact.
+    ///
+    /// The id must belong to the given scope. A forgotten fact is not found
+    /// here; `fact trace` still shows it.
+    Get {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// Fact id.
+        #[arg(value_name = "FACT_ID")]
+        fact_id: String,
+    },
+    /// Edit a fact's text and/or metadata in place.
+    ///
+    /// Fields left out are unchanged. `--metadata` replaces the whole stored
+    /// metadata object rather than merging into it; pass `'{}'` to clear it.
+    /// A text change is recorded in the fact's history (`fact trace`).
+    Update {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// Fact id.
+        #[arg(value_name = "FACT_ID")]
+        fact_id: String,
+        /// New fact text. Must not be blank.
+        #[arg(long)]
+        text: Option<String>,
+        /// New metadata as a JSON object, replacing the stored one whole.
+        #[arg(long, value_parser = parse_metadata_object)]
+        metadata: Option<Map<String, Value>>,
+    },
+    /// Show a fact and its full change history, newest first.
+    ///
+    /// Works for forgotten facts too. Each entry says what changed (`ADD`,
+    /// `UPDATE`, `FORGET`) and how (`COOK`: extracted from a conversation, with
+    /// its `conversation_id` and message ids; `MANUAL`: through the API).
+    Trace {
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// Fact id.
+        #[arg(value_name = "FACT_ID")]
+        fact_id: String,
+    },
+    /// List facts across a workspace, filtered by owning scope, newest first.
+    ///
+    /// At least one of --actors / --projects / --agents is required, naming
+    /// at most 50 distinct owners in total. Each fact carries its `owner`.
     List {
         /// Workspace id to list in.
         ///
@@ -76,66 +117,110 @@ pub enum FactCommand {
         /// Limit to facts owned by these projects (comma-separated).
         #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
         projects: Option<IdList>,
-        /// Page size. The server caps this at 50.
-        #[arg(long)]
+        /// Limit to facts owned by these agents (comma-separated).
+        #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
+        agents: Option<IdList>,
+        /// Keep only facts whose text contains this substring.
+        #[arg(long, value_name = "TEXT", value_parser = parse_query)]
+        query: Option<String>,
+        /// Page size, 1-200. The server defaults to 50.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=i64::from(MAX_FACT_PAGE_SIZE)))]
         page_size: Option<u32>,
         /// Continuation token from a previous page.
         #[arg(long)]
         continuation_token: Option<String>,
     },
+    /// Review and resolve contradictions the server found between facts.
+    Conflict {
+        #[command(subcommand)]
+        command: ConflictCommand,
+    },
+    /// Read, set, or draft the instruction that steers what a scope records.
+    Instruction {
+        #[command(subcommand)]
+        command: InstructionCommand,
+    },
 }
 
-/// Resolve the required, mutually exclusive `--actor` / `--project` pair.
-///
-/// Enforced at runtime rather than through a clap group so the error can spell
-/// out the scope model instead of a generic conflict message.
-fn resolve_scope(actor: Option<String>, project: Option<String>) -> Result<FactScope> {
-    match (actor, project) {
-        (Some(actor_id), None) => Ok(FactScope::Actor(actor_id)),
-        (None, Some(project_id)) => Ok(FactScope::Project(project_id)),
-        (Some(_), Some(_)) => {
-            bail!("a fact belongs to exactly one scope; pass --actor or --project, not both")
-        }
-        (None, None) => {
-            bail!(
-                "a scope is required: --actor <id> for an actor's facts, --project <id> for a project's"
-            )
-        }
+/// Reject a blank `--query`: an empty one reads as "no filter" server-side,
+/// and an all-whitespace one is almost certainly a quoting mistake.
+fn parse_query(raw: &str) -> std::result::Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("must not be blank".to_string());
     }
+    Ok(raw.to_string())
+}
+
+/// Build the `fact update` body, rejecting an edit that changes nothing.
+///
+/// Blank text is rejected rather than sent: the server treats it as absent
+/// (measured 2026-10-09), so `--text ' ' --metadata ...` would silently update
+/// only the metadata.
+fn build_update(
+    text: Option<String>,
+    metadata: Option<Map<String, Value>>,
+) -> Result<UpdateFactRequest> {
+    if text.as_deref().is_some_and(|text| text.trim().is_empty()) {
+        bail!("--text must not be blank; to remove a fact, use `fact delete`");
+    }
+    if text.is_none() && metadata.is_none() {
+        bail!("nothing to update: pass --text and/or --metadata");
+    }
+    Ok(UpdateFactRequest {
+        fact: text,
+        metadata,
+    })
+}
+
+/// Owner filters for `fact list`, as given on the command line.
+struct ListOwners {
+    actors: Option<IdList>,
+    projects: Option<IdList>,
+    agents: Option<IdList>,
+}
+
+/// Build the `fact list` params and check them against the API's owner
+/// limits before any credentials are resolved.
+fn build_list_params(
+    owners: ListOwners,
+    query: Option<String>,
+    page_size: Option<u32>,
+    continuation_token: Option<String>,
+) -> Result<ListFactsParams> {
+    let params = ListFactsParams {
+        actor_ids: owners.actors.map(|list| list.0).unwrap_or_default(),
+        project_ids: owners.projects.map(|list| list.0).unwrap_or_default(),
+        agent_ids: owners.agents.map(|list| list.0).unwrap_or_default(),
+        fact_fuzzy: query,
+        page_size,
+        continuation_token,
+    };
+    params
+        .validate()
+        .context("check --actors / --projects / --agents")?;
+    Ok(params)
 }
 
 /// Execute a `fact` subcommand.
 pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<String>) -> Result<()> {
-    let paths = Paths::default_home().context("resolve MemoryLake config paths")?;
-    let runtime = resolve(&paths, &ResolveOverrides { profile, base_url })
-        .context("resolve API credentials")?;
-    let client = Client::new(&runtime.base_url, &runtime.api_key).context("build API client")?;
-
     match command {
-        FactCommand::Add {
-            workspace,
-            actor,
-            project,
-            facts,
-        } => {
-            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
-            let scope = resolve_scope(actor, project)?;
+        FactCommand::Add { scope, facts } => {
+            let (workspace, scope) = scope.resolve()?;
+            let session = Session::open(profile, base_url)?;
+            let workspace = session.workspace(workspace)?;
             let request = AddFactsRequest { facts };
-            let data = add_facts(&client, &workspace, &scope, &request).context("add facts")?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
+            let data =
+                add_facts(&session.client, &workspace, &scope, &request).context("add facts")?;
+            print_json(&data)?;
         }
-        FactCommand::Delete {
-            workspace,
-            actor,
-            project,
-            fact_ids,
-        } => {
-            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
-            let scope = resolve_scope(actor, project)?;
+        FactCommand::Delete { scope, fact_ids } => {
+            let (workspace, scope) = scope.resolve()?;
+            let session = Session::open(profile, base_url)?;
+            let workspace = session.workspace(workspace)?;
             let mut forgotten = Vec::new();
             let mut not_found = Vec::new();
             for fact_id in fact_ids {
-                let existed = forget_fact(&client, &workspace, &scope, &fact_id)
+                let existed = forget_fact(&session.client, &workspace, &scope, &fact_id)
                     .with_context(|| format!("delete fact `{fact_id}`"))?;
                 if existed {
                     forgotten.push(fact_id);
@@ -151,7 +236,7 @@ pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<Strin
             // import`: the deletions that succeeded have already happened,
             // and the caller must not have to choose between seeing them and
             // seeing the failure.
-            println!("{}", serde_json::to_string_pretty(&outcome)?);
+            print_json(&outcome)?;
             if !not_found.is_empty() {
                 bail!(
                     "{} fact id(s) were not found in the given scope: {}",
@@ -160,32 +245,58 @@ pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<Strin
                 );
             }
         }
+        FactCommand::Get { scope, fact_id } => {
+            let (workspace, scope) = scope.resolve()?;
+            let session = Session::open(profile, base_url)?;
+            let workspace = session.workspace(workspace)?;
+            let data = get_fact(&session.client, &workspace, &scope, &fact_id)
+                .with_context(|| format!("get fact `{fact_id}`"))?;
+            print_json(&data)?;
+        }
+        FactCommand::Update {
+            scope,
+            fact_id,
+            text,
+            metadata,
+        } => {
+            let (workspace, scope) = scope.resolve()?;
+            let request = build_update(text, metadata)?;
+            let session = Session::open(profile, base_url)?;
+            let workspace = session.workspace(workspace)?;
+            let data = update_fact(&session.client, &workspace, &scope, &fact_id, &request)
+                .with_context(|| format!("update fact `{fact_id}`"))?;
+            print_json(&data)?;
+        }
+        FactCommand::Trace { scope, fact_id } => {
+            let (workspace, scope) = scope.resolve()?;
+            let session = Session::open(profile, base_url)?;
+            let workspace = session.workspace(workspace)?;
+            let data = trace_fact(&session.client, &workspace, &scope, &fact_id)
+                .with_context(|| format!("trace fact `{fact_id}`"))?;
+            print_json(&data)?;
+        }
         FactCommand::List {
             workspace,
             actors,
             projects,
+            agents,
+            query,
             page_size,
             continuation_token,
         } => {
-            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
-            if actors.is_none() && projects.is_none() {
-                // The endpoint answers an empty page in that case (measured
-                // 2026-08-07), which would read as "no facts exist" — reject
-                // the request instead of relaying a misleading answer.
-                bail!(
-                    "at least one of --actors / --projects is required; \
-                     the API returns nothing when neither filter is given"
-                );
-            }
-            let params = ListFactsParams {
-                actor_ids: actors.map(|list| list.0).unwrap_or_default(),
-                project_ids: projects.map(|list| list.0).unwrap_or_default(),
-                page_size,
-                continuation_token,
+            let owners = ListOwners {
+                actors,
+                projects,
+                agents,
             };
-            let data = list_facts(&client, &workspace, &params).context("list facts")?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
+            let params = build_list_params(owners, query, page_size, continuation_token)?;
+            let session = Session::open(profile, base_url)?;
+            let workspace = session.workspace(workspace)?;
+            let data = list_facts(&session.client, &workspace, &params).context("list facts")?;
+            print_json(&data)?;
         }
+        FactCommand::Conflict { command } => conflict::run(command, profile, base_url)?,
+        FactCommand::Instruction { command } => instruction::run(command, profile, base_url)?,
     }
 
     Ok(())
@@ -195,34 +306,80 @@ pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<Strin
 mod tests {
     use super::*;
 
-    #[test]
-    fn an_actor_scope_resolves_alone() {
-        assert_eq!(
-            resolve_scope(Some("actor-1".into()), None).expect("actor scope"),
-            FactScope::Actor("actor-1".into())
-        );
+    fn ids(raw: &[&str]) -> Option<IdList> {
+        Some(IdList(raw.iter().map(|id| id.to_string()).collect()))
     }
 
     #[test]
-    fn a_project_scope_resolves_alone() {
-        assert_eq!(
-            resolve_scope(None, Some("proj-1".into())).expect("project scope"),
-            FactScope::Project("proj-1".into())
-        );
+    fn an_update_needs_text_or_metadata() {
+        let err = build_update(None, None).expect_err("empty update");
+        assert!(err.to_string().contains("nothing to update"), "{err}");
     }
 
     #[test]
-    fn both_scopes_are_rejected() {
-        let err = resolve_scope(Some("actor-1".into()), Some("proj-1".into()))
-            .expect_err("both must be rejected");
-        assert!(err.to_string().contains("not both"), "{err}");
+    fn blank_update_text_is_rejected_even_with_metadata() {
+        let err = build_update(Some("  ".into()), Some(Map::new())).expect_err("blank text");
+        assert!(err.to_string().contains("must not be blank"), "{err}");
     }
 
     #[test]
-    fn a_missing_scope_is_rejected_with_both_options_named() {
-        let err = resolve_scope(None, None).expect_err("missing scope must be rejected");
-        let message = err.to_string();
-        assert!(message.contains("--actor"), "{message}");
-        assert!(message.contains("--project"), "{message}");
+    fn metadata_alone_is_a_valid_update() {
+        let request = build_update(None, Some(Map::new())).expect("metadata-only");
+        assert_eq!(request.fact, None);
+        assert_eq!(request.metadata, Some(Map::new()));
+    }
+
+    fn owners(
+        actors: Option<IdList>,
+        projects: Option<IdList>,
+        agents: Option<IdList>,
+    ) -> ListOwners {
+        ListOwners {
+            actors,
+            projects,
+            agents,
+        }
+    }
+
+    #[test]
+    fn a_listing_needs_an_owner() {
+        let err =
+            build_list_params(owners(None, None, None), None, None, None).expect_err("no owner");
+        let message = format!("{err:#}");
+        assert!(message.contains("--agents"), "{message}");
+        assert!(message.contains("at least one"), "{message}");
+    }
+
+    #[test]
+    fn the_core_owner_cap_is_applied() {
+        let many: Vec<String> = (0..51).map(|i| format!("actor-{i}")).collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        let err = build_list_params(owners(ids(&refs), None, None), None, None, None)
+            .expect_err("51 owners");
+        assert!(format!("{err:#}").contains("at most 50"), "{err:#}");
+    }
+
+    #[test]
+    fn every_list_option_is_passed_through() {
+        let params = build_list_params(
+            owners(ids(&["a"]), ids(&["p"]), ids(&["g"])),
+            Some("q".into()),
+            Some(10),
+            Some("tok".into()),
+        )
+        .expect("valid");
+        assert_eq!(params.actor_ids, vec!["a".to_string()]);
+        assert_eq!(params.project_ids, vec!["p".to_string()]);
+        assert_eq!(params.agent_ids, vec!["g".to_string()]);
+        assert_eq!(params.fact_fuzzy.as_deref(), Some("q"));
+        assert_eq!(params.page_size, Some(10));
+        assert_eq!(params.continuation_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn a_blank_query_is_rejected() {
+        assert!(parse_query("").is_err());
+        assert!(parse_query("  ").is_err());
+        assert_eq!(parse_query(" a ").expect("valid"), " a ");
     }
 }

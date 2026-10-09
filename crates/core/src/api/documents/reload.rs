@@ -19,10 +19,8 @@ pub fn reload_document(
     project_id: &str,
     document_id: &str,
 ) -> Result<()> {
-    client.post_empty(
-        &reload_document_path(workspace_id, project_id, document_id),
-        &serde_json::json!({}),
-    )
+    // The spec documents no request body, so none is sent.
+    client.post_empty(&reload_document_path(workspace_id, project_id, document_id))
 }
 
 #[cfg(test)]
@@ -44,5 +42,6 @@ mod tests {
             "{}",
             request.head
         );
+        assert!(request.body.is_empty(), "no body is sent");
     }
 }

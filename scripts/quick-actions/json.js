@@ -24,6 +24,15 @@ function dig(obj, path) {
 
 function str(v) { return v === null || v === undefined ? '' : String(v); }
 
+// A figure hit carries its text at the top level; paragraph, table and NL2SQL
+// hits carry it in highlight.chunks instead.
+function snippet(it) {
+  if (it.text) return it.text;
+  var chunks = (it.highlight && it.highlight.chunks) || [];
+  for (var i = 0; i < chunks.length; i++) if (chunks[i].text) return chunks[i].text;
+  return '';
+}
+
 var STRINGS = {
   zh: { facts: '【记忆】', docs: '【文档】', none: '没有找到相关记忆。',
         indexed: ' 个已提交索引', dup: ' 个已存在', failed: ' 个导入失败' },
@@ -43,7 +52,7 @@ function formatSearch(d, lang) {
     out.push((out.length ? '\n' : '') + s.docs);
     docs.forEach(function (x, i) {
       var title = x.document_name || x.file_name || x.document_id || '';
-      var snips = (x.items || []).map(function (it) { return it.text; }).filter(Boolean);
+      var snips = (x.items || []).map(snippet).filter(Boolean);
       var snip = str(snips.length ? snips[0] : x.document_summary).trim().replace(/\s+/g, ' ');
       out.push((i + 1) + '. ' + title + (snip ? '\n   ' + snip.slice(0, 200) : ''));
     });

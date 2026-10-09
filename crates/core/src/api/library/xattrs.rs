@@ -33,10 +33,7 @@ pub fn set_xattrs(
     attributes: &BTreeMap<String, String>,
 ) -> Result<()> {
     if attributes.is_empty() {
-        return Err(Error::Api {
-            message: "no extended attributes to set; pass at least one key".into(),
-            code: None,
-        });
+        return Err(Error::NoXattrs { action: "set" });
     }
     client.put_empty(
         &xattrs_path(item_id),
@@ -58,19 +55,10 @@ pub fn delete_xattrs(client: &Client, item_id: &str, keys: &[String]) -> Result<
 /// Join keys into the `key` parameter, refusing what it cannot express.
 fn key_param(keys: &[String]) -> Result<String> {
     if keys.is_empty() {
-        return Err(Error::Api {
-            message: "no extended attribute keys to delete; pass at least one".into(),
-            code: None,
-        });
+        return Err(Error::NoXattrs { action: "delete" });
     }
     if let Some(bad) = keys.iter().find(|key| key.is_empty() || key.contains(',')) {
-        return Err(Error::Api {
-            message: format!(
-                "extended attribute key `{bad}` cannot be deleted: keys are sent comma-separated, \
-                 so they must be non-empty and contain no comma"
-            ),
-            code: None,
-        });
+        return Err(Error::InvalidXattrKey { key: bad.clone() });
     }
     Ok(keys.join(","))
 }
@@ -107,7 +95,7 @@ mod tests {
     fn set_refuses_an_empty_map_without_a_request() {
         let client = Client::new("http://127.0.0.1:1", "sk-test").unwrap();
         let err = set_xattrs(&client, "sc-a:inode-b", &BTreeMap::new()).expect_err("empty");
-        assert!(err.to_string().contains("at least one"), "{err}");
+        assert!(matches!(err, Error::NoXattrs { action: "set" }), "{err:?}");
     }
 
     #[test]
@@ -120,8 +108,15 @@ mod tests {
 
     #[test]
     fn keys_that_cannot_be_expressed_are_refused() {
-        assert!(key_param(&[]).is_err());
-        assert!(key_param(&["a,b".to_string()]).is_err());
-        assert!(key_param(&[String::new()]).is_err());
+        assert!(matches!(
+            key_param(&[]),
+            Err(Error::NoXattrs { action: "delete" })
+        ));
+        for bad in ["a,b", ""] {
+            assert!(
+                matches!(key_param(&[bad.to_string()]), Err(Error::InvalidXattrKey { ref key }) if key == bad),
+                "{bad:?}"
+            );
+        }
     }
 }

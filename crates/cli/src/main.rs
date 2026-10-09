@@ -10,16 +10,20 @@ use tracing_subscriber::EnvFilter;
 
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
+use commands::analysis_model::{AnalysisModelCommand, run as run_analysis_model};
 use commands::api_key::{ApiKeyCommand, run as run_api_key};
 use commands::auth::{AuthCommand, run as run_auth};
+use commands::boundary::{BoundaryCommand, run as run_boundary};
 use commands::conversation::{ConversationCommand, run as run_conversation};
 use commands::fact::{FactCommand, run as run_fact};
+use commands::industry::{IndustryCommand, run as run_industry};
 use commands::invitation::{InvitationCommand, run as run_invitation};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::member::{MemberCommand, run as run_member};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::role::{RoleCommand, run as run_role};
 use commands::search::{SearchArgs, run as run_search};
+use commands::skill::{SkillCommand, run as run_skill};
 use commands::team::{TeamCommand, run as run_team};
 use commands::usage::{UsageArgs, run as run_usage};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
@@ -94,19 +98,40 @@ enum Commands {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Publish and manage skills agents can use.
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+    /// Manage saved search scopes (boundaries) within a workspace.
+    Boundary {
+        #[command(subcommand)]
+        command: BoundaryCommand,
+    },
     /// Manage conversations and their messages.
     #[command(visible_alias = "conv")]
     Conversation {
         #[command(subcommand)]
         command: ConversationCommand,
     },
-    /// Add, delete, and list memory facts.
+    /// Manage memory facts, their conflicts, and fact instructions.
     Fact {
         #[command(subcommand)]
         command: FactCommand,
     },
     /// Search memories in a workspace.
     Search(SearchArgs),
+    /// Manage analysis models and their knowledge entries.
+    #[command(visible_alias = "am")]
+    AnalysisModel {
+        #[command(subcommand)]
+        command: AnalysisModelCommand,
+    },
+    /// List the industry opendata a project can draw on.
+    Industry {
+        #[command(subcommand)]
+        command: IndustryCommand,
+    },
     /// Show and rename the team this API key belongs to.
     Team {
         #[command(subcommand)]
@@ -151,9 +176,15 @@ fn main() -> Result<()> {
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
         Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
         Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
+        Commands::Skill { command } => run_skill(command, cli.profile, cli.base_url)?,
+        Commands::Boundary { command } => run_boundary(command, cli.profile, cli.base_url)?,
         Commands::Conversation { command } => run_conversation(command, cli.profile, cli.base_url)?,
         Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
+        Commands::AnalysisModel { command } => {
+            run_analysis_model(command, cli.profile, cli.base_url)?
+        }
+        Commands::Industry { command } => run_industry(command, cli.profile, cli.base_url)?,
         Commands::Team { command } => run_team(command, cli.profile, cli.base_url)?,
         Commands::ApiKey { command } => run_api_key(command, cli.profile, cli.base_url)?,
         Commands::Member { command } => run_member(command, cli.profile, cli.base_url)?,

@@ -11,6 +11,7 @@ use memorylake_core::api::projects::{
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 use super::require_workspace;
+use super::search::{IdList, parse_id_list};
 use document::{DocumentCommand, run as run_document};
 
 /// Project subcommands.
@@ -52,6 +53,10 @@ pub enum ProjectCommand {
         /// Optional description.
         #[arg(long)]
         description: Option<String>,
+        /// Industry opendata ids to attach, comma-separated, e.g.
+        /// `research/academic,financial/markets`. See `industry list`.
+        #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
+        industry_ids: Option<IdList>,
     },
     /// Get a single project by id.
     Get {
@@ -66,7 +71,7 @@ pub enum ProjectCommand {
         #[arg(long)]
         by_custom_id: bool,
     },
-    /// Update a project's name or description.
+    /// Update a project's name, description, or industries.
     ///
     /// Only the flags you pass are sent; omitted fields are left unchanged.
     Update {
@@ -83,6 +88,13 @@ pub enum ProjectCommand {
         /// New description.
         #[arg(long)]
         description: Option<String>,
+        /// New industry opendata ids, comma-separated. REPLACES the attached
+        /// set — list every industry you want to keep.
+        #[arg(long, value_name = "IDS", value_parser = parse_id_list, conflicts_with = "clear_industries")]
+        industry_ids: Option<IdList>,
+        /// Detach every industry from the project.
+        #[arg(long)]
+        clear_industries: bool,
     },
     /// Permanently delete a project.
     ///
@@ -153,6 +165,7 @@ pub fn run(
             name,
             custom_id,
             description,
+            industry_ids,
         } => {
             let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = create_project(
@@ -162,6 +175,7 @@ pub fn run(
                     name,
                     custom_id,
                     description,
+                    industry_ids: industry_ids.map(|list| list.0),
                 },
             )
             .context("create project")?;
@@ -186,13 +200,25 @@ pub fn run(
             id,
             name,
             description,
+            industry_ids,
+            clear_industries,
         } => {
             let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
+            // `--clear-industries` sends an empty list, which the API reads as
+            // "detach all"; leaving both flags out sends nothing and keeps them.
+            let industry_ids = match industry_ids {
+                Some(list) => Some(list.0),
+                None => clear_industries.then(Vec::new),
+            };
             let data = update_project(
                 &client,
                 &workspace,
                 &id,
-                &UpdateProjectRequest { name, description },
+                &UpdateProjectRequest {
+                    name,
+                    description,
+                    industry_ids,
+                },
             )
             .context("update project")?;
             println!("{}", serde_json::to_string_pretty(&data)?);

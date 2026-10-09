@@ -28,7 +28,6 @@ pub fn subscribe_task(
         .get_event_stream(
             &task_subscribe_path(workspace_id, agent_id, task_id),
             &[],
-            &[],
         )
         .map_err(describe_a2a_error)
 }
