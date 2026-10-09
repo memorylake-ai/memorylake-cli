@@ -251,6 +251,16 @@ pub fn exchange(response: &str, args: &[&str]) -> (String, Output) {
     (request, output)
 }
 
+/// [`exchange`] with `input` piped to the command's stdin.
+pub fn exchange_with_stdin(response: &str, args: &[&str], input: &str) -> (String, Output) {
+    let server = StubServer::new(response);
+    let home = logged_in_home(&server.base_url);
+    let output = super::run_with_stdin(&home, args, input);
+    let request = server.received();
+    let _ = fs::remove_dir_all(&home);
+    (request, output)
+}
+
 /// Run one command against a stub that answers `responses` in order, and
 /// report every request the CLI sent alongside the process output.
 ///

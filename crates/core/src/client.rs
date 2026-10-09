@@ -184,12 +184,40 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path)?;
-        let request = apply_headers(self.http.post(&url), headers)
-            .headers(self.auth_headers()?)
-            .json(body)
-            .build()?;
+        let request = self.json_post(path, body, headers)?.build()?;
         self.send(request)
+    }
+
+    /// [`Self::post_data`] with a per-request timeout replacing the client's
+    /// default (30 seconds), for endpoints documented to run long.
+    pub fn post_data_with_timeout<T, B>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: std::time::Duration,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
+        let request = self.json_post(path, body, &[])?.timeout(timeout).build()?;
+        self.send(request)
+    }
+
+    /// An authenticated POST of `body` as JSON, with extra headers applied.
+    fn json_post<B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<reqwest::blocking::RequestBuilder>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path)?;
+        Ok(apply_headers(self.http.post(&url), headers)
+            .headers(self.auth_headers()?)
+            .json(body))
     }
 
     /// Perform a PATCH with a JSON body and deserialize the API `data` payload.
@@ -1716,6 +1744,67 @@ mod tests {
             request.contains(r#"{"display_name":"Alice"}"#),
             "body not sent: {request}"
         );
+    }
+
+    #[test]
+    fn post_with_timeout_sends_json_body_and_decodes_data() {
+        let server = StubServer::new("200 OK", r#"{"success":true,"data":{"ok":true}}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let data: Value = client
+            .post_data_with_timeout(
+                "/api/v3/drafts",
+                &serde_json::json!({"guidance": "g"}),
+                std::time::Duration::from_secs(5),
+            )
+            .expect("post should decode data");
+        assert_eq!(data["ok"], true);
+
+        let request = server.received();
+        assert!(
+            request.starts_with("POST /api/v3/drafts "),
+            "unexpected request line: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sk_test_key_1234"),
+            "authorization not sent: {request}"
+        );
+        assert!(
+            request.contains(r#"{"guidance":"g"}"#),
+            "body not sent: {request}"
+        );
+    }
+
+    #[test]
+    fn post_with_timeout_gives_up_on_a_silent_server() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent server");
+        let base_url = format!("http://{}", listener.local_addr().expect("address"));
+        // Accept the connection and hold it open, unanswered, until the
+        // client has given up.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept the client");
+            // Released by the test body, or by its sender dropping if the
+            // body panicked; the connection closes either way.
+            let _ = released.recv_timeout(std::time::Duration::from_secs(10));
+            drop(stream);
+        });
+        let client = Client::new(&base_url, "sk_test_key_1234").unwrap();
+
+        let err = client
+            .post_data_with_timeout::<Value, _>(
+                "/api/v3/drafts",
+                &serde_json::json!({}),
+                std::time::Duration::from_millis(200),
+            )
+            .expect_err("a silent server must time out");
+        assert!(err.to_string().contains("timed out"), "{err}");
+        release.send(()).expect("holder thread is waiting");
+        holder.join().expect("holder thread finished cleanly");
     }
 
     #[test]

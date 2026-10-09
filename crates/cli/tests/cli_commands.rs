@@ -18,7 +18,7 @@
 //!   project/{offline,live}.rs
 //!   search/{offline,wire,live}.rs
 //!   document/{offline,live}.rs
-//!   fact/{offline,live}.rs
+//!   fact/{offline,wire,live}.rs
 //!   conversation/{offline,wire,live}.rs
 //! ```
 //!

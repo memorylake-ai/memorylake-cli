@@ -251,17 +251,55 @@ stdout for piping. An existing file is never replaced without `--force`.
 
 ### Facts
 
-A fact is one remembered statement, owned by exactly one actor or project.
+A fact is one remembered statement, owned by exactly one actor, project, or agent.
+`<scope>` below is one of `--actor <id>`, `--project <id>`, or `--agent <id>`.
 
 ```bash
-memorylake fact add (--actor <id> | --project <id>) "fact text" ["another" ...]
-memorylake fact list (--actors a,b | --projects a,b) [--page-size N]
-memorylake fact delete (--actor <id> | --project <id>) <fact-id>...
+memorylake fact add <scope> "fact text" ["another" ...]
+memorylake fact get <scope> <fact-id>
+memorylake fact update <scope> <fact-id> [--text TEXT] [--metadata '{"k":"v"}']
+memorylake fact trace <scope> <fact-id>
+memorylake fact delete <scope> <fact-id>...
+memorylake fact list [--actors a,b] [--projects a,b] [--agents a,b] [--query TEXT]
+  [--page-size N] [--continuation-token TOK]
 ```
 
-Facts are stored verbatim and are searchable immediately. To change one, add the
-new statement and let the server resolve the conflict.
-`fact list` needs at least one of `--actors` / `--projects`.
+Facts are stored verbatim and are searchable immediately. `fact update` edits
+one in place; its `--metadata` replaces the stored object whole (`'{}'` clears
+it). `fact trace` shows every add, edit, and forget, newest first — forgotten
+facts included. `fact list` needs at least one of `--actors` / `--projects` /
+`--agents` (50 distinct owners at most) and tags each fact with its `owner`.
+
+The server records contradictions between a scope's facts (and between a
+project's facts and its documents) as conflicts for review:
+
+```bash
+memorylake fact conflict list <scope> [--resolved BOOL] [--category m2m|m2d|self]
+  [--conflict-type logical|knowledge] [--stale BOOL] [--page-size N]
+memorylake fact conflict get <scope> <conflict-id>
+memorylake fact conflict resolve <scope> <conflict-id> --strategy dismiss
+memorylake fact conflict resolve <scope> <conflict-id> --strategy keep_fact --keep-fact-id <fact-id>
+memorylake fact conflict resolve <scope> <conflict-id> --strategy edit_fact --edit "<fact-id>=new text"
+```
+
+`m2m` conflicts take `keep_fact` or `dismiss`, `m2d` take `trust_fact`,
+`trust_document`, or `dismiss`, and `self` take `edit_fact` or `dismiss`.
+
+Each scope's fact instruction — Markdown saying what its memory is about and
+what it is not — steers what the server records there:
+
+```bash
+memorylake fact instruction get <scope>
+memorylake fact instruction set <scope> (--text TEXT | --file instruction.md | --file -)
+memorylake fact instruction clear <scope>
+memorylake fact instruction draft <scope> [--guidance TEXT] [--language "Simplified Chinese"]
+  [--use-existing-facts] [--use-documents]
+```
+
+`set` replaces the instruction whole (2000 characters at most); `clear` restores
+the built-in default. `draft` asks a language model for a candidate and takes a
+few seconds; it saves nothing — review it, then `set` it. `--language` is an
+English language name, not a locale tag like `zh-CN`.
 
 ### Conversations
 

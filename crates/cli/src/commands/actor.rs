@@ -294,7 +294,7 @@ fn parse_tag_list(raw: &str) -> std::result::Result<TagList, String> {
 ///
 /// Rejects malformed JSON and valid JSON that is not an object, so an invalid
 /// value never reaches the API.
-fn parse_metadata_object(raw: &str) -> std::result::Result<Map<String, Value>, String> {
+pub(crate) fn parse_metadata_object(raw: &str) -> std::result::Result<Map<String, Value>, String> {
     let value: Value = serde_json::from_str(raw)
         .map_err(|err| format!("must be a JSON object: invalid JSON: {err}"))?;
     match value {

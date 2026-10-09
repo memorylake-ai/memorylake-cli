@@ -141,6 +141,13 @@ pub fn login_args<'a>(
 }
 
 pub fn run(home: &Path, args: &[&str]) -> Output {
+    isolated(home, args)
+        .output()
+        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
+}
+
+/// The `memorylake` command for `args`, sandboxed to `home`.
+fn isolated(home: &Path, args: &[&str]) -> Command {
     // Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
     // at the directory holding config.toml / credentials.toml.
     //
@@ -151,7 +158,8 @@ pub fn run(home: &Path, args: &[&str]) -> Output {
     // user's config, so they could never see the credentials they had just
     // written. They are still set, so anything else resolving a home directory
     // stays inside the sandbox.
-    bin()
+    let mut command = bin();
+    command
         .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
         .env("HOME", home)
         .env("USERPROFILE", home)
@@ -160,9 +168,31 @@ pub fn run(home: &Path, args: &[&str]) -> Output {
         .env_remove("MEMORYLAKE_API_KEY")
         .env_remove("MEMORYLAKE_BASE_URL")
         .env_remove("MEMORYLAKE_WORKSPACE")
-        .args(args)
-        .output()
-        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
+        .args(args);
+    command
+}
+
+/// [`run`] with `input` written to the child's stdin, for commands that read
+/// a document from `-`.
+pub fn run_with_stdin(home: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = isolated(home, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")));
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("write child stdin");
+    child
+        .wait_with_output()
+        .unwrap_or_else(|err| panic!("wait for memorylake {}: {err}", args.join(" ")))
 }
 
 pub fn assert_success(output: &Output, args: &[&str]) -> String {

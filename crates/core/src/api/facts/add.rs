@@ -1,5 +1,6 @@
 //! Create facts in one scope
-//! (`POST .../actors/{id}/facts` or `POST .../projects/{id}/memories/facts`).
+//! (`POST .../actors/{id}/facts`, `POST .../projects/{id}/memories/facts`, or
+//! `POST .../agents/{id}/facts`).
 
 use serde::{Deserialize, Serialize};
 
