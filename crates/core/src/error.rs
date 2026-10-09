@@ -162,6 +162,20 @@ pub enum Error {
         source: reqwest::Error,
     },
 
+    /// A request path contained an empty, `.` or `..` segment.
+    ///
+    /// URL parsing collapses dot segments, so an id of `..` would silently
+    /// address the parent resource — `project delete ..` would become a
+    /// workspace delete — and an empty id addresses the collection. Such a
+    /// request is refused before it is sent.
+    #[error(
+        "refusing to request `{path}`: an id is empty, `.` or `..`, which would address a different resource"
+    )]
+    InvalidPathSegment {
+        /// The request path as built, before the base URL is prepended.
+        path: String,
+    },
+
     /// HTTP transport or protocol failure.
     #[error("{}", format_http_error(.0))]
     Http(#[from] reqwest::Error),
