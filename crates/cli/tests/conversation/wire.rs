@@ -582,3 +582,129 @@ fn the_first_message_in_a_conversation_sends_a_null_parent() {
     );
     assert_eq!(body["parent_message_id"], serde_json::Value::Null);
 }
+
+const FACT_ACTIONS: &str = r#"{"success":true,"data":{"items":[{"event":"ADD","history_id":"facthist-1","fact_id":"fact-1","new_fact":"Lives in Lisbon.","changed_at":"2026-10-09T07:44:21Z"}],"total":1}}"#;
+
+#[test]
+fn fact_actions_name_the_owner_in_the_query() {
+    for (owner_flag, owner_type) in [("--actor", "actor"), ("--project", "project")] {
+        let args = [
+            "conversation",
+            "fact-actions",
+            "--workspace",
+            "ws-1",
+            "conv-1",
+            owner_flag,
+            "owner-1",
+        ];
+        let (request, output) = exchange(FACT_ACTIONS, &args);
+        let stdout = assert_success(&output, &args);
+
+        assert_eq!(
+            request_line(&request),
+            format!(
+                "GET /api/v3/workspaces/ws-1/memories/conversations/conv-1/fact-actions?owner_type={owner_type}&owner_id=owner-1 HTTP/1.1"
+            )
+        );
+        let printed: Value = serde_json::from_str(&stdout).expect("page JSON");
+        assert_eq!(printed["items"][0]["event"], "ADD");
+    }
+}
+
+#[test]
+fn fact_actions_forward_every_filter() {
+    let args = [
+        "conversation",
+        "fact-actions",
+        "--workspace",
+        "ws-1",
+        "session-42",
+        "--actor",
+        "actor-1",
+        "--message",
+        "conv-entry-1",
+        "--by-custom-id",
+        "--page-size",
+        "5",
+        "--continuation-token",
+        "tok",
+    ];
+    let (request, output) = exchange(FACT_ACTIONS, &args);
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "GET /api/v3/workspaces/ws-1/memories/conversations/session-42/fact-actions?owner_type=actor&owner_id=actor-1&message_id=conv-entry-1&by_custom_id=true&page_size=5&continuation_token=tok HTTP/1.1"
+    );
+}
+
+#[test]
+fn consumed_messages_send_the_message_id_and_print_the_batch() {
+    let response = r#"{"success":true,"data":[{"message_id":"conv-entry-1","custom_id":"m1","sequence_no":1}]}"#;
+    let args = [
+        "conversation",
+        "consumed",
+        "--workspace",
+        "ws-1",
+        "conv-1",
+        "--message",
+        "conv-entry-1",
+    ];
+    let (request, output) = exchange(response, &args);
+    let stdout = assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "GET /api/v3/workspaces/ws-1/memories/conversations/conv-1/consumed-messages?message_id=conv-entry-1 HTTP/1.1"
+    );
+    let printed: Value = serde_json::from_str(&stdout).expect("array JSON");
+    assert_eq!(printed[0]["custom_id"], "m1");
+}
+
+#[test]
+fn consumed_messages_can_address_the_conversation_by_custom_id() {
+    let args = [
+        "conversation",
+        "consumed-messages",
+        "--workspace",
+        "ws-1",
+        "session-42",
+        "--message",
+        "conv-entry-1",
+        "--by-custom-id",
+    ];
+    let (request, output) = exchange(r#"{"success":true,"data":[]}"#, &args);
+    assert_success(&output, &args);
+    assert!(
+        request_line(&request).ends_with(
+            "/conversations/session-42/consumed-messages?message_id=conv-entry-1&by_custom_id=true HTTP/1.1"
+        ),
+        "{request}"
+    );
+}
+
+#[test]
+fn message_get_posts_the_ids_to_batch_get_without_a_workspace() {
+    let response = r#"{"success":true,"data":[{"id":"conv-entry-2","sequence_no":2,"agent_id":"agent-1","content":[{"block_type":"TEXT","text":"hi"}]},{"id":"conv-entry-1","sequence_no":1,"content":[]}]}"#;
+    let args = [
+        "conversation",
+        "message",
+        "get",
+        "conv-1",
+        "conv-entry-2",
+        "conv-entry-1",
+    ];
+    let (request, output) = exchange(response, &args);
+    let stdout = assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "POST /api/v3/conversations/conv-1/messages/batch-get HTTP/1.1"
+    );
+    assert_eq!(
+        body_of(&request),
+        json!({"entry_ids": ["conv-entry-2", "conv-entry-1"]})
+    );
+    let printed: Value = serde_json::from_str(&stdout).expect("array JSON");
+    assert_eq!(printed[0]["agent_id"], "agent-1", "agent_id is surfaced");
+    assert_eq!(printed[1]["id"], "conv-entry-1");
+}

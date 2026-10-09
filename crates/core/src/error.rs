@@ -177,6 +177,24 @@ pub enum Error {
         source: reqwest::Error,
     },
 
+    /// An extended-attribute call named nothing to set or delete; the API
+    /// rejects it with 400.
+    #[error("no extended attributes to {action}; pass at least one")]
+    NoXattrs {
+        /// `set` or `delete`.
+        action: &'static str,
+    },
+
+    /// An extended-attribute key that the comma-separated `key` parameter of
+    /// a delete cannot express.
+    #[error(
+        "extended attribute key `{key}` cannot be deleted: keys are sent comma-separated, so they must be non-empty and contain no comma"
+    )]
+    InvalidXattrKey {
+        /// The key as given.
+        key: String,
+    },
+
     /// A request path contained an empty, `.` or `..` segment.
     ///
     /// URL parsing collapses dot segments, so an id of `..` would silently

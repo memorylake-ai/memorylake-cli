@@ -26,6 +26,27 @@ pub struct ListChildrenParams {
     pub page_size: Option<u32>,
     /// Continuation token from a previous response.
     pub continuation_token: Option<String>,
+    /// Extended-attribute keys to attach to each item, sent comma-separated
+    /// as `with_xattr_keys`. When given, `x_attrs` carries those keys only;
+    /// `None` leaves the choice to the server, which then returns its default
+    /// set (measured 2026-10-09).
+    pub with_xattr_keys: Option<Vec<String>>,
+}
+
+impl ListChildrenParams {
+    fn to_query(&self) -> Vec<(&'static str, String)> {
+        let mut query = Vec::new();
+        if let Some(page_size) = self.page_size {
+            query.push(("page_size", page_size.to_string()));
+        }
+        if let Some(token) = &self.continuation_token {
+            query.push(("continuation_token", token.clone()));
+        }
+        if let Some(keys) = &self.with_xattr_keys {
+            query.push(("with_xattr_keys", keys.join(",")));
+        }
+        query
+    }
 }
 
 /// List the direct children of a folder.
@@ -39,12 +60,31 @@ pub fn list_children(
     item_id: &str,
     params: &ListChildrenParams,
 ) -> Result<ItemList> {
-    let mut query = Vec::new();
-    if let Some(page_size) = params.page_size {
-        query.push(("page_size", page_size.to_string()));
+    client.get_data(&children_path(item_id), &params.to_query())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_params_send_nothing() {
+        assert!(ListChildrenParams::default().to_query().is_empty());
     }
-    if let Some(token) = &params.continuation_token {
-        query.push(("continuation_token", token.clone()));
+
+    #[test]
+    fn xattr_keys_are_sent_comma_separated() {
+        let params = ListChildrenParams {
+            page_size: Some(10),
+            continuation_token: None,
+            with_xattr_keys: Some(vec!["team".into(), "owner".into()]),
+        };
+        assert_eq!(
+            params.to_query(),
+            vec![
+                ("page_size", "10".to_string()),
+                ("with_xattr_keys", "team,owner".to_string()),
+            ]
+        );
     }
-    client.get_data(&children_path(item_id), &query)
 }

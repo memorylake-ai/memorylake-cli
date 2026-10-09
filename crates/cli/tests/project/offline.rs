@@ -209,6 +209,31 @@ fn a_missing_workspace_is_reported_with_how_to_supply_one() {
 }
 
 #[test]
+fn stats_is_listed_and_takes_a_project_id() {
+    let home = temp_home();
+    let args = ["project", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("stats"), "{stdout}");
+
+    let args = ["project", "stats", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("--workspace"), "{stdout}");
+    assert!(
+        !stdout.contains("--by-custom-id"),
+        "the endpoint has no custom_id lookup: {stdout}"
+    );
+
+    let args = ["project", "stats", "--workspace", "ws-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("<ID>"), "{err}");
+
+    let args = ["project", "stats", "--workspace", "ws-1", "proj-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("not logged in"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
 fn a_dot_dot_project_id_never_reaches_the_network() {
     // URL parsing would collapse `projects/..` into the workspace itself, so
     // `project delete ..` must be refused rather than sent as a workspace

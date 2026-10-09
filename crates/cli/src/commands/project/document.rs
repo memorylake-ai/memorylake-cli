@@ -19,9 +19,10 @@ use crate::commands::require_workspace;
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::documents::{
-    DOCUMENT_STATUS_ERROR, DeleteDocumentsRequest, ImportDocumentsRequest, ImportOutcome,
-    ListDocumentsParams, delete_documents, download_document, get_document, import_documents,
-    is_terminal_status, list_documents,
+    DOCUMENT_STATUS_ERROR, DeleteDocumentsRequest, DocumentInspection, INSPECT_MAX_DOCUMENTS,
+    ImportDocumentsRequest, ImportOutcome, InspectDocumentsRequest, ListDocumentsParams,
+    delete_documents, download_document, get_document, import_documents, inspect_documents,
+    is_terminal_status, list_documents, reload_document,
 };
 use memorylake_core::api::library::{Item, ItemList, ListChildrenParams, get_item, list_children};
 use memorylake_core::{Client, Paths};
@@ -137,6 +138,49 @@ pub enum DocumentCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Show low-level processing details for documents: parsed worksheets,
+    /// generated artifacts, the pipeline that ran.
+    ///
+    /// Fields ending in `_s3_url` / `_s3_uri`, and `persist_path`, are
+    /// pre-signed storage links that work for anyone holding them until they
+    /// expire; treat the output as a credential. Documents in `error` status
+    /// are left out of the response by the server, and the ids missing from
+    /// it are named on stderr.
+    Inspect {
+        /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Project containing the documents.
+        #[arg(long)]
+        project: String,
+        /// Document ids to inspect (1–100).
+        #[arg(
+            required = true,
+            num_args = 1..=INSPECT_MAX_DOCUMENTS,
+            value_name = "DOCUMENT_ID",
+            value_parser = crate::commands::parse_non_blank
+        )]
+        document_ids: Vec<String>,
+    },
+    /// Process a failed document again.
+    ///
+    /// Only a document whose status is `error` can be reloaded. It keeps its
+    /// id, returns to `pending`, and is processed in the background like an
+    /// import; follow it with `document get`. A retry is not charged again.
+    Reload {
+        /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Project containing the document.
+        #[arg(long)]
+        project: String,
+        /// Document id.
+        document_id: String,
+    },
     /// Remove documents from a project.
     ///
     /// This cannot be undone: the indexed content and every memory derived from
@@ -233,6 +277,47 @@ pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentComma
                 force,
             )
         }
+        DocumentCommand::Inspect {
+            workspace,
+            project,
+            document_ids,
+        } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
+            let data = inspect_documents(
+                client,
+                &workspace,
+                &project,
+                &InspectDocumentsRequest {
+                    document_ids: document_ids.clone(),
+                },
+            )
+            .with_context(|| format!("inspect documents in project `{project}`"))?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
+
+            let missing = uninspected_ids(&document_ids, &data);
+            if !missing.is_empty() {
+                eprintln!(
+                    "no details returned for {} document(s): {} \
+                     (the server omits documents whose status is `error`; check with `document get`)",
+                    missing.len(),
+                    missing.join(", ")
+                );
+            }
+            Ok(())
+        }
+        DocumentCommand::Reload {
+            workspace,
+            project,
+            document_id,
+        } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
+            reload_document(client, &workspace, &project, &document_id)
+                .with_context(|| format!("reload document `{document_id}`"))?;
+            println!(
+                "Queued document `{document_id}` for processing again; follow it with `project document get`"
+            );
+            Ok(())
+        }
         DocumentCommand::Delete {
             workspace,
             project,
@@ -256,6 +341,22 @@ pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentComma
             Ok(())
         }
     }
+}
+
+/// Requested ids the inspect response said nothing about, in request order,
+/// each named once.
+fn uninspected_ids(requested: &[String], inspection: &DocumentInspection) -> Vec<String> {
+    let returned: BTreeSet<&str> = inspection
+        .items
+        .iter()
+        .filter_map(|item| item.document_id.as_deref())
+        .collect();
+    let mut seen = BTreeSet::new();
+    requested
+        .iter()
+        .filter(|id| !returned.contains(id.as_str()) && seen.insert(id.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Everything `import` needs beyond the ids themselves.
@@ -359,6 +460,7 @@ impl LibrarySource for ApiLibrary<'_> {
             &ListChildrenParams {
                 page_size: None,
                 continuation_token,
+                with_xattr_keys: None,
             },
         )
         .with_context(|| format!("list children of library folder `{item_id}`"))
@@ -737,6 +839,23 @@ mod tests {
 
     use memorylake_core::api::documents::ImportDetail;
     use memorylake_core::api::library::{ITEM_TYPE_DIRECTORY, ITEM_TYPE_FILE};
+
+    #[test]
+    fn ids_left_out_of_an_inspection_are_named_once_in_request_order() {
+        let inspection: DocumentInspection =
+            serde_json::from_str(r#"{"items":[{"document_id":"doc-2"}]}"#).unwrap();
+        let requested = vec![
+            "doc-3".to_string(),
+            "doc-2".to_string(),
+            "doc-1".to_string(),
+            "doc-3".to_string(),
+        ];
+        assert_eq!(
+            uninspected_ids(&requested, &inspection),
+            vec!["doc-3".to_string(), "doc-1".to_string()]
+        );
+        assert!(uninspected_ids(&["doc-2".to_string()], &inspection).is_empty());
+    }
 
     fn item(id: &str, item_type: &str) -> Item {
         Item {

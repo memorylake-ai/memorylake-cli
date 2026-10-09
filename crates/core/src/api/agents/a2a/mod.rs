@@ -20,12 +20,14 @@
 mod card;
 mod error;
 mod send;
+mod subscribe;
 mod tasks;
 mod types;
 
 pub use card::get_agent_card;
 pub use error::describe_a2a_error;
 pub use send::{send_message, stream_message};
+pub use subscribe::subscribe_task;
 pub use tasks::{
     FEEDBACK_COMMENT_MAX_CHARS, ListTasksParams, Rating, TaskFeedbackRequest, cancel_task,
     get_task, list_tasks, submit_task_feedback,
@@ -98,6 +100,11 @@ fn task_feedback_path(workspace_id: &str, agent_id: &str, task_id: &str) -> Stri
     format!("{}:feedback", task_path(workspace_id, agent_id, task_id))
 }
 
+/// `.../a2a/tasks/{task}:subscribe` (A2A v1.0)
+fn task_subscribe_path(workspace_id: &str, agent_id: &str, task_id: &str) -> String {
+    format!("{}:subscribe", task_path(workspace_id, agent_id, task_id))
+}
+
 /// Headers that turn the feedback extension on for a request.
 fn feedback_extension_headers() -> [(&'static str, &'static str); 1] {
     [(A2A_EXTENSIONS_HEADER, TASK_FEEDBACK_EXTENSION_URI)]
@@ -132,6 +139,10 @@ mod tests {
         assert_eq!(
             task_feedback_path("ws-1", "agt-1", "run-1"),
             format!("{ROOT}/a2a/tasks/run-1:feedback")
+        );
+        assert_eq!(
+            task_subscribe_path("ws-1", "agt-1", "run-1"),
+            format!("{ROOT}/a2a/tasks/run-1:subscribe")
         );
     }
 

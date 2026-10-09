@@ -97,3 +97,69 @@ fn get_by_id_and_custom_id() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+/// `update` against the shared scratch workspace: only the scratch workspace
+/// is touched, because workspaces cannot be deleted to clean up after a test.
+#[test]
+fn update_replaces_metadata_and_patches_only_what_is_given() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+    let id = crate::common::scratch_workspace(&home);
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos()
+        .to_string();
+    let description = format!("updated by the live test at {stamp}");
+    let metadata = format!(r#"{{"run":"{stamp}","suite":"cli"}}"#);
+    let args = [
+        "ws",
+        "update",
+        id.as_str(),
+        "--description",
+        description.as_str(),
+        "--metadata",
+        metadata.as_str(),
+    ];
+    let updated: serde_json::Value =
+        serde_json::from_str(&assert_success(&run(&home, &args), &args)).expect("update JSON");
+    assert_eq!(updated["description"], description.as_str(), "{updated}");
+    assert_eq!(
+        updated["metadata"],
+        serde_json::json!({"run": stamp, "suite": "cli"}),
+        "{updated}"
+    );
+
+    // Metadata replaces the whole map rather than merging into it, and a
+    // field left out stays as it was.
+    let args = [
+        "ws",
+        "update",
+        id.as_str(),
+        "--metadata",
+        r#"{"suite":"cli"}"#,
+    ];
+    let updated: serde_json::Value =
+        serde_json::from_str(&assert_success(&run(&home, &args), &args)).expect("update JSON");
+    assert_eq!(updated["metadata"], serde_json::json!({"suite": "cli"}));
+    assert_eq!(updated["description"], description.as_str(), "{updated}");
+
+    // An empty object clears it; the server then omits the key entirely,
+    // which prints as `null`.
+    let args = ["ws", "update", id.as_str(), "--metadata", "{}"];
+    let updated: serde_json::Value =
+        serde_json::from_str(&assert_success(&run(&home, &args), &args)).expect("update JSON");
+    assert!(
+        updated
+            .get("metadata")
+            .is_none_or(|m| m.is_null() || m == &serde_json::json!({})),
+        "{updated}"
+    );
+
+    let args = ["ws", "update", id.as_str(), "--name", ""];
+    crate::common::assert_failure(&run(&home, &args), &args);
+
+    let _ = fs::remove_dir_all(&home);
+}

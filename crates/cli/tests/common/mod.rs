@@ -5,6 +5,7 @@ pub mod stub;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -216,4 +217,79 @@ pub fn assert_failure(output: &Output, args: &[&str]) -> String {
         args.join(" ")
     );
     format!("{stdout}{stderr}")
+}
+
+/// Custom id of the one workspace that live tests needing *a* workspace share.
+///
+/// Fixed on purpose, with no override: tests write to this workspace (`ws
+/// update` replaces its description and metadata), so it must never be
+/// pointed at a workspace someone actually uses.
+const SCRATCH_WORKSPACE_CUSTOM_ID: &str = "mlcli-live-scratch";
+
+/// The shared scratch workspace's id, created the first time it is missing.
+///
+/// Workspaces cannot be deleted through this CLI (see issue #15), so a test
+/// that creates one per run leaves the account a little more cluttered every
+/// time. Tests that only need somewhere to put their own projects, folders or
+/// conversations look this one up by a fixed custom id instead. `home` must
+/// already be logged in.
+///
+/// The id is resolved once per test process: `OnceLock::get_or_init` blocks
+/// concurrent callers until the first finishes, so parallel tests cannot race
+/// each other into the create. Only a `NOT_FOUND` lookup leads to a create;
+/// any other failure (5xx, timeout, bad key) fails the test rather than
+/// guessing. A duplicate custom id is refused with `409 CUSTOM_ID_CONFLICT`
+/// (measured 2026-10-09), so another process creating it first is caught by
+/// looking it up again.
+pub fn scratch_workspace(home: &Path) -> String {
+    static ID: OnceLock<String> = OnceLock::new();
+    ID.get_or_init(|| {
+        let custom_id = SCRATCH_WORKSPACE_CUSTOM_ID;
+        let lookup_args = ["ws", "get", custom_id, "--by-custom-id"];
+        let lookup = || -> Option<String> {
+            let output = run(home, &lookup_args);
+            if output.status.success() {
+                return Some(id_in(&output.stdout));
+            }
+            let err = assert_failure(&output, &lookup_args);
+            assert!(
+                err.contains("[NOT_FOUND]"),
+                "looking up the scratch workspace failed for a reason other than its absence:\n{err}"
+            );
+            None
+        };
+        if let Some(id) = lookup() {
+            return id;
+        }
+
+        let create_args = [
+            "ws",
+            "create",
+            "--name",
+            custom_id,
+            "--custom-id",
+            custom_id,
+            "--description",
+            "Shared scratch workspace for memorylake-cli live tests",
+        ];
+        let output = run(home, &create_args);
+        if output.status.success() {
+            return id_in(&output.stdout);
+        }
+        let err = assert_failure(&output, &create_args);
+        assert!(
+            err.contains("[CUSTOM_ID_CONFLICT]"),
+            "creating the scratch workspace failed:\n{err}"
+        );
+        lookup().expect("the workspace that conflicted is now found")
+    })
+    .clone()
+}
+
+fn id_in(stdout: &[u8]) -> String {
+    let value: serde_json::Value = serde_json::from_slice(stdout).expect("workspace JSON");
+    value["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("workspace JSON has an id: {value}"))
+        .to_string()
 }

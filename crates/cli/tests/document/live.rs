@@ -506,3 +506,182 @@ fn download_round_trips_the_uploaded_bytes() {
     delete_project(&home, &workspace, &project);
     let _ = fs::remove_dir_all(&home);
 }
+
+/// Runs a delete command when the test ends, including on an assertion panic.
+struct DeleteOnDrop<'a> {
+    home: &'a Path,
+    args: Vec<String>,
+}
+
+impl Drop for DeleteOnDrop<'_> {
+    fn drop(&mut self) {
+        let args: Vec<&str> = self.args.iter().map(String::as_str).collect();
+        let output = run(self.home, &args);
+        if !output.status.success() {
+            eprintln!(
+                "cleanup: `memorylake {}` failed:\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+/// `inspect` and `reload` on one healthy and one failed document.
+///
+/// Both are the test's own: a text file that indexes, and a binary byte cycle
+/// named `.pdf`, which the server accepts but cannot parse, so it ends in
+/// `error` (a `.bin` name is refused at import instead). Production leaves the
+/// failed one out of `inspect` entirely, and `reload` accepts only it
+/// (measured 2026-10-09).
+#[test]
+fn inspect_and_reload_tell_healthy_and_failed_documents_apart() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login(&home, &api_key);
+    let workspace = crate::common::scratch_workspace(&home);
+    let ws = workspace.as_str();
+
+    let project = create_project(&home, ws, "inspect");
+    let project_cleanup = DeleteOnDrop {
+        home: &home,
+        args: ["project", "delete", "--workspace", ws, project.as_str()]
+            .map(str::to_string)
+            .to_vec(),
+    };
+    let folder = make_scratch_folder(&home, "cli-docs-inspect");
+    let folder_cleanup = DeleteOnDrop {
+        home: &home,
+        args: vec!["library".into(), "delete".into(), folder.clone()],
+    };
+
+    let text_item = upload_file(&home, &folder, "cli-docs-inspect", "healthy.txt");
+    let (dir, binary) = crate::common::scratch_file("cli-docs-inspect-bin", 4096);
+    let args = [
+        "lib",
+        "upload",
+        binary.to_str().expect("utf-8 scratch path"),
+        "--parent",
+        folder.as_str(),
+        "--name",
+        "broken.pdf",
+    ];
+    let binary_item =
+        field(&json(&assert_success(&run(&home, &args), &args)), "item_id").to_string();
+    let _ = fs::remove_dir_all(&dir);
+
+    // `--wait` exits non-zero because the binary document fails, but the
+    // import outcome is printed first.
+    let args = [
+        "project",
+        "document",
+        "import",
+        "--workspace",
+        ws,
+        "--project",
+        project.as_str(),
+        text_item.as_str(),
+        binary_item.as_str(),
+        "--wait",
+        "--timeout",
+        WAIT_TIMEOUT_SECS,
+    ];
+    let output = run(&home, &args);
+    assert!(!output.status.success(), "the binary document should fail");
+    let outcome = json(&String::from_utf8_lossy(&output.stdout));
+    let documents: Vec<String> = outcome["details"]
+        .as_array()
+        .unwrap_or_else(|| panic!("import outcome has details: {outcome}"))
+        .iter()
+        .map(|detail| field(detail, "document_id").to_string())
+        .collect();
+    assert_eq!(documents.len(), 2, "{outcome}");
+
+    let status_of = |document: &str| {
+        let args = [
+            "project",
+            "document",
+            "get",
+            "--workspace",
+            ws,
+            "--project",
+            &project,
+            document,
+        ];
+        field(&json(&assert_success(&run(&home, &args), &args)), "status").to_string()
+    };
+    let (mut healthy, mut failed) = (None, None);
+    for document in &documents {
+        match status_of(document).as_str() {
+            "okay" => healthy = Some(document.as_str()),
+            "error" => failed = Some(document.as_str()),
+            other => panic!("document {document} ended in `{other}`"),
+        }
+    }
+    let healthy = healthy.expect("the text document indexed");
+    let failed = failed.expect("the binary document failed");
+
+    let args = [
+        "project",
+        "document",
+        "inspect",
+        "--workspace",
+        ws,
+        "--project",
+        &project,
+        healthy,
+        failed,
+    ];
+    let output = run(&home, &args);
+    // The inspection carries pre-signed storage links, which work for anyone
+    // holding them: failure messages name its shape, never print it.
+    let inspection = json(&assert_success(&output, &args));
+    let inspected: Vec<&str> = inspection["items"]
+        .as_array()
+        .unwrap_or_else(|| {
+            let keys: Vec<&String> = inspection
+                .as_object()
+                .map(|object| object.keys().collect())
+                .unwrap_or_default();
+            panic!("inspection has no `items` array; top-level keys: {keys:?}")
+        })
+        .iter()
+        .filter_map(|item| item["document_id"].as_str())
+        .collect();
+    assert_eq!(inspected, [healthy], "inspected document ids");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(failed),
+        "the omission is reported: {stderr}"
+    );
+
+    let args = [
+        "project",
+        "document",
+        "reload",
+        "--workspace",
+        ws,
+        "--project",
+        &project,
+        healthy,
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("STATE_NOT_READY"), "{err}");
+
+    let args = [
+        "project",
+        "document",
+        "reload",
+        "--workspace",
+        ws,
+        "--project",
+        &project,
+        failed,
+    ];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains(failed), "{stdout}");
+
+    drop(folder_cleanup);
+    drop(project_cleanup);
+    let _ = fs::remove_dir_all(&home);
+}

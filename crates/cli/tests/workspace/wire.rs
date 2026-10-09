@@ -6,7 +6,9 @@
 //! routing its flag through it — so they are pinned here, on the URL.
 
 use crate::common::assert_success;
-use crate::common::stub::{exchange, exchange_with_remembered_workspace, request_line};
+use crate::common::stub::{
+    exchange, exchange_with_remembered_workspace, request_body, request_line,
+};
 
 const EMPTY_PAGE: &str = r#"{"success":true,"data":{"items":[]}}"#;
 const WORKSPACE: &str = r#"{"success":true,"data":{"id":"ws-remembered","name":"Remembered"}}"#;
@@ -93,4 +95,40 @@ fn workspace_use_verifies_the_id_before_remembering_it() {
         stdout.contains("ws-remembered"),
         "the command confirms what it stored: {stdout}"
     );
+}
+
+#[test]
+fn update_patches_only_the_fields_given() {
+    let args = [
+        "workspace",
+        "update",
+        "ws-1",
+        "--description",
+        "",
+        "--metadata",
+        r#"{"team":"core"}"#,
+    ];
+    let (request, output) = exchange(WORKSPACE, &args);
+    let stdout = assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "PATCH /api/v3/workspaces/ws-1 HTTP/1.1"
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(request_body(&request)).expect("body is JSON");
+    assert_eq!(
+        body,
+        serde_json::json!({"description": "", "metadata": {"team": "core"}}),
+        "an empty description is an instruction to clear, and name was not given"
+    );
+    assert!(stdout.contains("ws-remembered"), "{stdout}");
+}
+
+#[test]
+fn update_sends_an_empty_metadata_object_to_clear_it() {
+    let args = ["workspace", "update", "ws-1", "--metadata", "{}"];
+    let (request, output) = exchange(WORKSPACE, &args);
+    assert_success(&output, &args);
+    assert_eq!(request_body(&request), r#"{"metadata":{}}"#);
 }

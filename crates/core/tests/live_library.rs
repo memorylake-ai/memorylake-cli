@@ -60,6 +60,7 @@ fn multipart_upload_round_trips_through_get() {
             parent_item_id: ROOT_ALIAS.to_string(),
             name: unique_name("core-multipart"),
             name_conflict_strategy: Some(NameConflictStrategy::Deny),
+            x_attrs: None,
         },
     )
     .expect("create scratch folder");
@@ -72,6 +73,7 @@ fn multipart_upload_round_trips_through_get() {
             parent_item_id: folder.item_id.clone(),
             name: "big.bin".to_string(),
             name_conflict_strategy: None,
+            x_attrs: None,
         },
     )
     .expect("upload multipart file");
@@ -105,6 +107,7 @@ fn single_part_upload_round_trips_through_get() {
             parent_item_id: ROOT_ALIAS.to_string(),
             name: unique_name("core-single"),
             name_conflict_strategy: Some(NameConflictStrategy::Deny),
+            x_attrs: None,
         },
     )
     .expect("create scratch folder");
@@ -117,6 +120,7 @@ fn single_part_upload_round_trips_through_get() {
             parent_item_id: folder.item_id.clone(),
             name: "small.bin".to_string(),
             name_conflict_strategy: None,
+            x_attrs: None,
         },
     )
     .expect("upload single-part file");
@@ -138,6 +142,7 @@ fn folder_round_trips_through_list() {
             parent_item_id: ROOT_ALIAS.to_string(),
             name: name.clone(),
             name_conflict_strategy: Some(NameConflictStrategy::Deny),
+            x_attrs: None,
         },
     )
     .expect("create scratch folder");
@@ -172,6 +177,7 @@ fn deleting_a_folder_removes_its_contents() {
             parent_item_id: ROOT_ALIAS.to_string(),
             name: unique_name("core-cascade"),
             name_conflict_strategy: Some(NameConflictStrategy::Deny),
+            x_attrs: None,
         },
     )
     .expect("create scratch folder");
@@ -184,6 +190,7 @@ fn deleting_a_folder_removes_its_contents() {
             parent_item_id: folder.item_id.clone(),
             name: "child.bin".to_string(),
             name_conflict_strategy: None,
+            x_attrs: None,
         },
     )
     .expect("upload child file");
@@ -207,6 +214,7 @@ fn deny_strategy_reports_a_conflict() {
         parent_item_id: ROOT_ALIAS.to_string(),
         name: name.clone(),
         name_conflict_strategy: Some(NameConflictStrategy::Deny),
+        x_attrs: None,
     };
 
     let folder = create_folder(&client, &request).expect("first create succeeds");
@@ -238,6 +246,7 @@ fn rename_strategy_returns_the_server_assigned_name() {
             parent_item_id: ROOT_ALIAS.to_string(),
             name: name.clone(),
             name_conflict_strategy: None,
+            x_attrs: None,
         },
     )
     .expect("first create");
@@ -248,6 +257,7 @@ fn rename_strategy_returns_the_server_assigned_name() {
             parent_item_id: ROOT_ALIAS.to_string(),
             name: name.clone(),
             name_conflict_strategy: Some(NameConflictStrategy::Rename),
+            x_attrs: None,
         },
     )
     .expect("second create renames");
@@ -289,6 +299,7 @@ fn empty_file_is_rejected_before_a_session_is_created() {
             parent_item_id: ROOT_ALIAS.to_string(),
             name: "empty.bin".to_string(),
             name_conflict_strategy: None,
+            x_attrs: None,
         },
     )
     .expect_err("the API requires at least one byte");
@@ -311,6 +322,7 @@ fn find_in_listing(
             &ListChildrenParams {
                 page_size: Some(50),
                 continuation_token: token,
+                with_xattr_keys: None,
             },
         )
         .expect("list children page");

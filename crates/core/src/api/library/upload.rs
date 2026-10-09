@@ -15,6 +15,7 @@
 //! were observed up to ~100 MiB, 10 MiB at 1 GiB). Never assume a fixed chunk
 //! size — always follow the returned plan.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -83,6 +84,8 @@ pub struct UploadFileRequest {
     pub name: String,
     /// Behavior on name collision. `None` uses the server default (`rename`).
     pub name_conflict_strategy: Option<NameConflictStrategy>,
+    /// Extended attributes to create the file with. `None` sends none.
+    pub x_attrs: Option<BTreeMap<String, String>>,
 }
 
 /// Upload `request.source` and register it as a Library file.
@@ -145,6 +148,7 @@ pub fn upload_file(client: &Client, request: &UploadFileRequest) -> Result<Creat
             upload_id: session.upload_id,
             part_etags,
             name_conflict_strategy: request.name_conflict_strategy,
+            x_attrs: request.x_attrs.clone(),
         },
     )
 }
@@ -441,6 +445,7 @@ mod tests {
                 parent_item_id: "MY_SPACE".into(),
                 name: "empty.bin".into(),
                 name_conflict_strategy: None,
+                x_attrs: None,
             },
         )
         .expect_err("empty file is rejected");

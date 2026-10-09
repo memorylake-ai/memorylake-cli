@@ -216,3 +216,77 @@ fn get_with_unknown_project_id_fails() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+/// Deletes the project when the test ends, including on an assertion panic.
+struct ProjectCleanup<'a> {
+    home: &'a Path,
+    workspace: &'a str,
+    id: String,
+}
+
+impl Drop for ProjectCleanup<'_> {
+    fn drop(&mut self) {
+        let args = ["project", "delete", "--workspace", self.workspace, &self.id];
+        let output = run(self.home, &args);
+        if !output.status.success() {
+            eprintln!(
+                "cleanup: `memorylake {}` failed:\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn stats_of_a_new_project_count_nothing() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+    let workspace = crate::common::scratch_workspace(&home);
+
+    let custom_id = crate::common::unique_name("proj-stats");
+    let args = [
+        "project",
+        "create",
+        "--workspace",
+        workspace.as_str(),
+        "--name",
+        custom_id.as_str(),
+        "--custom-id",
+        custom_id.as_str(),
+    ];
+    let created: serde_json::Value =
+        serde_json::from_str(&assert_success(&run(&home, &args), &args)).expect("create JSON");
+    let project = ProjectCleanup {
+        home: &home,
+        workspace: &workspace,
+        id: created["id"].as_str().expect("project id").to_string(),
+    };
+
+    let args = [
+        "project",
+        "stats",
+        "--workspace",
+        workspace.as_str(),
+        project.id.as_str(),
+    ];
+    let stats: serde_json::Value =
+        serde_json::from_str(&assert_success(&run(&home, &args), &args)).expect("stats JSON");
+    assert_eq!(stats["document_count"], 0, "{stats}");
+    assert_eq!(stats["database_count"], 0, "{stats}");
+    assert!(stats["document_status"].is_object(), "{stats}");
+
+    // The endpoint has no custom-id lookup (measured 2026-10-09).
+    let args = [
+        "project",
+        "statistics",
+        "--workspace",
+        workspace.as_str(),
+        custom_id.as_str(),
+    ];
+    assert_failure(&run(&home, &args), &args);
+
+    drop(project);
+    let _ = fs::remove_dir_all(&home);
+}

@@ -39,6 +39,22 @@ pub(super) fn cook_status_path(workspace_id: &str, conversation_id: &str) -> Str
     )
 }
 
+/// Path listing the fact changes one conversation produced.
+pub(super) fn fact_actions_path(workspace_id: &str, conversation_id: &str) -> String {
+    format!(
+        "{}/fact-actions",
+        conversation_path(workspace_id, conversation_id)
+    )
+}
+
+/// Path listing the messages read in the same extraction batch as one message.
+pub(super) fn consumed_messages_path(workspace_id: &str, conversation_id: &str) -> String {
+    format!(
+        "{}/consumed-messages",
+        conversation_path(workspace_id, conversation_id)
+    )
+}
+
 /// Message collection path for one conversation.
 ///
 /// Deliberately workspace-free: the messages endpoints are rooted at
@@ -50,9 +66,35 @@ pub(super) fn messages_path(conversation_id: &str) -> String {
     )
 }
 
+/// Path fetching several messages by id. Workspace-free, like
+/// [`messages_path`].
+pub(super) fn batch_get_messages_path(conversation_id: &str) -> String {
+    format!("{}/batch-get", messages_path(conversation_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_audit_paths_live_under_the_workspace_conversation() {
+        assert_eq!(
+            fact_actions_path("ws-1", "conv-a1b2"),
+            "/api/v3/workspaces/ws-1/memories/conversations/conv-a1b2/fact-actions"
+        );
+        assert_eq!(
+            consumed_messages_path("ws-1", "conv a/b"),
+            "/api/v3/workspaces/ws-1/memories/conversations/conv%20a%2Fb/consumed-messages"
+        );
+    }
+
+    #[test]
+    fn batch_get_is_addressed_without_a_workspace() {
+        assert_eq!(
+            batch_get_messages_path("conv-a1b2"),
+            "/api/v3/conversations/conv-a1b2/messages/batch-get"
+        );
+    }
 
     #[test]
     fn conversations_live_under_the_workspace_memories_tree() {

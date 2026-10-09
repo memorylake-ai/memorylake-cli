@@ -125,12 +125,18 @@ non-interactively with `--base-url`.
 memorylake ws list [--name FUZZY] [--page-size N] [--continuation-token TOKEN]
 memorylake ws create --name "My Workspace" --custom-id my-ws-001
 memorylake ws get <id> [--by-custom-id]
+memorylake ws update <id> [--name NAME] [--description D] [--metadata '{"team":"core"}']
 
 memorylake ws use              # pick a default from a list
 memorylake ws use <id>         # or name one
 memorylake ws current          # which one is in effect, and why
 memorylake ws use --clear
 ```
+
+`update` changes only the fields you pass. `--metadata` takes a JSON object of
+strings and **replaces** the stored map; `--metadata '{}'` clears it. There is
+deliberately no `ws delete`: deleting a workspace takes everything in it, and
+that is not something to leave one typo away from an agent driving the CLI.
 
 ### Actors
 
@@ -193,11 +199,13 @@ memorylake proj get <id> [--by-custom-id]
 memorylake proj update <id> [--name NAME] [--description D] \
   [--industry-ids IDS | --clear-industries]
 memorylake proj delete <id>
+memorylake proj stats <id>     # document/database counts by processing status
 ```
 
 `--custom-id` is unique within the workspace. `--industry-ids` attaches public
 industry opendata (see `industry list`); on update it **replaces** the attached
 set, `--clear-industries` detaches them all, and leaving both out keeps them.
+`stats` takes the project id only, not its custom_id.
 
 ### Library
 
@@ -205,13 +213,22 @@ The Library is MemoryLake's file system. `MY_SPACE` is the workspace root, and i
 accepted anywhere an item id is.
 
 ```bash
-memorylake lib list [<item-id>] [--page-size N] [--continuation-token TOKEN]
+memorylake lib list [<item-id>] [--page-size N] [--continuation-token TOKEN] [--xattr-keys k1,k2]
 memorylake lib get <item-id>
-memorylake lib mkdir "Reports" [--parent <item-id>] [--on-conflict rename|deny]
+memorylake lib mkdir "Reports" [--parent <item-id>] [--on-conflict rename|deny] [--xattrs JSON]
 memorylake lib upload ./report.pdf [--parent <item-id>] [--name NAME] \
-  [--on-conflict rename|deny|overwrite|replace]
+  [--on-conflict rename|deny|overwrite|replace] [--xattrs JSON]
 memorylake lib delete <item-id>
+
+memorylake lib xattr set    <item-id> --attrs '{"team":"core"}'
+memorylake lib xattr delete <item-id> --keys team,owner
 ```
+
+Extended attributes are string key/value tags on an item. `xattr set` merges
+into what is there; `--xattrs` sets them when the item is created; `list
+--xattr-keys` limits the `x_attrs` shown to the keys you name. System keys such
+as `x_source` cannot be changed, and the server reports success without
+changing them.
 
 `upload` streams the file in parts and retries transient failures; the file
 appears only once it completes. `--on-conflict` decides what happens when the
@@ -231,6 +248,8 @@ memorylake proj doc list   --project <id> [--name FUZZY] [--page-size N]
 memorylake proj doc get      --project <id> <doc-id>
 memorylake proj doc download --project <id> <doc-id> [-o PATH] [--force]
 memorylake proj doc delete   --project <id> <doc-id>...
+memorylake proj doc inspect  --project <id> <doc-id>...   # up to 100
+memorylake proj doc reload   --project <id> <doc-id>
 ```
 
 Upload files with `lib upload` first. A folder id needs `--recursive`, and
@@ -248,6 +267,13 @@ project count as duplicates, not failures.
 `download` writes the original file under the name the server reports, in the
 current directory. `-o` takes a file path or a directory, and `-o -` streams to
 stdout for piping. An existing file is never replaced without `--force`.
+
+`inspect` returns what processing produced for each document, including
+pre-signed links to the stored artifacts; anyone holding such a link can fetch
+the file until it expires, so treat the output as sensitive. Documents in
+`error` have nothing to inspect and are left out; the CLI names them on stderr.
+`reload` re-queues a document that ended in `error`; any other status is
+refused.
 
 ### Databases
 
@@ -394,6 +420,11 @@ memorylake conv msg append <conv-id> --actor <id> --custom-id msg-42 \
   [--parent <msg-id>] [--timestamp ISO8601] [--metadata k=v ...] [--wait [--timeout 600]]
 
 memorylake conv msg list <conv-id> [--page-size N] [--continuation-token TOKEN]
+memorylake conv msg get  <conv-id> <msg-id>...            # up to 100, in the order given
+
+memorylake conv fact-actions <conv-id> (--project <id> | --actor <id>) \
+  [--message <msg-id>] [--by-custom-id] [--page-size N] [--continuation-token TOKEN]
+memorylake conv consumed-messages <conv-id> --message <msg-id> [--by-custom-id]
 ```
 
 Message content is a list of typed blocks. Each `--text` becomes one `TEXT`
@@ -415,6 +446,12 @@ done, and `--wait` polls for you. Facts drawn from a conversation are attributed
 by the server to an actor or a project as it sees fit, so look under both
 `fact list --actors` and `fact list --projects`.
 
+`fact-actions` is the audit trail of that process: which facts a conversation
+added, changed or removed in one project's or one actor's memory (an agent's
+memory is its actor's). `consumed-messages` lists the messages the server read
+when it processed a given one. For both, `--by-custom-id` applies to the
+conversation only; message ids are always internal ids.
+
 ### Agents
 
 ```bash
@@ -424,6 +461,7 @@ memorylake agent create --name "Support" --custom-id support-1 \
 memorylake agent get <id> [--by-custom-id]
 memorylake agent update <id> [--name NAME] [--description D] [--config identity.json]
 memorylake agent delete <id>
+memorylake agent fork <id> --custom-id support-2 [--name NAME] [--metadata '{"k":"v"}']
 
 memorylake agent version create <id> [--model M] [--system-prompt P] \
   [--config version.json] [--from-version latest|N]
@@ -437,6 +475,9 @@ memorylake agent bindings [--workspace <id>] [--name FUZZY]
 
 Creating an agent also creates an actor identity for it, returned as `actor_id`.
 An agent works only in the workspaces it is bound to.
+
+`fork` copies an agent into a new one under a new custom_id; the name defaults
+to the original's with ` (copy)` appended. External agents cannot be forked.
 
 Changes split in two. `agent update` changes identity — `name`, `description`,
 `metadata` — in place. Anything about behaviour (`model`, `system_prompt`,
@@ -484,6 +525,7 @@ memorylake agent send <agent-id> --message-file parts.json
 memorylake agent task list <agent-id> [--context CTX] [--status STATE] \
   [--page-size N] [--page-token TOK] [--after TIMESTAMP] [--history-length N] [--artifacts]
 memorylake agent task get      <agent-id> <task-id> [--history-length N]
+memorylake agent task subscribe <agent-id> <task-id> [--raw]
 memorylake agent task cancel   <agent-id> <task-id>
 memorylake agent task feedback <agent-id> <task-id> --rating up|down [--comment TEXT]
 ```
@@ -501,8 +543,13 @@ task run-…  context 5fdb…  state TASK_STATE_COMPLETED
 Pass `--context` to keep talking in the same thread. A task that ends in
 `TASK_STATE_INPUT_REQUIRED` needs more from you: reply with `--task <id>
 --context <id>`. `--stream` prints the reply as it is produced; `--no-wait`
-returns the task as soon as it exists (poll it with `agent task get`); `--raw`
-prints the protocol response as JSON instead of the reply text.
+returns the task as soon as it exists (poll it with `agent task get`, or follow
+it with `agent task subscribe`, which prints like `--stream`); `--raw` prints the
+protocol response as JSON instead of the reply text.
+
+A task that ends `FAILED`, `CANCELED` or `REJECTED` exits non-zero. So does a
+stream that closes before its task settles; the error names the
+`agent task subscribe` command that picks it up again.
 
 The `--actor`, `--project`, `--read-only-project` and `--skip-memory` flags set
 MemoryLake's extension of the request (`metadata.memorylake`): whose message it

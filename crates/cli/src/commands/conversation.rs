@@ -1,9 +1,10 @@
 //! `memorylake conversation` / `conv` commands.
 //!
 //! A conversation belongs to a workspace and writes what it learns into
-//! exactly one project, so `create`, `get`, `list`, `delete` and `cook-status`
-//! all take `--workspace`. The message subcommands deliberately do not: the
-//! API addresses messages by conversation id alone.
+//! exactly one project, so `create`, `get`, `list`, `delete`, `cook-status`
+//! and the memory audit pair `fact-actions` / `consumed-messages` all take
+//! `--workspace`. The message subcommands deliberately do not: the API
+//! addresses messages by conversation id alone.
 
 mod input;
 mod wait;
@@ -14,10 +15,12 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
 use memorylake_core::api::conversations::{
-    AppendMessageRequest, ConversationKind, CreateConversationRequest, ListConversationsParams,
-    ListMessagesParams, append_message, create_conversation, delete_conversation, get_conversation,
-    get_conversation_by_custom_id, get_cook_status, get_cook_status_by_custom_id,
-    list_conversations, list_messages,
+    AppendMessageRequest, BATCH_GET_MAX_MESSAGES, BatchGetMessagesRequest, ConversationKind,
+    CreateConversationRequest, FACT_ACTIONS_MAX_PAGE_SIZE, FactOwner, ListConversationsParams,
+    ListFactActionsParams, ListMessagesParams, append_message, batch_get_messages,
+    create_conversation, delete_conversation, get_conversation, get_conversation_by_custom_id,
+    get_cook_status, get_cook_status_by_custom_id, list_consumed_messages, list_conversations,
+    list_fact_actions, list_messages,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
@@ -149,6 +152,66 @@ pub enum ConversationCommand {
         #[arg(long)]
         by_custom_id: bool,
     },
+    /// List the facts a conversation added, updated or forgot, newest first.
+    ///
+    /// Answers for one memory at a time: a project's (`--project`) or an
+    /// actor's (`--actor`). An agent's memory is the actor's that backs it,
+    /// so pass the agent's `actor_id`. Memory is built in the background; an
+    /// empty list can simply mean nothing has been processed yet.
+    FactActions {
+        /// Workspace id that owns the conversation.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Conversation id (or custom_id when `--by-custom-id` is set).
+        id: String,
+        /// Report changes to this project's memory.
+        #[arg(
+            long,
+            value_name = "PROJECT_ID",
+            conflicts_with = "actor",
+            required_unless_present = "actor"
+        )]
+        project: Option<String>,
+        /// Report changes to this actor's memory.
+        #[arg(long, value_name = "ACTOR_ID", required_unless_present = "project")]
+        actor: Option<String>,
+        /// Only the changes drawn from this message (a message id, never a
+        /// custom_id).
+        #[arg(long, value_name = "MESSAGE_ID")]
+        message: Option<String>,
+        /// Treat the positional argument as the conversation's custom_id.
+        #[arg(long)]
+        by_custom_id: bool,
+        /// Number of changes per page (1–100).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=i64::from(FACT_ACTIONS_MAX_PAGE_SIZE)))]
+        page_size: Option<u32>,
+        /// Continuation token from a previous response.
+        #[arg(long)]
+        continuation_token: Option<String>,
+    },
+    /// List the messages read in the same extraction batch as one message.
+    ///
+    /// Facts are drawn from batches of messages, not one message at a time;
+    /// this shows the context a message's facts came from, the message
+    /// itself included, in reading order. Empty until the message is read.
+    #[command(visible_alias = "consumed")]
+    ConsumedMessages {
+        /// Workspace id that owns the conversation.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Conversation id (or custom_id when `--by-custom-id` is set).
+        id: String,
+        /// The message to look up (a message id, never a custom_id).
+        #[arg(long, value_name = "MESSAGE_ID")]
+        message: String,
+        /// Treat the positional argument as the conversation's custom_id.
+        #[arg(long)]
+        by_custom_id: bool,
+    },
     /// Append and list the messages of a conversation.
     #[command(visible_alias = "msg")]
     Message {
@@ -239,6 +302,22 @@ pub enum MessageCommand {
         #[arg(long)]
         continuation_token: Option<String>,
     },
+    /// Fetch messages by id.
+    ///
+    /// Prints them in the order given; a repeated id is returned once. Every
+    /// id must belong to the conversation, or the whole request fails.
+    Get {
+        /// Conversation the messages belong to.
+        conversation: String,
+        /// Message ids (1–100).
+        #[arg(
+            required = true,
+            num_args = 1..=BATCH_GET_MAX_MESSAGES,
+            value_name = "MESSAGE_ID",
+            value_parser = super::parse_non_blank
+        )]
+        message_ids: Vec<String>,
+    },
 }
 
 /// Execute a `conversation` subcommand.
@@ -321,6 +400,46 @@ pub fn run(
                 get_cook_status(&client, &workspace, &id)
             }
             .with_context(|| format!("get cook status of conversation `{id}`"))?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+        ConversationCommand::FactActions {
+            workspace,
+            id,
+            project,
+            actor,
+            message,
+            by_custom_id,
+            page_size,
+            continuation_token,
+        } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
+            let owner = match (project, actor) {
+                (Some(project), _) => FactOwner::Project(project),
+                (None, Some(actor)) => FactOwner::Actor(actor),
+                (None, None) => unreachable!("clap requires --project or --actor"),
+            };
+            let params = ListFactActionsParams {
+                owner,
+                message_id: message,
+                by_custom_id,
+                page_size,
+                continuation_token,
+            };
+            let data = list_fact_actions(&client, &workspace, &id, &params)
+                .with_context(|| format!("list fact changes of conversation `{id}`"))?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+        ConversationCommand::ConsumedMessages {
+            workspace,
+            id,
+            message,
+            by_custom_id,
+        } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
+            let data = list_consumed_messages(&client, &workspace, &id, &message, by_custom_id)
+                .with_context(|| {
+                    format!("list messages read with `{message}` in conversation `{id}`")
+                })?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         ConversationCommand::Message { command } => {
@@ -435,6 +554,17 @@ fn run_message(
             };
             let data = list_messages(client, &conversation, &params)
                 .with_context(|| format!("list messages of conversation `{conversation}`"))?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+        MessageCommand::Get {
+            conversation,
+            message_ids,
+        } => {
+            let request = BatchGetMessagesRequest {
+                entry_ids: message_ids,
+            };
+            let data = batch_get_messages(client, &conversation, &request)
+                .with_context(|| format!("get messages of conversation `{conversation}`"))?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
     }

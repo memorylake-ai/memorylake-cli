@@ -27,9 +27,42 @@ pub(super) fn document_path(workspace_id: &str, project_id: &str, document_id: &
     )
 }
 
+/// Path for inspecting several documents of a project at once.
+pub(super) fn inspect_documents_path(workspace_id: &str, project_id: &str) -> String {
+    format!("{}/inspect", documents_path(workspace_id, project_id))
+}
+
+/// Path for reprocessing one failed document.
+pub(super) fn reload_document_path(
+    workspace_id: &str,
+    project_id: &str,
+    document_id: &str,
+) -> String {
+    format!(
+        "{}/reload",
+        document_path(workspace_id, project_id, document_id)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspect_and_reload_extend_the_collection_and_the_document() {
+        assert_eq!(
+            inspect_documents_path("ws-1", "proj-1"),
+            "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/inspect"
+        );
+        assert_eq!(
+            reload_document_path("ws-1", "proj-1", "doc-1"),
+            "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/doc-1/reload"
+        );
+        assert_eq!(
+            reload_document_path("ws-1", "proj-1", "doc/x"),
+            "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/doc%2Fx/reload"
+        );
+    }
 
     #[test]
     fn typical_ids_stay_readable() {
