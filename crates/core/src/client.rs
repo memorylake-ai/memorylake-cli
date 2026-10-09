@@ -155,7 +155,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let mut builder = self.http.get(&url).headers(self.auth_headers()?);
         for (key, value) in query {
             builder = builder.query(&[(key, value)]);
@@ -183,7 +183,7 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
@@ -211,7 +211,7 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.patch(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
@@ -235,7 +235,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.delete(&url), headers)
             .headers(self.auth_headers()?)
             .build()?;
@@ -255,7 +255,7 @@ impl Client {
     /// to the storage provider — which needs no such thing, the signature being
     /// in the URL.
     pub fn download_to<W: std::io::Write>(&self, path: &str, writer: &mut W) -> Result<Downloaded> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self.http.get(&url).headers(self.auth_headers()?).build()?;
         let mut response = self.execute(request)?;
 
@@ -316,7 +316,7 @@ impl Client {
         query: &[(&str, String)],
         headers: &[(&str, &str)],
     ) -> Result<Value> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let mut builder = apply_headers(self.http.get(&url), headers).headers(self.auth_headers()?);
         for (key, value) in query {
             builder = builder.query(&[(key, value)]);
@@ -334,7 +334,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
@@ -358,7 +358,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .header(ACCEPT, "text/event-stream")
@@ -403,7 +403,7 @@ impl Client {
     /// response. This variant validates the envelope — a non-2xx status or
     /// `success: false` is still an error — and discards whatever `data` holds.
     pub fn delete_empty(&self, path: &str) -> Result<()> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self
             .http
             .delete(&url)
@@ -426,7 +426,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self
             .http
             .delete(&url)
@@ -514,13 +514,18 @@ impl Client {
             .map(str::to_string))
     }
 
-    fn url(&self, path: &str) -> String {
+    /// Join `path` onto the base URL, refusing paths that URL parsing would
+    /// rewrite into a different resource (see [`Error::InvalidPathSegment`]).
+    fn url(&self, path: &str) -> Result<String> {
         let path = if path.starts_with('/') {
             path.to_string()
         } else {
             format!("/{path}")
         };
-        format!("{}{path}", self.base_url)
+        if has_unsafe_segment(&path) {
+            return Err(Error::InvalidPathSegment { path });
+        }
+        Ok(format!("{}{path}", self.base_url))
     }
 
     fn auth_headers(&self) -> Result<HeaderMap> {
@@ -534,6 +539,19 @@ impl Client {
         headers.insert(AUTHORIZATION, value);
         Ok(headers)
     }
+}
+
+/// Whether any segment of `path` (query excluded) is empty or a dot segment.
+///
+/// Dot segments are matched in their percent-encoded spellings too: the URL
+/// parser treats `%2e` as `.` when it normalizes a path, so encoding an id
+/// does not stop `..` from being collapsed.
+fn has_unsafe_segment(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    path.split('/').skip(1).any(|segment| {
+        let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+        segment.is_empty() || decoded == "." || decoded == ".."
+    })
 }
 
 /// Apply extra per-request headers to a builder.
@@ -1392,6 +1410,48 @@ mod tests {
         assert!(
             request.contains("authorization: "),
             "extra headers must not displace auth:\n{request}"
+        );
+    }
+
+    #[test]
+    fn unsafe_segments_are_detected_in_every_spelling() {
+        for path in [
+            "/api/v3/workspaces/ws-1/projects/..",
+            "/api/v3/workspaces/ws-1/projects/.",
+            "/api/v3/workspaces/ws-1/projects/%2e%2E",
+            "/api/v3/workspaces/ws-1/projects/.%2e",
+            "/api/v3/workspaces/../projects/p-1",
+            "/api/v3/actors/",
+            "/api/v3/workspaces//projects",
+            "/api/v3/workspaces/ws-1/analysis-models/m/entries/..?entity_type=x",
+        ] {
+            assert!(has_unsafe_segment(path), "{path} must be refused");
+        }
+        for path in [
+            "/api/v3/workspaces/ws-1/projects/p-1",
+            "/api/v1/drives/items/sc-a:inode-b",
+            // An encoded `/` keeps `../..` inside one segment, which the
+            // server receives as an opaque id rather than a traversal.
+            "/api/v3/workspaces/ws-1/projects/..%2F..",
+            "/api/v3/workspaces/ws-1/projects/...",
+            "/api/v3/workspaces/ws-1/projects/a..b",
+            "/api/v3/actors/act-1?by_custom_id=..",
+        ] {
+            assert!(!has_unsafe_segment(path), "{path} must be allowed");
+        }
+    }
+
+    #[test]
+    fn a_dot_dot_id_is_refused_before_any_request_is_sent() {
+        // `project delete ..` would otherwise collapse into
+        // `DELETE /api/v3/workspaces/ws-1/` -- a workspace delete.
+        let client = Client::new("http://127.0.0.1:9", "sk_test_key_1234").unwrap();
+        let err = client
+            .delete_empty("/api/v3/workspaces/ws-1/projects/..")
+            .expect_err("a dot segment must be refused");
+        assert!(
+            matches!(err, Error::InvalidPathSegment { ref path } if path.ends_with("/projects/..")),
+            "{err:?}"
         );
     }
 
