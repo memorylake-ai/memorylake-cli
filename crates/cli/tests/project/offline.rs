@@ -207,3 +207,19 @@ fn a_missing_workspace_is_reported_with_how_to_supply_one() {
     }
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn a_dot_dot_project_id_never_reaches_the_network() {
+    // URL parsing would collapse `projects/..` into the workspace itself, so
+    // `project delete ..` must be refused rather than sent as a workspace
+    // delete. The base URL is unreachable: a connection error here would mean
+    // the request was attempted.
+    let home = logged_in_home("http://127.0.0.1:1/openapi/memorylake");
+    for id in ["..", "."] {
+        let args = ["project", "delete", "--workspace", "ws-1", id];
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains("refusing to request"), "{id}: {err}");
+        assert!(!err.contains("could not connect"), "{id}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
