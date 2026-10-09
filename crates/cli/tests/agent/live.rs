@@ -563,7 +563,18 @@ fn fork_copies_an_agent_under_a_new_custom_id() {
 
     // The custom id is unique across agents (409 CUSTOM_ID_CONFLICT,
     // measured 2026-10-09), so forking again under it is refused.
-    let err = assert_failure(&run(&home, &fork_args), &fork_args);
+    let again = run(&home, &fork_args);
+    if again.status.success() {
+        // A second copy was made after all: delete it before failing.
+        let copy = parse_json(&String::from_utf8_lossy(&again.stdout), "second fork");
+        let _copy_cleanup = copy
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| *id != fork_id)
+            .map(|id| AgentCleanup::new(&home, id));
+        panic!("forking twice under one custom id unexpectedly succeeded: {copy}");
+    }
+    let err = assert_failure(&again, &fork_args);
     assert!(err.contains("CUSTOM_ID_CONFLICT"), "{err}");
 
     // The guards log in through `home`, so they must run before it goes.

@@ -633,14 +633,22 @@ fn inspect_and_reload_tell_healthy_and_failed_documents_apart() {
         failed,
     ];
     let output = run(&home, &args);
+    // The inspection carries pre-signed storage links, which work for anyone
+    // holding them: failure messages name its shape, never print it.
     let inspection = json(&assert_success(&output, &args));
     let inspected: Vec<&str> = inspection["items"]
         .as_array()
-        .unwrap_or_else(|| panic!("inspection has items: {inspection}"))
+        .unwrap_or_else(|| {
+            let keys: Vec<&String> = inspection
+                .as_object()
+                .map(|object| object.keys().collect())
+                .unwrap_or_default();
+            panic!("inspection has no `items` array; top-level keys: {keys:?}")
+        })
         .iter()
         .filter_map(|item| item["document_id"].as_str())
         .collect();
-    assert_eq!(inspected, [healthy], "{inspection}");
+    assert_eq!(inspected, [healthy], "inspected document ids");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(failed),

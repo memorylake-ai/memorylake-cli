@@ -110,7 +110,7 @@ pub enum AgentCommand {
         /// Id of the agent to copy.
         id: String,
         /// Caller-defined unique id for the copy.
-        #[arg(long)]
+        #[arg(long, value_parser = super::parse_non_blank)]
         custom_id: String,
         /// Display name of the copy (1–255 characters). Defaults to the
         /// source's name followed by ` (copy)`.

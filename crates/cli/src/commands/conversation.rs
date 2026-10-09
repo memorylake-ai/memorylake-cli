@@ -310,7 +310,12 @@ pub enum MessageCommand {
         /// Conversation the messages belong to.
         conversation: String,
         /// Message ids (1–100).
-        #[arg(required = true, num_args = 1..=BATCH_GET_MAX_MESSAGES, value_name = "MESSAGE_ID")]
+        #[arg(
+            required = true,
+            num_args = 1..=BATCH_GET_MAX_MESSAGES,
+            value_name = "MESSAGE_ID",
+            value_parser = super::parse_non_blank
+        )]
         message_ids: Vec<String>,
     },
 }

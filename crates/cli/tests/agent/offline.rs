@@ -567,6 +567,10 @@ fn fork_is_validated_before_credentials_are_needed() {
     for (args, expected) in [
         (vec!["agent", "fork", "agent-1"], "--custom-id"),
         (
+            vec!["agent", "fork", "agent-1", "--custom-id", " "],
+            "must not be empty",
+        ),
+        (
             vec!["agent", "fork", "agent-1", "--custom-id", "c", "--name", ""],
             "1 to 255 characters",
         ),

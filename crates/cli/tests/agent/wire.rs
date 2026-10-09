@@ -259,6 +259,79 @@ fn send_stream_raw_prints_one_event_per_line() {
 }
 
 #[test]
+fn send_stream_that_closes_while_the_task_works_fails_with_a_subscribe_hint() {
+    // The artifact names the task but carries no status: it must not hide the
+    // WORKING state seen before it.
+    let events = [
+        r#"{"task":{"id":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING"}}}"#,
+        r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING","message":{"parts":[{"text":"PO"}]}}}}"#,
+        r#"{"artifactUpdate":{"taskId":"run-1","contextId":"ctx-1","artifact":{"parts":[{"text":"PO"}]}}}"#,
+    ];
+    let args = ["agent", "send", AGENT, "--text", "ping", "--stream"];
+    let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
+    let stderr = assert_failure(&output, &args);
+
+    assert_eq!(stdout_of(&output), "PO\n", "what arrived is still printed");
+    assert!(
+        stderr.contains("TASK_STATE_WORKING")
+            && stderr.contains(&format!("memorylake agent task subscribe {AGENT} run-1")),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn send_stream_raw_also_fails_when_the_task_did_not_settle() {
+    let events = [r#"{"task":{"id":"run-1","status":{"state":"TASK_STATE_WORKING"}}}"#];
+    let args = [
+        "agent", "send", AGENT, "--text", "ping", "--stream", "--raw",
+    ];
+    let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
+    let stderr = assert_failure(&output, &args);
+
+    assert_eq!(
+        stdout_of(&output).lines().count(),
+        1,
+        "the event is printed"
+    );
+    assert!(stderr.contains("task subscribe"), "{stderr}");
+}
+
+#[test]
+fn send_stream_ending_in_a_failed_task_exits_non_zero() {
+    let events = [
+        r#"{"task":{"id":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING"}}}"#,
+        r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_FAILED"}}}"#,
+    ];
+    let args = ["agent", "send", AGENT, "--text", "ping", "--stream"];
+    let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
+    let stderr = assert_failure(&output, &args);
+    assert!(
+        stderr.contains("run-1") && stderr.contains("TASK_STATE_FAILED"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn send_stream_ending_in_input_required_succeeds() {
+    let events = [
+        r#"{"task":{"id":"run-2","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING"}}}"#,
+        r#"{"statusUpdate":{"taskId":"run-2","contextId":"ctx-1","status":{"state":"TASK_STATE_INPUT_REQUIRED"}}}"#,
+    ];
+    let args = ["agent", "send", AGENT, "--text", "open it", "--stream"];
+    let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
+    assert_success(&output, &args);
+}
+
+#[test]
+fn send_of_a_task_that_failed_exits_non_zero() {
+    let failed = r#"{"task":{"id":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_FAILED"},"artifacts":[]}}"#;
+    let args = ["agent", "send", AGENT, "--text", "ping"];
+    let (_, output) = exchange_with_remembered_workspace(failed, WS, &args);
+    let stderr = assert_failure(&output, &args);
+    assert!(stderr.contains("TASK_STATE_FAILED"), "{stderr}");
+}
+
+#[test]
 fn task_list_sends_camel_case_query_parameters() {
     let args = [
         "agent",

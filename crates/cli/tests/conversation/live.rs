@@ -74,9 +74,21 @@ impl Live {
     }
 
     /// Create a project and an actor bound to `workspace`.
+    ///
+    /// `Live` exists from the start with empty ids, so a step that fails
+    /// midway still drops it and removes what the earlier steps created.
     fn populate(home: PathBuf, workspace: String, tag: &str) -> Self {
+        let mut live = Self {
+            home,
+            workspace,
+            project: String::new(),
+            actor: String::new(),
+        };
+        let home = live.home.clone();
+        let workspace = live.workspace.clone();
+
         let project_name = unique_name(&format!("{tag}-proj"));
-        let project = id_of(
+        live.project = id_of(
             &json_of(
                 &home,
                 &[
@@ -94,7 +106,7 @@ impl Live {
         );
 
         let actor_name = unique_name(&format!("{tag}-actor"));
-        let actor = id_of(
+        live.actor = id_of(
             &json_of(
                 &home,
                 &[
@@ -115,16 +127,10 @@ impl Live {
             "--workspace",
             workspace.as_str(),
             "--actor",
-            actor.as_str(),
+            live.actor.as_str(),
         ];
         assert_success(&run(&home, &args), &args);
-
-        Self {
-            home,
-            workspace,
-            project,
-            actor,
-        }
+        live
     }
 
     /// Run a `conversation` command and parse its stdout as JSON.
@@ -135,30 +141,35 @@ impl Live {
 
 impl Drop for Live {
     fn drop(&mut self) {
-        let _ = run(
-            &self.home,
-            &[
-                "project",
-                "delete",
-                "--workspace",
-                &self.workspace,
-                &self.project,
-            ],
-        );
-        // Deleting an actor leaves its workspace binding listed (measured
-        // 2026-10-09), which would pile up in the shared scratch workspace.
-        let _ = run(
-            &self.home,
-            &[
-                "actor",
-                "unbind",
-                "--workspace",
-                &self.workspace,
-                "--actor",
-                &self.actor,
-            ],
-        );
-        let _ = run(&self.home, &["actor", "delete", &self.actor]);
+        // An empty id is a step `populate` never reached.
+        if !self.project.is_empty() {
+            let _ = run(
+                &self.home,
+                &[
+                    "project",
+                    "delete",
+                    "--workspace",
+                    &self.workspace,
+                    &self.project,
+                ],
+            );
+        }
+        if !self.actor.is_empty() {
+            // Deleting an actor leaves its workspace binding listed (measured
+            // 2026-10-09), which would pile up in the shared scratch workspace.
+            let _ = run(
+                &self.home,
+                &[
+                    "actor",
+                    "unbind",
+                    "--workspace",
+                    &self.workspace,
+                    "--actor",
+                    &self.actor,
+                ],
+            );
+            let _ = run(&self.home, &["actor", "delete", &self.actor]);
+        }
         let _ = fs::remove_dir_all(&self.home);
     }
 }

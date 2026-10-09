@@ -18,9 +18,10 @@ use clap::{Args, Subcommand, ValueEnum};
 use memorylake_core::Client;
 use memorylake_core::api::agents::a2a::{
     FEEDBACK_COMMENT_MAX_CHARS, ListTasksParams, MemorylakeExtension, Message, ROLE_USER, Rating,
-    SendConfiguration, SendMessageRequest, SendMetadata, TASK_STATE_INPUT_REQUIRED,
-    TaskFeedbackRequest, cancel_task, get_agent_card, get_task, list_tasks, send_message,
-    stream_message, submit_task_feedback, subscribe_task, text_part,
+    SendConfiguration, SendMessageRequest, SendMetadata, TASK_STATE_COMPLETED,
+    TASK_STATE_INPUT_REQUIRED, TaskFeedbackRequest, cancel_task, get_agent_card, get_task,
+    is_terminal_state, list_tasks, send_message, stream_message, submit_task_feedback,
+    subscribe_task, text_part,
 };
 use serde_json::{Map, Value};
 
@@ -216,7 +217,7 @@ pub fn run_send(client: &Client, workspace: &str, args: SendArgs) -> Result<()> 
     if args.stream {
         let events = stream_message(client, workspace, agent_id, &request)
             .with_context(|| format!("stream message to agent `{agent_id}`"))?;
-        return print_stream(events, args.raw);
+        return print_stream(events, args.raw, agent_id);
     }
 
     let response = send_message(client, workspace, agent_id, &request)
@@ -224,7 +225,9 @@ pub fn run_send(client: &Client, workspace: &str, args: SendArgs) -> Result<()> 
     if args.raw || args.no_wait {
         return print_json(&response);
     }
-    print_reply(&response)
+    print_reply(&response)?;
+    let task = response.get("task").unwrap_or(&response);
+    ensure_not_failed(task_state(task), task_id(task))
 }
 
 /// `agent task ...`.
@@ -281,7 +284,7 @@ pub fn run_task(client: &Client, workspace: &str, command: TaskCommand) -> Resul
         } => {
             let events = subscribe_task(client, workspace, &agent_id, &task_id)
                 .with_context(|| format!("subscribe to task `{task_id}` of agent `{agent_id}`"))?;
-            print_stream(events, raw)
+            print_stream(events, raw, &agent_id)
         }
         TaskCommand::Feedback {
             agent_id,
@@ -537,18 +540,36 @@ fn print_continuation(task: &Value) {
 /// artifact is only printed when no status text arrived, so an agent that
 /// streams nothing still shows its result and one that streams does not
 /// repeat itself.
-fn print_stream<I>(events: I, raw: bool) -> Result<()>
+///
+/// The stream must end where the task settles. One that closes while the task
+/// is still working (a proxy cutting the connection, say) is an error naming
+/// how to re-attach, not a quiet success; a task that failed, was cancelled or
+/// was rejected also exits non-zero. A task waiting for input is a normal end.
+fn print_stream<I>(events: I, raw: bool, agent_id: &str) -> Result<()>
 where
     I: Iterator<Item = memorylake_core::Result<Value>>,
 {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let mut last_task: Option<Value> = None;
+    // Tracked apart from `last_task`: an `artifactUpdate` names the task but
+    // carries no status, and must not erase the state seen before it.
+    let mut task: Option<String> = None;
+    let mut state: Option<String> = None;
     let mut streamed_status_text = false;
     let mut artifact_text = String::new();
 
     for event in events {
         let event = event.context("read agent reply stream")?;
+        if let Some(summary) = event_task_summary(&event) {
+            if let Some(id) = task_id(&summary) {
+                task = Some(id.to_string());
+            }
+            if let Some(seen) = task_state(&summary) {
+                state = Some(seen.to_string());
+            }
+            last_task = Some(summary);
+        }
         if raw {
             writeln!(out, "{event}")?;
             out.flush()?;
@@ -565,23 +586,58 @@ where
             &mut artifact_text,
             event.pointer("/artifactUpdate/artifact/parts"),
         );
-        if let Some(task) = event_task_summary(&event) {
-            last_task = Some(task);
-        }
     }
 
-    if raw {
+    if !raw {
+        if streamed_status_text {
+            writeln!(out)?;
+        } else if !artifact_text.is_empty() {
+            writeln!(out, "{artifact_text}")?;
+        }
+        if let Some(mut summary) = last_task {
+            // The last event may be an artifact without a status; report the
+            // last state the stream actually named.
+            if let (Some(state), Some(object)) = (&state, summary.as_object_mut()) {
+                object.insert("status".into(), serde_json::json!({ "state": state }));
+            }
+            print_continuation(&summary);
+        }
+    }
+    drop(out);
+
+    // A stream that named no task (a bare `message` reply) has nothing left
+    // to wait for.
+    let Some(task) = task else {
         return Ok(());
+    };
+    match state.as_deref() {
+        Some(state) if is_terminal_state(state) || state == TASK_STATE_INPUT_REQUIRED => {
+            ensure_not_failed(Some(state), Some(&task))
+        }
+        last => bail!(
+            "the stream closed before task `{task}` settled (last state: {}); re-attach with `memorylake agent task subscribe {agent_id} {task}`",
+            last.unwrap_or("unknown")
+        ),
     }
-    if streamed_status_text {
-        writeln!(out)?;
-    } else if !artifact_text.is_empty() {
-        writeln!(out, "{artifact_text}")?;
+}
+
+/// Fail when a settled task did not succeed, so scripts can tell from the
+/// exit code. Unsettled and input-required tasks pass.
+fn ensure_not_failed(state: Option<&str>, task: Option<&str>) -> Result<()> {
+    match state {
+        Some(state) if is_terminal_state(state) && state != TASK_STATE_COMPLETED => {
+            bail!("task `{}` ended in {state}", task.unwrap_or("?"))
+        }
+        _ => Ok(()),
     }
-    if let Some(task) = last_task {
-        print_continuation(&task);
-    }
-    Ok(())
+}
+
+fn task_state(task: &Value) -> Option<&str> {
+    task.pointer("/status/state").and_then(Value::as_str)
+}
+
+fn task_id(task: &Value) -> Option<&str> {
+    task.get("id").and_then(Value::as_str)
 }
 
 /// The words a stream event carries as the agent speaks them: the status

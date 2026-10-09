@@ -303,6 +303,20 @@ fn inspect_takes_one_to_a_hundred_ids_before_credentials() {
     let err = assert_failure(&run(&home, &args), &args);
     assert!(err.contains("100"), "{err}");
     assert!(!err.contains("not logged in"), "{err}");
+
+    let args = [
+        "project",
+        "doc",
+        "inspect",
+        "--workspace",
+        "ws-1",
+        "--project",
+        "proj-1",
+        "",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("must not be empty"), "{err}");
+    assert!(!err.contains("not logged in"), "{err}");
     let _ = fs::remove_dir_all(&home);
 }
 

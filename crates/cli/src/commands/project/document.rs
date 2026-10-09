@@ -156,7 +156,12 @@ pub enum DocumentCommand {
         #[arg(long)]
         project: String,
         /// Document ids to inspect (1–100).
-        #[arg(required = true, num_args = 1..=INSPECT_MAX_DOCUMENTS, value_name = "DOCUMENT_ID")]
+        #[arg(
+            required = true,
+            num_args = 1..=INSPECT_MAX_DOCUMENTS,
+            value_name = "DOCUMENT_ID",
+            value_parser = crate::commands::parse_non_blank
+        )]
         document_ids: Vec<String>,
     },
     /// Process a failed document again.

@@ -572,5 +572,10 @@ fn message_get_takes_one_to_a_hundred_ids_before_credentials() {
     let err = assert_failure(&run(&home, &args), &args);
     assert!(!err.contains("not logged in"), "{err}");
     assert!(err.contains("100"), "{err}");
+
+    let args = ["conversation", "message", "get", "conv-1", "m-1", ""];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("must not be empty"), "{err}");
+    assert!(!err.contains("not logged in"), "{err}");
     let _ = fs::remove_dir_all(&home);
 }

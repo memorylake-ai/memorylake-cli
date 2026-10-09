@@ -126,6 +126,14 @@ fn xattr_input_is_validated_before_credentials() {
             "JSON object",
         ),
         (
+            vec!["library", "mkdir", "docs", "--xattrs", "{}"],
+            "at least one attribute",
+        ),
+        (
+            vec!["library", "upload", "a.txt", "--xattrs", "{}"],
+            "at least one attribute",
+        ),
+        (
             vec!["library", "list", "--xattr-keys", ""],
             "must not be empty",
         ),

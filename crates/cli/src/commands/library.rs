@@ -50,9 +50,9 @@ pub enum LibraryCommand {
         /// `rename` and `deny`.
         #[arg(long = "on-conflict", value_enum)]
         on_conflict: Option<ConflictStrategyArg>,
-        /// Extended attributes to create the folder with, as a JSON object of
-        /// strings, e.g. '{"team":"core"}'.
-        #[arg(long, value_name = "JSON", value_parser = parse_string_map)]
+        /// Extended attributes to create the folder with, as a non-empty
+        /// JSON object of strings, e.g. '{"team":"core"}'.
+        #[arg(long, value_name = "JSON", value_parser = parse_xattrs_to_set)]
         xattrs: Option<BTreeMap<String, String>>,
     },
     /// Upload a local file.
@@ -68,9 +68,9 @@ pub enum LibraryCommand {
         /// What to do if the name is taken.
         #[arg(long = "on-conflict", value_enum)]
         on_conflict: Option<ConflictStrategyArg>,
-        /// Extended attributes to create the file with, as a JSON object of
-        /// strings, e.g. '{"team":"core"}'.
-        #[arg(long, value_name = "JSON", value_parser = parse_string_map)]
+        /// Extended attributes to create the file with, as a non-empty
+        /// JSON object of strings, e.g. '{"team":"core"}'.
+        #[arg(long, value_name = "JSON", value_parser = parse_xattrs_to_set)]
         xattrs: Option<BTreeMap<String, String>>,
     },
     /// Set or remove extended attributes on a file or folder.
@@ -121,8 +121,8 @@ pub enum XattrCommand {
     },
 }
 
-/// `--attrs` for `xattr set`: a string map with at least one entry, since the
-/// server rejects an empty one.
+/// `--attrs` for `xattr set` and `--xattrs` for `mkdir`/`upload`: a string
+/// map with at least one entry, since the server rejects an empty one.
 fn parse_xattrs_to_set(raw: &str) -> std::result::Result<BTreeMap<String, String>, String> {
     let attrs = parse_string_map(raw)?;
     if attrs.is_empty() {
