@@ -439,6 +439,58 @@ goes through `--metadata-json`.
 Feedback is a MemoryLake extension to A2A. `task feedback` records a rating on
 the task; `task get` reads it back under `metadata."task-feedback/v1"`.
 
+### Skills
+
+```bash
+memorylake skill list [--name FUZZY] [--page-size N] [--continuation-token T]
+memorylake skill create --name equity-research --title "Equity Research" \
+  [--description D] (--package skill.zip | --package-uri URI)
+memorylake skill get <id>
+memorylake skill update <id> [--title T] [--description D]
+memorylake skill delete <id>
+memorylake skill upload skill.zip            # prints {"s3_uri": ...}
+
+memorylake skill version create <id> (--package skill.zip | --package-uri URI) [--changelog TEXT]
+memorylake skill version list <id>
+memorylake skill version get <id> <version>
+```
+
+A skill is a ZIP archive with a `SKILL.md` at its root or one directory down, at
+most 10 MiB. `--package` uploads the archive and publishes it in one step; the
+CLI takes a ready-made `.zip` rather than a directory, so zip it first
+(`cd my-skill && zip -r ../my-skill.zip .`). `skill upload` only uploads and
+prints the storage URI, which `--package-uri` accepts in place of `--package`.
+If a `--package` publish fails after the upload, the error names that URI so
+the retry can skip the upload. Skill names must be unique in the team.
+
+Every published version goes through a security review: it starts `pending`
+and settles on `safe`, `blocked` or `error` — `skill get` shows the latest
+version's state as `latest_security_status`. Only a reviewed (`safe`) skill can
+be referenced from an agent, as `"skills": [{"skill_id": "...", "skill_version": N}]`
+in an `agent create` / `agent version create` config (omit `skill_version` to
+follow the latest); anything else is refused with `SKILL_NOT_USABLE`. Publishing
+a new version makes agents that follow the latest wait for its review, while
+agents pinned to an older version are unaffected.
+
+### Boundaries
+
+```bash
+memorylake boundary list [--workspace <id>] [--name FUZZY] [--page-size N] [--continuation-token T]
+memorylake boundary create --name NAME [--workspace <id>] [--custom-id ID] \
+  [--projects ID,ID] [--human-actor ID] [--agent ID]
+memorylake boundary get <id> [--by-custom-id]
+memorylake boundary update <id> [--name NAME] \
+  [--projects ID,ID | --clear-projects] [--human-actor ID | --clear-human-actor] \
+  [--agent ID | --clear-agent]
+memorylake boundary delete <id>
+```
+
+A boundary is a named, saved search scope inside a workspace: a set of projects
+plus, optionally, one human actor and one agent whose memories are in scope.
+Everything it names must belong to its workspace — projects must exist there,
+and the actor and agent must be bound to it — and you need search permission on
+each. `--projects` on `update` replaces the list rather than adding to it.
+
 ### Search
 
 ```bash

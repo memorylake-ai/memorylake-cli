@@ -139,6 +139,58 @@ pub enum Error {
         source: crate::client::PartUploadError,
     },
 
+    /// A local file cannot be used as a skill package.
+    #[error("{path} cannot be used as a skill package: {reason}")]
+    InvalidSkillPackage {
+        /// Path the caller supplied.
+        path: PathBuf,
+        /// What is wrong with it.
+        reason: String,
+    },
+
+    /// A single-shot pre-signed upload was refused by the storage backend.
+    ///
+    /// The signature is fixed, so resending to the same URL cannot help; the
+    /// caller has to request a fresh upload slot.
+    #[error(
+        "storage refused the upload (HTTP {status}); upload URLs are short-lived — re-run the command\n{body}"
+    )]
+    StorageUploadRefused {
+        /// Status returned by the storage backend.
+        status: u16,
+        /// Response body, with credential-bearing parameters redacted.
+        body: String,
+    },
+
+    /// A pre-signed upload never got a response from the storage backend
+    /// (connection refused or reset, timeout).
+    ///
+    /// Kept apart from [`Error::Http`], whose message is about the MemoryLake
+    /// API: the failing host here is storage. The source has had its URL
+    /// stripped, because that URL is a working credential.
+    #[error(
+        "could not reach storage to upload the file; check your network and re-run the command"
+    )]
+    StorageTransport {
+        /// Underlying transport error, without its URL.
+        #[source]
+        source: reqwest::Error,
+    },
+
+    /// A request path contained an empty, `.` or `..` segment.
+    ///
+    /// URL parsing collapses dot segments, so an id of `..` would silently
+    /// address the parent resource — `project delete ..` would become a
+    /// workspace delete — and an empty id addresses the collection. Such a
+    /// request is refused before it is sent.
+    #[error(
+        "refusing to request `{path}`: an id is empty, `.` or `..`, which would address a different resource"
+    )]
+    InvalidPathSegment {
+        /// The request path as built, before the base URL is prepended.
+        path: String,
+    },
+
     /// HTTP transport or protocol failure.
     #[error("{}", format_http_error(.0))]
     Http(#[from] reqwest::Error),

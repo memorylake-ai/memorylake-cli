@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use reqwest::blocking::{Body, Client as HttpClient};
 use reqwest::header::{
@@ -155,7 +156,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let mut builder = self.http.get(&url).headers(self.auth_headers()?);
         for (key, value) in query {
             builder = builder.query(&[(key, value)]);
@@ -213,7 +214,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         Ok(apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .json(body))
@@ -239,7 +240,7 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.patch(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
@@ -263,7 +264,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.delete(&url), headers)
             .headers(self.auth_headers()?)
             .build()?;
@@ -283,7 +284,7 @@ impl Client {
     /// to the storage provider — which needs no such thing, the signature being
     /// in the URL.
     pub fn download_to<W: std::io::Write>(&self, path: &str, writer: &mut W) -> Result<Downloaded> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self.http.get(&url).headers(self.auth_headers()?).build()?;
         let mut response = self.execute(request)?;
 
@@ -344,7 +345,7 @@ impl Client {
         query: &[(&str, String)],
         headers: &[(&str, &str)],
     ) -> Result<Value> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let mut builder = apply_headers(self.http.get(&url), headers).headers(self.auth_headers()?);
         for (key, value) in query {
             builder = builder.query(&[(key, value)]);
@@ -362,7 +363,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
@@ -386,7 +387,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .header(ACCEPT, "text/event-stream")
@@ -431,7 +432,7 @@ impl Client {
     /// response. This variant validates the envelope — a non-2xx status or
     /// `success: false` is still an error — and discards whatever `data` holds.
     pub fn delete_empty(&self, path: &str) -> Result<()> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self
             .http
             .delete(&url)
@@ -454,7 +455,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self
             .http
             .delete(&url)
@@ -516,7 +517,11 @@ impl Client {
             .put(upload_url)
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(body)
-            .send()?;
+            .send()
+            // A transport error's Display names the URL, and this one carries
+            // a working signature. Strip it before the error can reach a log
+            // or the user's terminal.
+            .map_err(reqwest::Error::without_url)?;
 
         let status = response.status();
         tracing::trace!(
@@ -542,13 +547,76 @@ impl Client {
             .map(str::to_string))
     }
 
-    fn url(&self, path: &str) -> String {
+    /// Upload a whole object to a single-shot pre-signed `upload_url`, sending
+    /// exactly the `headers` the slot was signed for.
+    ///
+    /// Unlike [`Self::put_presigned_part`], the slot dictates the headers: the
+    /// URL's signature covers them, so they are replayed verbatim and nothing
+    /// is guessed. The one exception is `Content-Type` — this client sends JSON
+    /// by default, so when the slot names none, `default_content_type` is used
+    /// instead of letting the JSON default leak onto a binary upload.
+    ///
+    /// No `Authorization` header is sent, for the same reason as part uploads.
+    /// `body` should carry a known length: storage backends reject the chunked
+    /// encoding an unsized body would fall back to. `timeout` replaces the
+    /// client default for this request, so a large body on a slow link has
+    /// time to finish.
+    pub fn put_presigned_object(
+        &self,
+        upload_url: &str,
+        headers: &BTreeMap<String, String>,
+        default_content_type: &str,
+        body: Body,
+        timeout: Duration,
+    ) -> Result<()> {
+        let mut builder = self.http.put(upload_url).timeout(timeout);
+        if !headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(CONTENT_TYPE.as_str()))
+        {
+            builder = builder.header(CONTENT_TYPE, default_content_type);
+        }
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        // `without_url`: a transport error's Display names the URL, which
+        // here is a working credential.
+        let response = builder
+            .body(body)
+            .send()
+            .map_err(|source| Error::StorageTransport {
+                source: source.without_url(),
+            })?;
+
+        let status = response.status();
+        tracing::trace!(
+            status = status.as_u16(),
+            url = %redact_presigned(upload_url),
+            "object upload response"
+        );
+
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(Error::StorageUploadRefused {
+                status: status.as_u16(),
+                body: redact_presigned(body.trim()).into_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Join `path` onto the base URL, refusing paths that URL parsing would
+    /// rewrite into a different resource (see [`Error::InvalidPathSegment`]).
+    fn url(&self, path: &str) -> Result<String> {
         let path = if path.starts_with('/') {
             path.to_string()
         } else {
             format!("/{path}")
         };
-        format!("{}{path}", self.base_url)
+        if has_unsafe_segment(&path) {
+            return Err(Error::InvalidPathSegment { path });
+        }
+        Ok(format!("{}{path}", self.base_url))
     }
 
     fn auth_headers(&self) -> Result<HeaderMap> {
@@ -562,6 +630,19 @@ impl Client {
         headers.insert(AUTHORIZATION, value);
         Ok(headers)
     }
+}
+
+/// Whether any segment of `path` (query excluded) is empty or a dot segment.
+///
+/// Dot segments are matched in their percent-encoded spellings too: the URL
+/// parser treats `%2e` as `.` when it normalizes a path, so encoding an id
+/// does not stop `..` from being collapsed.
+fn has_unsafe_segment(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    path.split('/').skip(1).any(|segment| {
+        let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+        segment.is_empty() || decoded == "." || decoded == ".."
+    })
 }
 
 /// Apply extra per-request headers to a builder.
@@ -1059,6 +1140,163 @@ mod tests {
     }
 
     #[test]
+    fn object_upload_replays_the_signed_headers_without_authorization() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let headers = BTreeMap::from([
+            ("Content-Type".to_string(), "application/zip".to_string()),
+            ("x-amz-meta-origin".to_string(), "cli".to_string()),
+        ]);
+
+        client
+            .put_presigned_object(
+                &format!("{base}/bucket/k.zip?X-Amz-Signature=deadbeef"),
+                &headers,
+                "application/octet-stream",
+                Body::from(vec![b'P', b'K', 5, 6]),
+                Duration::from_secs(30),
+            )
+            .expect("object upload succeeds");
+
+        let request = server.join().expect("server thread");
+        let head = request.head.to_ascii_lowercase();
+        assert!(!request.has_header("authorization"), "{}", request.head);
+        assert!(head.contains("content-type: application/zip"), "{head}");
+        assert!(
+            !head.contains("application/json"),
+            "the JSON default must not leak onto the upload: {head}"
+        );
+        assert!(head.contains("x-amz-meta-origin: cli"), "{head}");
+        assert!(head.contains("content-length: 4"), "{head}");
+        assert_eq!(request.body, vec![b'P', b'K', 5, 6]);
+    }
+
+    #[test]
+    fn object_upload_falls_back_to_the_default_content_type() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(30),
+            )
+            .expect("object upload succeeds");
+
+        let head = server
+            .join()
+            .expect("server thread")
+            .head
+            .to_ascii_lowercase();
+        assert!(head.contains("content-type: application/zip"), "{head}");
+    }
+
+    #[test]
+    fn object_upload_reports_a_refusal_with_a_redacted_body() {
+        let body = "<Error>https://s3/x?X-Amz-Signature=secret</Error>";
+        let (base, server) = one_shot_server(format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let err = client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(30),
+            )
+            .expect_err("403 is an error");
+        match err {
+            Error::StorageUploadRefused { status, body } => {
+                assert_eq!(status, 403);
+                assert!(!body.contains("secret"), "{body}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        let _ = server.join();
+    }
+
+    /// A URL on a loopback port nothing listens on, carrying a fake signature.
+    fn refused_presigned_url() -> String {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a port")
+            .port();
+        // The listener is dropped here, so connecting is refused.
+        format!(
+            "http://127.0.0.1:{port}/bucket/k.zip?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=deadbeefsecret"
+        )
+    }
+
+    /// Display of `err` and of every error in its `source()` chain.
+    fn error_chain(err: &dyn std::error::Error) -> String {
+        let mut rendered = err.to_string();
+        let mut source = err.source();
+        while let Some(next) = source {
+            rendered.push_str(" | ");
+            rendered.push_str(&next.to_string());
+            source = next.source();
+        }
+        rendered
+    }
+
+    fn assert_no_credentials(rendered: &str) {
+        for secret in ["X-Amz-Signature", "deadbeefsecret", "AKIDEXAMPLE"] {
+            assert!(
+                !rendered.contains(secret),
+                "`{secret}` leaked into the error: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn object_upload_transport_errors_do_not_carry_the_signed_url() {
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .put_presigned_object(
+                &refused_presigned_url(),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(5),
+            )
+            .expect_err("nothing is listening");
+        assert!(matches!(err, Error::StorageTransport { .. }), "{err:?}");
+        let rendered = error_chain(&err);
+        assert!(rendered.contains("storage"), "{rendered}");
+        assert!(!rendered.contains("MemoryLake API"), "{rendered}");
+        assert_no_credentials(&rendered);
+        assert_no_credentials(&format!("{err:?}"));
+    }
+
+    #[test]
+    fn part_upload_transport_errors_do_not_carry_the_signed_url() {
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .put_presigned_part(&refused_presigned_url(), Body::from(vec![0u8]))
+            .expect_err("nothing is listening");
+        assert!(err.is_retryable());
+        // The library uploader logs this one between retries, then wraps it.
+        assert_no_credentials(&error_chain(&err));
+        assert_no_credentials(&format!("{err:?}"));
+
+        let wrapped = Error::PartUpload {
+            path: std::path::PathBuf::from("file.bin"),
+            number: 1,
+            total: 1,
+            attempts: 4,
+            source: err,
+        };
+        assert_no_credentials(&error_chain(&wrapped));
+    }
+
+    #[test]
     fn redact_presigned_masks_signature_and_credential() {
         let url = "https://s3.amazonaws.com/b/k?X-Amz-Algorithm=AWS4-HMAC-SHA256\
                    &X-Amz-Credential=AKIAEXAMPLE%2F20260806%2Fus-east-1%2Fs3%2Faws4_request\
@@ -1420,6 +1658,48 @@ mod tests {
         assert!(
             request.contains("authorization: "),
             "extra headers must not displace auth:\n{request}"
+        );
+    }
+
+    #[test]
+    fn unsafe_segments_are_detected_in_every_spelling() {
+        for path in [
+            "/api/v3/workspaces/ws-1/projects/..",
+            "/api/v3/workspaces/ws-1/projects/.",
+            "/api/v3/workspaces/ws-1/projects/%2e%2E",
+            "/api/v3/workspaces/ws-1/projects/.%2e",
+            "/api/v3/workspaces/../projects/p-1",
+            "/api/v3/actors/",
+            "/api/v3/workspaces//projects",
+            "/api/v3/workspaces/ws-1/analysis-models/m/entries/..?entity_type=x",
+        ] {
+            assert!(has_unsafe_segment(path), "{path} must be refused");
+        }
+        for path in [
+            "/api/v3/workspaces/ws-1/projects/p-1",
+            "/api/v1/drives/items/sc-a:inode-b",
+            // An encoded `/` keeps `../..` inside one segment, which the
+            // server receives as an opaque id rather than a traversal.
+            "/api/v3/workspaces/ws-1/projects/..%2F..",
+            "/api/v3/workspaces/ws-1/projects/...",
+            "/api/v3/workspaces/ws-1/projects/a..b",
+            "/api/v3/actors/act-1?by_custom_id=..",
+        ] {
+            assert!(!has_unsafe_segment(path), "{path} must be allowed");
+        }
+    }
+
+    #[test]
+    fn a_dot_dot_id_is_refused_before_any_request_is_sent() {
+        // `project delete ..` would otherwise collapse into
+        // `DELETE /api/v3/workspaces/ws-1/` -- a workspace delete.
+        let client = Client::new("http://127.0.0.1:9", "sk_test_key_1234").unwrap();
+        let err = client
+            .delete_empty("/api/v3/workspaces/ws-1/projects/..")
+            .expect_err("a dot segment must be refused");
+        assert!(
+            matches!(err, Error::InvalidPathSegment { ref path } if path.ends_with("/projects/..")),
+            "{err:?}"
         );
     }
 

@@ -35,11 +35,16 @@ impl StubServer {
     /// body, so a test can script a sequence like "not finished, then
     /// finished". Every response closes its connection, so each request
     /// arrives on a fresh one.
+    ///
+    /// `{base_url}` in a body is replaced with the stub's own address, so a
+    /// response can point the CLI back at the stub (a pre-signed upload URL,
+    /// for instance).
     fn with_responses(bodies: &[&str]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
         let addr = listener.local_addr().expect("stub server address");
         let responses: Vec<String> = bodies
             .iter()
+            .map(|body| body.replace("{base_url}", &format!("http://{addr}")))
             .map(|body| {
                 format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
