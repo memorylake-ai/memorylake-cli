@@ -15,6 +15,8 @@ use commands::api_key::{ApiKeyCommand, run as run_api_key};
 use commands::auth::{AuthCommand, run as run_auth};
 use commands::boundary::{BoundaryCommand, run as run_boundary};
 use commands::conversation::{ConversationCommand, run as run_conversation};
+use commands::datasource::{DatasourceCommand, run as run_datasource};
+use commands::db_connection::{DbConnectionCommand, run as run_db_connection};
 use commands::fact::{FactCommand, run as run_fact};
 use commands::industry::{IndustryCommand, run as run_industry};
 use commands::invitation::{InvitationCommand, run as run_invitation};
@@ -119,6 +121,19 @@ enum Commands {
         #[command(subcommand)]
         command: FactCommand,
     },
+    /// Manage saved database connections (host, credentials).
+    #[command(visible_alias = "dbconn")]
+    DbConnection {
+        #[command(subcommand)]
+        command: DbConnectionCommand,
+    },
+    /// Manage database datasources: one indexed schema of a connection,
+    /// in a workspace.
+    #[command(visible_alias = "ds")]
+    Datasource {
+        #[command(subcommand)]
+        command: DatasourceCommand,
+    },
     /// Search memories in a workspace.
     Search(SearchArgs),
     /// Manage analysis models and their knowledge entries.
@@ -180,6 +195,10 @@ fn main() -> Result<()> {
         Commands::Boundary { command } => run_boundary(command, cli.profile, cli.base_url)?,
         Commands::Conversation { command } => run_conversation(command, cli.profile, cli.base_url)?,
         Commands::Fact { command } => run_fact(command, cli.profile, cli.base_url)?,
+        Commands::DbConnection { command } => {
+            run_db_connection(command, cli.profile, cli.base_url)?
+        }
+        Commands::Datasource { command } => run_datasource(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
         Commands::AnalysisModel { command } => {
             run_analysis_model(command, cli.profile, cli.base_url)?

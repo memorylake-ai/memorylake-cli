@@ -1,5 +1,6 @@
 //! `memorylake project` / `proj` commands.
 
+mod database;
 mod document;
 
 use anyhow::{Context, Result};
@@ -12,6 +13,7 @@ use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 use super::require_workspace;
 use super::search::{IdList, parse_id_list};
+use database::{DatabaseCommand, run as run_database};
 use document::{DocumentCommand, run as run_document};
 
 /// Project subcommands.
@@ -115,6 +117,12 @@ pub enum ProjectCommand {
         #[command(subcommand)]
         command: DocumentCommand,
     },
+    /// Manage the databases a project uses as memory sources.
+    #[command(visible_alias = "db")]
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommand,
+    },
 }
 
 /// Execute a `project` subcommand.
@@ -123,6 +131,13 @@ pub fn run(
     profile: Option<String>,
     base_url: Option<String>,
 ) -> Result<()> {
+    // Database memory commands read and check their input before resolving
+    // credentials, so they resolve their own.
+    let command = match command {
+        ProjectCommand::Database { command } => return run_database(command, profile, base_url),
+        other => other,
+    };
+
     let paths = Paths::default_home().context("resolve MemoryLake config paths")?;
     let runtime = resolve(&paths, &ResolveOverrides { profile, base_url })
         .context("resolve API credentials")?;
@@ -219,6 +234,7 @@ pub fn run(
         ProjectCommand::Document { command } => {
             run_document(&client, &paths, &runtime.profile, command)?
         }
+        ProjectCommand::Database { .. } => unreachable!("dispatched before resolving credentials"),
     }
 
     Ok(())

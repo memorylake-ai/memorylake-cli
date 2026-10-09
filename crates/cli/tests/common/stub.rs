@@ -114,6 +114,35 @@ impl StubServer {
         }
     }
 
+    /// Answer one request with a `text/event-stream` whose body is `body`
+    /// verbatim, for streams that use `event:` names and comment lines.
+    fn raw_event_stream(body: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
+        let addr = listener.local_addr().expect("stub server address");
+        let body = body.to_string();
+
+        let (sender, requests) = channel();
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let request = read_http_request(&mut stream);
+            let _ = sender.send(request);
+            let head =
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        });
+
+        Self {
+            base_url: format!("http://{addr}"),
+            requests,
+            handle: Some(handle),
+        }
+    }
+
     fn received(&self) -> String {
         match self.requests.recv_timeout(Duration::from_secs(10)) {
             Ok(request) => request,
@@ -251,16 +280,6 @@ pub fn exchange(response: &str, args: &[&str]) -> (String, Output) {
     (request, output)
 }
 
-/// [`exchange`] with `input` piped to the command's stdin.
-pub fn exchange_with_stdin(response: &str, args: &[&str], input: &str) -> (String, Output) {
-    let server = StubServer::new(response);
-    let home = logged_in_home(&server.base_url);
-    let output = super::run_with_stdin(&home, args, input);
-    let request = server.received();
-    let _ = fs::remove_dir_all(&home);
-    (request, output)
-}
-
 /// Run one command against a stub that answers `responses` in order, and
 /// report every request the CLI sent alongside the process output.
 ///
@@ -299,6 +318,36 @@ pub fn exchange_event_stream_with_remembered_workspace(
     let server = StubServer::event_stream(events);
     let home = logged_in_home_with_workspace(&server.base_url, workspace);
     let output = run(&home, args);
+    let request = server.received();
+    let _ = fs::remove_dir_all(&home);
+    (request, output)
+}
+
+/// Run one command against a stub that answers with the raw event-stream
+/// `body`, from a `$HOME` that already remembers `workspace`.
+pub fn exchange_raw_event_stream_with_remembered_workspace(
+    body: &str,
+    workspace: &str,
+    args: &[&str],
+) -> (String, Output) {
+    let server = StubServer::raw_event_stream(body);
+    let home = logged_in_home_with_workspace(&server.base_url, workspace);
+    let output = run(&home, args);
+    let request = server.received();
+    let _ = fs::remove_dir_all(&home);
+    (request, output)
+}
+
+/// [`exchange`] with `stdin` piped in and extra environment variables set.
+pub fn exchange_with_input(
+    response: &str,
+    args: &[&str],
+    stdin: &str,
+    envs: &[(&str, &str)],
+) -> (String, Output) {
+    let server = StubServer::new(response);
+    let home = logged_in_home(&server.base_url);
+    let output = super::run_with_input(&home, args, stdin, envs);
     let request = server.received();
     let _ = fs::remove_dir_all(&home);
     (request, output)

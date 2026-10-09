@@ -39,6 +39,26 @@ pub fn prompt_secret(prompt: impl Into<String>) -> Result<String> {
     Ok(value)
 }
 
+/// Prompt for a hidden secret and return it exactly as typed.
+///
+/// Unlike [`prompt_secret`], surrounding whitespace is kept: a database
+/// password may legitimately start or end with a space, and the same password
+/// read from a file or standard input keeps it too. Only an empty value is
+/// refused.
+pub fn prompt_secret_verbatim(prompt: impl Into<String>) -> Result<String> {
+    prepare()?;
+    let _guard = TerminalGuard::new();
+    let value = Password::with_theme(&ColorfulTheme::default())
+        .with_prompt(prompt)
+        .interact()
+        .map_err(map_prompt_error)
+        .context("read secret")?;
+    if value.is_empty() {
+        bail!("value must not be empty");
+    }
+    Ok(value)
+}
+
 /// Prompt for a visible line of text.
 pub fn prompt_line(prompt: impl Into<String>) -> Result<String> {
     prepare()?;

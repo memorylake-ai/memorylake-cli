@@ -123,6 +123,22 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// What a stream request produced: the event stream, or — when the server
+/// answered with an ordinary successful envelope instead — that envelope's
+/// `data`.
+#[derive(Debug)]
+pub enum StreamOrData<R> {
+    /// A `text/event-stream` body, positioned at the first event.
+    Stream(EventStream<R>),
+    /// A successful envelope's `data`, with the `Content-Type` it came under.
+    Data {
+        /// The envelope's `data` payload (`null` when absent).
+        data: Value,
+        /// Lower-cased `Content-Type` of the response, possibly empty.
+        content_type: String,
+    },
+}
+
 /// Thin authenticated HTTP client for MemoryLake v3 APIs.
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -387,6 +403,39 @@ impl Client {
     where
         B: Serialize,
     {
+        match self.post_event_stream_or_data(path, body, headers)? {
+            StreamOrData::Stream(stream) => Ok(stream),
+            StreamOrData::Data { content_type, .. } => Err(Error::Api {
+                message: format!(
+                    "expected a text/event-stream from {}, got {}",
+                    self.url(path)?,
+                    if content_type.is_empty() {
+                        "no content type"
+                    } else {
+                        content_type.as_str()
+                    }
+                ),
+                code: None,
+            }),
+        }
+    }
+
+    /// [`Self::post_event_stream`] for endpoints that may also answer a
+    /// successful stream request with an ordinary envelope.
+    ///
+    /// A 2xx that is not an event stream is decoded as a MemoryLake envelope:
+    /// `success: false` is an error, and otherwise its `data` is returned as
+    /// [`StreamOrData::Data`] rather than rejected. A non-2xx status is always
+    /// an error.
+    pub fn post_event_stream_or_data<B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<StreamOrData<std::io::BufReader<reqwest::blocking::Response>>>
+    where
+        B: Serialize,
+    {
         let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
@@ -405,23 +454,14 @@ impl Client {
         tracing::trace!(status = status.as_u16(), url = %url, content_type, "stream response");
 
         if !status.is_success() || !content_type.starts_with("text/event-stream") {
-            return match validate_envelope(response) {
-                Err(err) => Err(err),
-                Ok(_) => Err(Error::Api {
-                    message: format!(
-                        "expected a text/event-stream from {url}, got {} with status {status}",
-                        if content_type.is_empty() {
-                            "no content type"
-                        } else {
-                            content_type.as_str()
-                        }
-                    ),
-                    code: None,
-                }),
-            };
+            // Always errors on a non-success status.
+            let (data, _) = validate_envelope(response)?;
+            return Ok(StreamOrData::Data { data, content_type });
         }
 
-        Ok(EventStream::new(std::io::BufReader::new(response)))
+        Ok(StreamOrData::Stream(EventStream::new(
+            std::io::BufReader::new(response),
+        )))
     }
 
     /// Perform a DELETE whose successful response carries no usable payload.
@@ -753,7 +793,7 @@ fn validate_envelope(response: reqwest::blocking::Response) -> Result<(Value, Re
     tracing::trace!(
         status = status.as_u16(),
         url = %url,
-        body = %redact_presigned(&body),
+        body = %redact_secret_fields(&redact_presigned(&body)),
         "HTTP response"
     );
 
@@ -861,7 +901,12 @@ fn decode_bare_json(response: reqwest::blocking::Response) -> Result<Value> {
 
     let url = response.url().clone();
     let body = response.text().map_err(Error::from)?;
-    tracing::trace!(status = status.as_u16(), url = %url, body = %body, "HTTP response");
+    tracing::trace!(
+        status = status.as_u16(),
+        url = %url,
+        body = %redact_secret_fields(&body),
+        "HTTP response"
+    );
 
     let value: Value = serde_json::from_str(&body).map_err(|err| Error::Api {
         message: format!(
@@ -890,6 +935,7 @@ fn format_http_response(status: StatusCode, body: &str) -> String {
     const MAX_BODY: usize = 2_048;
 
     let body = redact_presigned(body.trim());
+    let body = redact_secret_fields(&body);
     let body = if body.is_empty() {
         "(empty body)".to_string()
     } else if body.len() > MAX_BODY {
@@ -1005,11 +1051,63 @@ fn mask_auth_value(value: &str) -> String {
     format!("{prefix}******{tail}")
 }
 
-/// Best-effort string view of a request body for trace logs.
+/// Best-effort string view of a request body for trace logs, with secret
+/// fields redacted.
 fn request_body_as_str(request: &reqwest::blocking::Request) -> String {
     match request.body().and_then(|b| b.as_bytes()) {
-        Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        Some(bytes) => redact_secret_fields(&String::from_utf8_lossy(bytes)).into_owned(),
         None => String::new(),
+    }
+}
+
+/// JSON keys whose values are credentials, matched case-insensitively at any
+/// depth.
+///
+/// Database connection requests carry a `password` the API treats as
+/// write-only; it must not reappear in a `-vvv` trace or an error message.
+const SECRET_BODY_KEYS: [&str; 1] = ["password"];
+
+/// Replace the values of [`SECRET_BODY_KEYS`] in a JSON body with `REDACTED`.
+///
+/// Returns the input untouched when no such key is mentioned. A body that
+/// mentions one but does not parse as JSON is withheld whole: there is no
+/// reliable way to find the value in it, and a trace without the body is
+/// better than one with the password.
+fn redact_secret_fields(text: &str) -> Cow<'_, str> {
+    let lower = text.to_ascii_lowercase();
+    if !SECRET_BODY_KEYS
+        .iter()
+        .any(|key| lower.contains(&format!("\"{key}\"")))
+    {
+        return Cow::Borrowed(text);
+    }
+
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut value) => {
+            redact_secret_values(&mut value);
+            Cow::Owned(value.to_string())
+        }
+        Err(_) => Cow::Borrowed("<body withheld: it names a secret field but is not JSON>"),
+    }
+}
+
+/// Recursive worker for [`redact_secret_fields`].
+fn redact_secret_values(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, field) in map.iter_mut() {
+                if SECRET_BODY_KEYS
+                    .iter()
+                    .any(|secret| key.eq_ignore_ascii_case(secret))
+                {
+                    *field = Value::String("REDACTED".into());
+                } else {
+                    redact_secret_values(field);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(redact_secret_values),
+        _ => {}
     }
 }
 
@@ -1518,6 +1616,100 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(request_body_as_str(&request), r#"{"k":"v"}"#);
+    }
+
+    #[test]
+    fn request_body_trace_redacts_a_password() {
+        let http = reqwest::blocking::Client::new();
+        let request = http
+            .post("http://example.invalid/")
+            .json(&serde_json::json!({"host": "db", "password": "hunter2-secret"}))
+            .build()
+            .unwrap();
+        let rendered = request_body_as_str(&request);
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+        assert!(rendered.contains(r#""password":"REDACTED""#), "{rendered}");
+        assert!(rendered.contains(r#""host":"db""#), "{rendered}");
+    }
+
+    #[test]
+    fn secret_fields_are_redacted_at_any_depth_and_case() {
+        let body = r#"{"items":[{"Password":"a1"}],"nested":{"password":{"x":"b2"}},"n":1}"#;
+        let redacted = redact_secret_fields(body);
+        assert!(
+            !redacted.contains("a1") && !redacted.contains("b2"),
+            "{redacted}"
+        );
+        assert!(redacted.contains(r#""n":1"#), "{redacted}");
+    }
+
+    #[test]
+    fn a_body_without_secret_keys_stays_borrowed() {
+        // A value that merely contains the word is not a key.
+        let body = r#"{"description":"reset the password monthly"}"#;
+        assert!(matches!(redact_secret_fields(body), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_non_json_body_naming_a_secret_is_withheld() {
+        let redacted = redact_secret_fields(r#"oops "password": hunter2"#);
+        assert!(!redacted.contains("hunter2"), "{redacted}");
+    }
+
+    #[test]
+    fn error_messages_redact_an_echoed_password() {
+        let formatted = format_http_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"success":false,"message":"bad","echo":{"password":"hunter2-secret"}}"#,
+        );
+        assert!(!formatted.contains("hunter2"), "{formatted}");
+        assert!(formatted.contains("bad"), "{formatted}");
+    }
+
+    #[test]
+    fn password_never_reaches_trace_output() {
+        use std::net::TcpListener;
+        use tracing::subscriber::with_default;
+        use tracing_subscriber::fmt;
+
+        let _serialized = trace_lock().lock().unwrap_or_else(|err| err.into_inner());
+        pin_global_trace_level();
+        let log = SharedBuf::default();
+        let subscriber = fmt::Subscriber::builder()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .finish();
+
+        with_default(subscriber, || {
+            // Dead loopback port: the request fails after `trace!` has
+            // rendered the body, which is what is under test.
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            drop(listener);
+
+            let client = Client::new(format!("http://{addr}"), "sk_test_key_1234").unwrap();
+            let _ = client.post_data::<Value, _>(
+                "/api/v3/db-connections",
+                &serde_json::json!({"name": "c", "password": "hunter2-secret"}),
+            );
+            let _ = client.patch_data::<Value, _>(
+                "/api/v3/db-connections/c1",
+                &serde_json::json!({"password": "hunter2-secret"}),
+            );
+        });
+
+        let logged = log.contents();
+        assert!(
+            logged.contains("db-connections"),
+            "request not traced: {logged}"
+        );
+        assert!(
+            !logged.contains("hunter2-secret"),
+            "password leaked into trace output: {logged}"
+        );
     }
 
     #[test]
