@@ -5,6 +5,7 @@ pub mod agent;
 pub mod analysis_model;
 pub mod api_key;
 pub mod auth;
+pub mod boundary;
 pub mod conversation;
 pub mod fact;
 pub mod industry;
@@ -15,6 +16,7 @@ pub mod member;
 pub mod project;
 pub mod role;
 pub mod search;
+pub mod skill;
 pub mod team;
 pub mod usage;
 pub mod workspace;
@@ -59,4 +61,17 @@ pub fn require_workspace(paths: &Paths, profile: &str, flag: Option<String>) -> 
              or name it here:    --workspace <id>"
         ),
     }
+}
+
+/// Accept a non-blank flag or argument value, trimmed.
+///
+/// For ids and other values where an empty string is never meaningful: sent
+/// as-is it would address the collection instead of an item, or be read by
+/// the server as "clear".
+pub fn parse_non_blank(raw: &str) -> std::result::Result<String, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    Ok(value.to_string())
 }

@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use reqwest::blocking::{Body, Client as HttpClient};
 use reqwest::header::{
@@ -488,7 +489,11 @@ impl Client {
             .put(upload_url)
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(body)
-            .send()?;
+            .send()
+            // A transport error's Display names the URL, and this one carries
+            // a working signature. Strip it before the error can reach a log
+            // or the user's terminal.
+            .map_err(reqwest::Error::without_url)?;
 
         let status = response.status();
         tracing::trace!(
@@ -512,6 +517,64 @@ impl Client {
             .map(|etag| etag.trim_matches('"'))
             .filter(|etag| !etag.is_empty())
             .map(str::to_string))
+    }
+
+    /// Upload a whole object to a single-shot pre-signed `upload_url`, sending
+    /// exactly the `headers` the slot was signed for.
+    ///
+    /// Unlike [`Self::put_presigned_part`], the slot dictates the headers: the
+    /// URL's signature covers them, so they are replayed verbatim and nothing
+    /// is guessed. The one exception is `Content-Type` — this client sends JSON
+    /// by default, so when the slot names none, `default_content_type` is used
+    /// instead of letting the JSON default leak onto a binary upload.
+    ///
+    /// No `Authorization` header is sent, for the same reason as part uploads.
+    /// `body` should carry a known length: storage backends reject the chunked
+    /// encoding an unsized body would fall back to. `timeout` replaces the
+    /// client default for this request, so a large body on a slow link has
+    /// time to finish.
+    pub fn put_presigned_object(
+        &self,
+        upload_url: &str,
+        headers: &BTreeMap<String, String>,
+        default_content_type: &str,
+        body: Body,
+        timeout: Duration,
+    ) -> Result<()> {
+        let mut builder = self.http.put(upload_url).timeout(timeout);
+        if !headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(CONTENT_TYPE.as_str()))
+        {
+            builder = builder.header(CONTENT_TYPE, default_content_type);
+        }
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        // `without_url`: a transport error's Display names the URL, which
+        // here is a working credential.
+        let response = builder
+            .body(body)
+            .send()
+            .map_err(|source| Error::StorageTransport {
+                source: source.without_url(),
+            })?;
+
+        let status = response.status();
+        tracing::trace!(
+            status = status.as_u16(),
+            url = %redact_presigned(upload_url),
+            "object upload response"
+        );
+
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(Error::StorageUploadRefused {
+                status: status.as_u16(),
+                body: redact_presigned(body.trim()).into_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// Join `path` onto the base URL, refusing paths that URL parsing would
@@ -1046,6 +1109,163 @@ mod tests {
             .expect("an empty ETag is not an error");
         assert_eq!(etag, None);
         let _ = server.join();
+    }
+
+    #[test]
+    fn object_upload_replays_the_signed_headers_without_authorization() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let headers = BTreeMap::from([
+            ("Content-Type".to_string(), "application/zip".to_string()),
+            ("x-amz-meta-origin".to_string(), "cli".to_string()),
+        ]);
+
+        client
+            .put_presigned_object(
+                &format!("{base}/bucket/k.zip?X-Amz-Signature=deadbeef"),
+                &headers,
+                "application/octet-stream",
+                Body::from(vec![b'P', b'K', 5, 6]),
+                Duration::from_secs(30),
+            )
+            .expect("object upload succeeds");
+
+        let request = server.join().expect("server thread");
+        let head = request.head.to_ascii_lowercase();
+        assert!(!request.has_header("authorization"), "{}", request.head);
+        assert!(head.contains("content-type: application/zip"), "{head}");
+        assert!(
+            !head.contains("application/json"),
+            "the JSON default must not leak onto the upload: {head}"
+        );
+        assert!(head.contains("x-amz-meta-origin: cli"), "{head}");
+        assert!(head.contains("content-length: 4"), "{head}");
+        assert_eq!(request.body, vec![b'P', b'K', 5, 6]);
+    }
+
+    #[test]
+    fn object_upload_falls_back_to_the_default_content_type() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(30),
+            )
+            .expect("object upload succeeds");
+
+        let head = server
+            .join()
+            .expect("server thread")
+            .head
+            .to_ascii_lowercase();
+        assert!(head.contains("content-type: application/zip"), "{head}");
+    }
+
+    #[test]
+    fn object_upload_reports_a_refusal_with_a_redacted_body() {
+        let body = "<Error>https://s3/x?X-Amz-Signature=secret</Error>";
+        let (base, server) = one_shot_server(format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let err = client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(30),
+            )
+            .expect_err("403 is an error");
+        match err {
+            Error::StorageUploadRefused { status, body } => {
+                assert_eq!(status, 403);
+                assert!(!body.contains("secret"), "{body}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        let _ = server.join();
+    }
+
+    /// A URL on a loopback port nothing listens on, carrying a fake signature.
+    fn refused_presigned_url() -> String {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a port")
+            .port();
+        // The listener is dropped here, so connecting is refused.
+        format!(
+            "http://127.0.0.1:{port}/bucket/k.zip?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=deadbeefsecret"
+        )
+    }
+
+    /// Display of `err` and of every error in its `source()` chain.
+    fn error_chain(err: &dyn std::error::Error) -> String {
+        let mut rendered = err.to_string();
+        let mut source = err.source();
+        while let Some(next) = source {
+            rendered.push_str(" | ");
+            rendered.push_str(&next.to_string());
+            source = next.source();
+        }
+        rendered
+    }
+
+    fn assert_no_credentials(rendered: &str) {
+        for secret in ["X-Amz-Signature", "deadbeefsecret", "AKIDEXAMPLE"] {
+            assert!(
+                !rendered.contains(secret),
+                "`{secret}` leaked into the error: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn object_upload_transport_errors_do_not_carry_the_signed_url() {
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .put_presigned_object(
+                &refused_presigned_url(),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(5),
+            )
+            .expect_err("nothing is listening");
+        assert!(matches!(err, Error::StorageTransport { .. }), "{err:?}");
+        let rendered = error_chain(&err);
+        assert!(rendered.contains("storage"), "{rendered}");
+        assert!(!rendered.contains("MemoryLake API"), "{rendered}");
+        assert_no_credentials(&rendered);
+        assert_no_credentials(&format!("{err:?}"));
+    }
+
+    #[test]
+    fn part_upload_transport_errors_do_not_carry_the_signed_url() {
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .put_presigned_part(&refused_presigned_url(), Body::from(vec![0u8]))
+            .expect_err("nothing is listening");
+        assert!(err.is_retryable());
+        // The library uploader logs this one between retries, then wraps it.
+        assert_no_credentials(&error_chain(&err));
+        assert_no_credentials(&format!("{err:?}"));
+
+        let wrapped = Error::PartUpload {
+            path: std::path::PathBuf::from("file.bin"),
+            number: 1,
+            total: 1,
+            attempts: 4,
+            source: err,
+        };
+        assert_no_credentials(&error_chain(&wrapped));
     }
 
     #[test]
