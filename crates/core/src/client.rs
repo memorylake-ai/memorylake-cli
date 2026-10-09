@@ -122,6 +122,22 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// What a stream request produced: the event stream, or — when the server
+/// answered with an ordinary successful envelope instead — that envelope's
+/// `data`.
+#[derive(Debug)]
+pub enum StreamOrData<R> {
+    /// A `text/event-stream` body, positioned at the first event.
+    Stream(EventStream<R>),
+    /// A successful envelope's `data`, with the `Content-Type` it came under.
+    Data {
+        /// The envelope's `data` payload (`null` when absent).
+        data: Value,
+        /// Lower-cased `Content-Type` of the response, possibly empty.
+        content_type: String,
+    },
+}
+
 /// Thin authenticated HTTP client for MemoryLake v3 APIs.
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -358,6 +374,39 @@ impl Client {
     where
         B: Serialize,
     {
+        match self.post_event_stream_or_data(path, body, headers)? {
+            StreamOrData::Stream(stream) => Ok(stream),
+            StreamOrData::Data { content_type, .. } => Err(Error::Api {
+                message: format!(
+                    "expected a text/event-stream from {}, got {}",
+                    self.url(path),
+                    if content_type.is_empty() {
+                        "no content type"
+                    } else {
+                        content_type.as_str()
+                    }
+                ),
+                code: None,
+            }),
+        }
+    }
+
+    /// [`Self::post_event_stream`] for endpoints that may also answer a
+    /// successful stream request with an ordinary envelope.
+    ///
+    /// A 2xx that is not an event stream is decoded as a MemoryLake envelope:
+    /// `success: false` is an error, and otherwise its `data` is returned as
+    /// [`StreamOrData::Data`] rather than rejected. A non-2xx status is always
+    /// an error.
+    pub fn post_event_stream_or_data<B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<StreamOrData<std::io::BufReader<reqwest::blocking::Response>>>
+    where
+        B: Serialize,
+    {
         let url = self.url(path);
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
@@ -376,23 +425,14 @@ impl Client {
         tracing::trace!(status = status.as_u16(), url = %url, content_type, "stream response");
 
         if !status.is_success() || !content_type.starts_with("text/event-stream") {
-            return match validate_envelope(response) {
-                Err(err) => Err(err),
-                Ok(_) => Err(Error::Api {
-                    message: format!(
-                        "expected a text/event-stream from {url}, got {} with status {status}",
-                        if content_type.is_empty() {
-                            "no content type"
-                        } else {
-                            content_type.as_str()
-                        }
-                    ),
-                    code: None,
-                }),
-            };
+            // Always errors on a non-success status.
+            let (data, _) = validate_envelope(response)?;
+            return Ok(StreamOrData::Data { data, content_type });
         }
 
-        Ok(EventStream::new(std::io::BufReader::new(response)))
+        Ok(StreamOrData::Stream(EventStream::new(
+            std::io::BufReader::new(response),
+        )))
     }
 
     /// Perform a DELETE whose successful response carries no usable payload.

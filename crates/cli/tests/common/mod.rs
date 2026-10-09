@@ -140,37 +140,19 @@ pub fn login_args<'a>(
     args
 }
 
-pub fn run(home: &Path, args: &[&str]) -> Output {
-    // Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
-    // at the directory holding config.toml / credentials.toml.
-    //
-    // Redirecting the home directory is not enough, and on Windows does not work
-    // at all: `dirs::home_dir()` there calls
-    // `SHGetKnownFolderPath(FOLDERID_Profile)`, which ignores both `USERPROFILE`
-    // and `HOME`. Tests that relied on those variables silently read the real
-    // user's config, so they could never see the credentials they had just
-    // written. They are still set, so anything else resolving a home directory
-    // stays inside the sandbox.
-    bin()
-        .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env_remove("HOMEDRIVE")
-        .env_remove("HOMEPATH")
-        .env_remove("MEMORYLAKE_API_KEY")
-        .env_remove("MEMORYLAKE_BASE_URL")
-        .env_remove("MEMORYLAKE_WORKSPACE")
-        .args(args)
-        .output()
-        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
-}
-
-/// [`run`] with `stdin` piped to the child and extra environment variables
-/// set, for commands that read secrets from either.
-pub fn run_with_input(home: &Path, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Output {
-    use std::io::Write;
-    use std::process::Stdio;
-
+/// `memorylake args...` with its CLI state confined to `home`.
+///
+/// Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
+/// at the directory holding config.toml / credentials.toml.
+///
+/// Redirecting the home directory is not enough, and on Windows does not work
+/// at all: `dirs::home_dir()` there calls
+/// `SHGetKnownFolderPath(FOLDERID_Profile)`, which ignores both `USERPROFILE`
+/// and `HOME`. Tests that relied on those variables silently read the real
+/// user's config, so they could never see the credentials they had just
+/// written. They are still set, so anything else resolving a home directory
+/// stays inside the sandbox.
+pub fn isolated_command(home: &Path, args: &[&str]) -> Command {
     let mut command = bin();
     command
         .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
@@ -181,12 +163,27 @@ pub fn run_with_input(home: &Path, args: &[&str], stdin: &str, envs: &[(&str, &s
         .env_remove("MEMORYLAKE_API_KEY")
         .env_remove("MEMORYLAKE_BASE_URL")
         .env_remove("MEMORYLAKE_WORKSPACE")
+        .args(args);
+    command
+}
+
+pub fn run(home: &Path, args: &[&str]) -> Output {
+    isolated_command(home, args)
+        .output()
+        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
+}
+
+/// [`run`] with `stdin` piped to the child and extra environment variables
+/// set, for commands that read secrets from either.
+pub fn run_with_input(home: &Path, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = isolated_command(home, args)
         .envs(envs.iter().copied())
-        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")));
     // A command that fails before reading stdin closes the pipe; that is the

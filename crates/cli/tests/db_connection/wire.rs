@@ -211,6 +211,40 @@ fn an_internal_error_on_create_points_at_the_connectivity_test() {
 }
 
 #[test]
+fn a_password_echoed_in_a_server_error_is_redacted() {
+    // A driver error quoted back by the server may carry the password.
+    for command in ["create", "test"] {
+        let mut args = vec![
+            "db-connection",
+            command,
+            "--host",
+            "h",
+            "--username",
+            "u",
+            "--database",
+            "d",
+            "--password-stdin",
+        ];
+        if command == "create" {
+            args.extend(["--name", "a"]);
+        }
+        let (_, output) = exchange_with_input(
+            r#"{"success":false,"message":"FATAL: password authentication failed (password=echo-secret-7q)","error_code":"DB_CONNECTION_FAILED"}"#,
+            &args,
+            "echo-secret-7q",
+            &[],
+        );
+        let output = assert_failure(&output, &args);
+        assert!(
+            output.contains("DB_CONNECTION_FAILED"),
+            "{command}: {output}"
+        );
+        assert!(output.contains("password=REDACTED"), "{command}: {output}");
+        assert!(!output.contains("echo-secret-7q"), "{command}: {output}");
+    }
+}
+
+#[test]
 fn get_addresses_by_id_or_custom_id() {
     let args = ["db-connection", "get", "conn-1"];
     let (request, output) = exchange(CONNECTION, &args);

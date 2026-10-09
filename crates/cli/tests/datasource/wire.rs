@@ -132,6 +132,11 @@ fn void_actions_print_one_line() {
     let stdout = assert_success(&output, &args);
     assert!(stdout.contains("Started an index build"), "{stdout}");
     assert!(stdout.contains("building_version"), "{stdout}");
+    // The follow-up command names the workspace actually used.
+    assert!(
+        stdout.contains(&format!("datasource get ds-1 --workspace {WS}")),
+        "{stdout}"
+    );
 
     let args = ["datasource", "delete", "ds-1"];
     let (_, output) = exchange_with_remembered_workspace(r#"{"success":true}"#, WS, &args);

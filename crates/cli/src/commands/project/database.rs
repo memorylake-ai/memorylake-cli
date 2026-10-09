@@ -15,7 +15,7 @@ use memorylake_core::api::databases::{
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
-use crate::commands::input::read_file_or_stdin;
+use crate::commands::input::{parse_non_empty, read_file_or_stdin, strip_one_line_ending};
 use crate::commands::{print_json, require_workspace};
 
 /// Workspace and project every subcommand addresses.
@@ -27,7 +27,7 @@ pub struct ProjectArgs {
     #[arg(long)]
     pub workspace: Option<String>,
     /// Project id.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_non_empty)]
     pub project: String,
 }
 
@@ -36,26 +36,46 @@ pub struct ProjectArgs {
 #[group(id = "instruction_source", multiple = false)]
 pub struct InstructionArgs {
     /// Guidance for answering questions against this database: what the data
-    /// means, which tables matter, house conventions.
-    #[arg(long)]
+    /// means, which tables matter, house conventions. Must not be empty.
+    #[arg(long, value_parser = parse_non_empty)]
     pub instruction: Option<String>,
     /// Read the instruction from this file; `-` reads standard input.
+    ///
+    /// One trailing newline is dropped. Empty or blank content is refused,
+    /// so a failed command earlier in a pipe cannot wipe a saved instruction.
     #[arg(long, value_name = "PATH")]
     pub instruction_file: Option<PathBuf>,
 }
 
 impl InstructionArgs {
     /// The instruction text, read from its file when one was named.
-    ///
-    /// File content is sent as-is, trailing newline included: it is prose,
-    /// and nothing in it is a delimiter.
     fn read(self) -> Result<Option<String>> {
         match (self.instruction, self.instruction_file) {
             (Some(text), _) => Ok(Some(text)),
-            (None, Some(path)) => read_file_or_stdin(&path, "instruction file").map(Some),
+            (None, Some(path)) => {
+                let text = read_file_or_stdin(&path, "instruction file")?;
+                instruction_from_file(&text).map(Some)
+            }
             (None, None) => Ok(None),
         }
     }
+}
+
+/// Check instruction text read from a file or standard input.
+///
+/// `generate-instruction ... | update --instruction-file -` is the documented
+/// way to save a draft. If the first command fails, the second still runs and
+/// reads nothing; sending that would replace the saved instruction with an
+/// empty one. Clearing it takes the explicit `--clear-instruction`.
+fn instruction_from_file(text: &str) -> Result<String> {
+    let text = strip_one_line_ending(text);
+    if text.trim().is_empty() {
+        bail!(
+            "the instruction file is empty, so nothing was sent; \
+             to remove the instruction, use --clear-instruction"
+        );
+    }
+    Ok(text.to_string())
 }
 
 /// `project database` subcommands.
@@ -80,16 +100,16 @@ pub enum DatabaseCommand {
         target: ProjectArgs,
         /// Datasource to read (see `datasource list`). Must be in the
         /// project's workspace.
-        #[arg(long, value_name = "DATASOURCE_ID")]
+        #[arg(long, value_name = "DATASOURCE_ID", value_parser = parse_non_empty)]
         datasource: String,
         /// Display name.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_empty)]
         name: String,
         #[command(flatten)]
         instruction: InstructionArgs,
         /// Analysis model to draw knowledge from; must be built on the same
         /// datasource.
-        #[arg(long, value_name = "ANALYSIS_MODEL_ID")]
+        #[arg(long, value_name = "ANALYSIS_MODEL_ID", value_parser = parse_non_empty)]
         analysis_model: Option<String>,
     },
     /// Get a database memory, including its instruction.
@@ -108,14 +128,18 @@ pub enum DatabaseCommand {
         /// Database memory id.
         database_id: String,
         /// New display name.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_empty)]
         name: Option<String>,
         #[command(flatten)]
         instruction: InstructionArgs,
+        /// Remove the saved instruction (sends an empty one).
+        #[arg(long, conflicts_with = "instruction_source")]
+        clear_instruction: bool,
         /// Bind this analysis model instead of the current one.
         #[arg(
             long,
             value_name = "ANALYSIS_MODEL_ID",
+            value_parser = parse_non_empty,
             conflicts_with = "clear_analysis_model"
         )]
         analysis_model: Option<String>,
@@ -142,12 +166,15 @@ pub enum DatabaseCommand {
     },
     /// Draft an instruction for a database memory. Nothing is saved.
     ///
-    /// Prints `{"instruction": "..."}`. To keep the draft, pass it to
-    /// `update --instruction-file -`, e.g.
+    /// Prints `{"instruction": "..."}`. To keep the draft, capture it, and
+    /// only save it if that worked:
     ///
-    ///   memorylake project database generate-instruction --project P DB \
-    ///     | jq -r .instruction \
-    ///     | memorylake project database update --project P DB --instruction-file -
+    ///   draft=$(memorylake project database generate-instruction --project P DB \
+    ///             | jq -er .instruction) \
+    ///     && memorylake project database update --project P DB --instruction "$draft"
+    ///
+    /// `jq -e` fails when there is no draft, so a failed generation never
+    /// reaches `update`.
     GenerateInstruction {
         #[command(flatten)]
         target: ProjectArgs,
@@ -249,12 +276,17 @@ fn prepare(command: DatabaseCommand) -> Result<Prepared> {
             database_id,
             name,
             instruction,
+            clear_instruction,
             analysis_model,
             clear_analysis_model,
         } => {
             let request = UpdateDatabaseMemoryRequest {
                 name,
-                instruction: instruction.read()?,
+                instruction: if clear_instruction {
+                    Some(String::new())
+                } else {
+                    instruction.read()?
+                },
                 // The API's own convention: an empty id removes the binding.
                 analysis_model_id: if clear_analysis_model {
                     Some(String::new())
@@ -265,7 +297,8 @@ fn prepare(command: DatabaseCommand) -> Result<Prepared> {
             if request.is_empty() {
                 bail!(
                     "nothing to update: pass at least one of --name, --instruction, \
-                     --instruction-file, --analysis-model, --clear-analysis-model"
+                     --instruction-file, --clear-instruction, --analysis-model, \
+                     --clear-analysis-model"
                 );
             }
             Prepared::Update {

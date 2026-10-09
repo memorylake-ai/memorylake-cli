@@ -283,7 +283,8 @@ memorylake proj db create --project <id> --datasource <ds-id> --name N \
 memorylake proj db list   --project <id> [--page-size N]
 memorylake proj db get    --project <id> <db-id>
 memorylake proj db update --project <id> <db-id> [--name N] \
-  [--instruction TEXT | --instruction-file PATH] [--analysis-model <id> | --clear-analysis-model]
+  [--instruction TEXT | --instruction-file PATH | --clear-instruction] \
+  [--analysis-model <id> | --clear-analysis-model]
 memorylake proj db reload --project <id> <db-id>
 memorylake proj db generate-instruction --project <id> <db-id>
 memorylake proj db delete --project <id> <db-id>
@@ -294,8 +295,10 @@ Pass the password through an environment variable, standard input, or a file, or
 type it at the prompt when running interactively. It is write-only: no command
 prints it, and `-vvv` traces show `REDACTED` in its place. Changing a
 connection's host, port, user or database means passing the password again.
-Run `dbconn test` before `create`: it saves nothing and names credential and
-reachability problems, while a failed `create` may only say `INTERNAL_ERROR`.
+Run `dbconn test` before `create`, with the same host, port, username, database
+and password source: it saves nothing and names credential and reachability
+problems, while a failed `create` may only say `INTERNAL_ERROR`. Should a
+server error quote the password back, the CLI prints `REDACTED` in its place.
 
 A datasource covers exactly one schema for now; `dbconn schemas` lists the
 choices. Creating a datasource starts its first index build, and `ds build`
@@ -304,8 +307,17 @@ starts another. Both run in the background — `ds get` shows a non-empty
 changes take effect on the next build.
 
 `generate-instruction` drafts an instruction and prints it as
-`{"instruction": ...}` without saving it. To keep it, pipe it back in:
-`... generate-instruction ... | jq -r .instruction | memorylake proj db update ... --instruction-file -`.
+`{"instruction": ...}` without saving it. To keep it, capture it first and save
+it only if that worked (`jq -e` fails when there is no draft):
+
+```bash
+draft=$(memorylake proj db generate-instruction --project P DB | jq -er .instruction) \
+  && memorylake proj db update --project P DB --instruction "$draft"
+```
+
+`--instruction-file` drops one trailing newline and refuses empty or blank
+content, so an empty pipe can never wipe a saved instruction. To remove the
+instruction on purpose, use `proj db update ... --clear-instruction`.
 
 ### Facts
 

@@ -50,9 +50,10 @@ fn db_connection_get_unknown_is_not_found() {
 }
 
 #[test]
-fn db_connection_test_against_a_refused_port_fails_cleanly() {
-    // Nothing listens on port 1 of the server's own loopback, so this fails
-    // fast — and saves nothing.
+fn db_connection_test_against_an_unresolvable_host_fails_cleanly() {
+    // `.invalid` is reserved never to resolve (RFC 6761), so the server's
+    // probe fails at name lookup without connecting anywhere, its own
+    // loopback included — and saves nothing.
     let api_key = require_api_key();
     let home = temp_home();
     login_default(&home, &api_key);
@@ -61,9 +62,7 @@ fn db_connection_test_against_a_refused_port_fails_cleanly() {
         "db-connection",
         "test",
         "--host",
-        "127.0.0.1",
-        "--port",
-        "1",
+        "mlcli-probe.invalid",
         "--username",
         "mlcli",
         "--database",

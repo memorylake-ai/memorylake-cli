@@ -35,19 +35,23 @@ pub struct DbDatasource {
     pub table_filter_rule: Option<String>,
     /// How many database memories use this datasource. Deleting it is refused
     /// while any does.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub database_count: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::api::lenient::int",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub database_count: Option<i64>,
     /// Most recently built index; empty until the first build finishes.
     #[serde(
         default,
-        deserialize_with = "version_string",
+        deserialize_with = "crate::api::lenient::version",
         skip_serializing_if = "Option::is_none"
     )]
     pub build_version: Option<String>,
     /// Index currently being built; empty when none is.
     #[serde(
         default,
-        deserialize_with = "version_string",
+        deserialize_with = "crate::api::lenient::version",
         skip_serializing_if = "Option::is_none"
     )]
     pub building_version: Option<String>,
@@ -56,7 +60,7 @@ pub struct DbDatasource {
     /// `build_version`, a rebuild is due.
     #[serde(
         default,
-        deserialize_with = "version_string",
+        deserialize_with = "crate::api::lenient::version",
         skip_serializing_if = "Option::is_none"
     )]
     pub data_version: Option<String>,
@@ -72,27 +76,6 @@ pub struct DbDatasource {
     /// Fields returned by the server that this client does not model.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
-}
-
-/// Decode a build or data version, accepting a bare number as well as the
-/// documented string.
-///
-/// The published example writes a version as a bare 17-digit number even
-/// though the field is typed string. No datasource could be created to check
-/// what production sends, so both are taken rather than letting one field
-/// fail the whole response. A number is kept as its exact digits.
-fn version_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    match Option::<Value>::deserialize(deserializer)? {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(version)) => Ok(Some(version)),
-        Some(Value::Number(version)) => Ok(Some(version.to_string())),
-        Some(other) => Err(serde::de::Error::custom(format!(
-            "expected a version string, got {other}"
-        ))),
-    }
 }
 
 impl DbDatasource {
@@ -156,8 +139,12 @@ pub struct DbColumn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_enabled: Option<bool>,
     /// Upper bound on how many of the column's values are indexed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_embedding_rows: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "crate::api::lenient::int",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_embedding_rows: Option<i64>,
     /// Fields returned by the server that this client does not model.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -232,8 +219,14 @@ mod tests {
     }
 
     #[test]
-    fn a_version_of_another_kind_is_rejected() {
-        assert!(serde_json::from_str::<DbDatasource>(r#"{"build_version":[1]}"#).is_err());
+    fn odd_informational_values_do_not_fail_the_datasource() {
+        let datasource: DbDatasource = serde_json::from_str(
+            r#"{"id":"ds-1","build_version":[1],"database_count":"3","building_version":"b1"}"#,
+        )
+        .expect("one odd field must not fail the whole item");
+        assert!(datasource.build_version.is_none());
+        assert_eq!(datasource.database_count, Some(3));
+        assert!(datasource.is_building());
     }
 
     #[test]

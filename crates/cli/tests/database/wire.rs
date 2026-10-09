@@ -95,11 +95,28 @@ fn update_reads_the_instruction_from_stdin() {
         request_line(&request),
         format!("PATCH {BASE}/db-1 HTTP/1.1")
     );
-    // File content goes as-is, and clearing the model sends "".
+    // One trailing newline is dropped, inner ones kept; clearing the model
+    // sends "".
     assert_eq!(
         body_json(&request),
-        json!({"instruction": "Line one.\nLine two.\n", "analysis_model_id": ""})
+        json!({"instruction": "Line one.\nLine two.", "analysis_model_id": ""})
     );
+}
+
+#[test]
+fn clear_instruction_sends_an_empty_instruction() {
+    let args = [
+        "project",
+        "database",
+        "update",
+        "--project",
+        "proj-1",
+        "db-1",
+        "--clear-instruction",
+    ];
+    let (request, output) = exchange_with_remembered_workspace(MEMORY, WS, &args);
+    assert_success(&output, &args);
+    assert_eq!(body_json(&request), json!({"instruction": ""}));
 }
 
 #[test]
@@ -198,10 +215,48 @@ fn a_generation_error_event_fails_with_its_code() {
 }
 
 #[test]
-fn empty_stdin_is_an_empty_instruction() {
-    // `--instruction-file -` with nothing piped sends an empty instruction;
-    // the server decides what that means. Kept explicit so the behavior is a
-    // decision, not an accident.
+fn a_generation_error_event_without_json_keeps_the_raw_text() {
+    let body = "event: error\ndata: upstream timed out\n\n";
+    let args = [
+        "project",
+        "database",
+        "generate-instruction",
+        "--project",
+        "proj-1",
+        "db-1",
+    ];
+    let (_, output) = exchange_raw_event_stream_with_remembered_workspace(body, WS, &args);
+    let output = assert_failure(&output, &args);
+    assert!(output.contains("upstream timed out"), "{output}");
+}
+
+#[test]
+fn a_json_envelope_from_generate_is_accepted() {
+    // A server that ignores `stream: true` answers with a plain envelope.
+    let args = [
+        "project",
+        "database",
+        "generate-instruction",
+        "--project",
+        "proj-1",
+        "db-1",
+    ];
+    let (_, output) = exchange_with_remembered_workspace(
+        r#"{"success":true,"data":{"instruction":"Revenue is in cents."}}"#,
+        WS,
+        &args,
+    );
+    let stdout = assert_success(&output, &args);
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap(),
+        json!({"instruction": "Revenue is in cents."})
+    );
+}
+
+#[test]
+fn a_blank_instruction_file_is_refused_before_anything_is_sent() {
+    // `generate-instruction ... | update --instruction-file -` with a failed
+    // first command pipes nothing; that must not wipe the saved instruction.
     let home = logged_in_home("http://127.0.0.1:9");
     let args = [
         "project",
@@ -215,9 +270,71 @@ fn empty_stdin_is_an_empty_instruction() {
         "--instruction-file",
         "-",
     ];
-    // Unreachable server: the command gets as far as the network and fails
-    // there, proving the empty stdin was accepted locally.
+    for stdin in ["", "\n", "  \n\t\n"] {
+        let output = assert_failure(&run_with_input(&home, &args, stdin, &[]), &args);
+        assert!(output.contains("instruction file is empty"), "{output}");
+        assert!(output.contains("--clear-instruction"), "{output}");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn blank_values_are_refused_by_the_parser() {
+    let home = logged_in_home("http://127.0.0.1:9");
+    for args in [
+        vec![
+            "project",
+            "database",
+            "update",
+            "--project",
+            "p",
+            "db-1",
+            "--instruction",
+            "",
+        ],
+        vec![
+            "project",
+            "database",
+            "update",
+            "--project",
+            "p",
+            "db-1",
+            "--analysis-model",
+            "",
+        ],
+        vec![
+            "project",
+            "database",
+            "create",
+            "--project",
+            "p",
+            "--datasource",
+            "ds-1",
+            "--name",
+            " ",
+        ],
+    ] {
+        let output = assert_failure(&run_with_input(&home, &args, "", &[]), &args);
+        assert!(output.contains("must not be empty"), "{args:?}: {output}");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn clear_instruction_conflicts_with_a_new_one() {
+    let home = logged_in_home("http://127.0.0.1:9");
+    let args = [
+        "project",
+        "database",
+        "update",
+        "--project",
+        "p",
+        "db-1",
+        "--clear-instruction",
+        "--instruction",
+        "x",
+    ];
     let output = assert_failure(&run_with_input(&home, &args, "", &[]), &args);
-    assert!(!output.contains("instruction file"), "{output}");
+    assert!(output.contains("cannot be used with"), "{output}");
     let _ = std::fs::remove_dir_all(&home);
 }

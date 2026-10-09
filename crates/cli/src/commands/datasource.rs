@@ -17,7 +17,7 @@ use memorylake_core::api::db_datasources::{
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
-use super::input::{parse_custom_id, read_file_or_stdin};
+use super::input::{parse_custom_id, parse_non_empty, read_file_or_stdin};
 use super::{print_json, require_workspace};
 
 /// Datasource subcommands.
@@ -32,7 +32,7 @@ pub enum DatasourceCommand {
         #[arg(long)]
         workspace: Option<String>,
         /// Only datasources reading through this connection.
-        #[arg(long, value_name = "CONNECTION_ID")]
+        #[arg(long, value_name = "CONNECTION_ID", value_parser = parse_non_empty)]
         connection: Option<String>,
         /// Only datasources whose name contains this text (case-insensitive).
         #[arg(long = "name")]
@@ -54,13 +54,13 @@ pub enum DatasourceCommand {
         #[arg(long)]
         workspace: Option<String>,
         /// Connection to read through (see `db-connection list`).
-        #[arg(long, value_name = "CONNECTION_ID")]
+        #[arg(long, value_name = "CONNECTION_ID", value_parser = parse_non_empty)]
         connection: String,
         /// Schema to cover (see `db-connection schemas`). Exactly one for now.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_empty)]
         schema: String,
         /// Display name.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_empty)]
         name: String,
         /// Free-form description.
         #[arg(long)]
@@ -70,7 +70,7 @@ pub enum DatasourceCommand {
         custom_id: Option<String>,
         /// Regular expression selecting which tables are indexed. The server
         /// defaults to `.*` (every table).
-        #[arg(long, value_name = "REGEX")]
+        #[arg(long, value_name = "REGEX", value_parser = parse_non_empty)]
         table_filter: Option<String>,
     },
     /// Get a datasource, including its schemas and build state.
@@ -97,13 +97,13 @@ pub enum DatasourceCommand {
         /// Datasource id.
         id: String,
         /// New display name.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_empty)]
         name: Option<String>,
         /// New description.
         #[arg(long)]
         description: Option<String>,
         /// New table filter regular expression.
-        #[arg(long, value_name = "REGEX")]
+        #[arg(long, value_name = "REGEX", value_parser = parse_non_empty)]
         table_filter: Option<String>,
     },
     /// Delete a datasource.
@@ -147,7 +147,7 @@ pub enum DatasourceCommand {
         /// Datasource id.
         id: String,
         /// Table whose columns to list.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_empty)]
         table: String,
     },
     /// Edit table and column annotations, and which columns are indexed.
@@ -168,14 +168,14 @@ pub enum DatasourceCommand {
         /// Datasource id.
         id: String,
         /// Table to edit.
-        #[arg(long, conflicts_with_all = ["edits", "edits_file"], required_unless_present_any = ["edits", "edits_file"])]
+        #[arg(long, value_parser = parse_non_empty, conflicts_with_all = ["edits", "edits_file"], required_unless_present_any = ["edits", "edits_file"])]
         table: Option<String>,
         /// Column of --table to edit; without it the table itself is edited.
-        #[arg(long, requires = "table")]
+        #[arg(long, requires = "table", value_parser = parse_non_empty)]
         column: Option<String>,
         /// Schema the table is in. Only needed once a datasource covers more
         /// than one schema.
-        #[arg(long, requires = "table")]
+        #[arg(long, requires = "table", value_parser = parse_non_empty)]
         schema: Option<String>,
         /// New annotation; an empty string clears it.
         #[arg(long, requires = "table")]
@@ -199,43 +199,116 @@ pub enum DatasourceCommand {
 }
 
 /// Execute a `datasource` subcommand.
+///
+/// Annotation edits are parsed (and their file read), and empty updates
+/// refused, before credentials are resolved, so a malformed command fails the
+/// same way logged in or not.
 pub fn run(
     command: DatasourceCommand,
     profile: Option<String>,
     base_url: Option<String>,
 ) -> Result<()> {
-    // Annotation edits are parsed (and their file read) before credentials are
-    // resolved, so a malformed batch fails the same way logged in or not.
-    let command = match command {
-        DatasourceCommand::Annotate {
+    let command = prepare(command)?;
+
+    let paths = Paths::default_home().context("resolve MemoryLake config paths")?;
+    let runtime = resolve(&paths, &ResolveOverrides { profile, base_url })
+        .context("resolve API credentials")?;
+    let client = Client::new(&runtime.base_url, &runtime.api_key).context("build API client")?;
+    let workspace_of = |flag: Option<String>| require_workspace(&paths, &runtime.profile, flag);
+
+    execute(&client, workspace_of, command)
+}
+
+/// A command with its local input read and checked.
+enum Prepared {
+    List {
+        workspace: Option<String>,
+        params: ListDbDatasourcesParams,
+    },
+    Create {
+        workspace: Option<String>,
+        request: CreateDbDatasourceRequest,
+    },
+    Get {
+        workspace: Option<String>,
+        id: String,
+        by_custom_id: bool,
+    },
+    Update {
+        workspace: Option<String>,
+        id: String,
+        request: UpdateDbDatasourceRequest,
+    },
+    Delete {
+        workspace: Option<String>,
+        id: String,
+    },
+    Build {
+        workspace: Option<String>,
+        id: String,
+    },
+    Tables {
+        workspace: Option<String>,
+        id: String,
+        name_fuzzy: Option<String>,
+    },
+    Columns {
+        workspace: Option<String>,
+        id: String,
+        table: String,
+    },
+    Annotate {
+        workspace: Option<String>,
+        id: String,
+        items: Vec<SchemaMetadataEdit>,
+    },
+}
+
+fn prepare(command: DatasourceCommand) -> Result<Prepared> {
+    Ok(match command {
+        DatasourceCommand::List {
+            workspace,
+            connection,
+            name_fuzzy,
+            page_size,
+            continuation_token,
+        } => Prepared::List {
+            workspace,
+            params: ListDbDatasourcesParams {
+                db_connection_id: connection,
+                name_fuzzy,
+                page_size,
+                continuation_token,
+            },
+        },
+        DatasourceCommand::Create {
+            workspace,
+            connection,
+            schema,
+            name,
+            description,
+            custom_id,
+            table_filter,
+        } => Prepared::Create {
+            workspace,
+            request: CreateDbDatasourceRequest {
+                schemas: vec![schema],
+                name,
+                description,
+                db_connection_id: connection,
+                custom_id,
+                table_filter_rule: table_filter,
+            },
+        },
+        DatasourceCommand::Get {
             workspace,
             id,
-            table,
-            column,
-            schema,
-            comment,
-            embedding,
-            edits,
-            edits_file,
-        } => {
-            let parsed = match (table, edits, edits_file) {
-                (Some(table_name), None, None) => {
-                    vec![single_edit(table_name, column, schema, comment, embedding)?]
-                }
-                (None, Some(json), None) => parse_edits(&json, "--edits")?,
-                (None, None, Some(path)) => {
-                    let json = read_file_or_stdin(&path, "edits file")?;
-                    parse_edits(&json, "--edits-file")?
-                }
-                // clap's conflicts / required_unless rules make these unreachable.
-                _ => bail!("pass exactly one of --table, --edits, or --edits-file"),
-            };
-            Prepared::Annotate {
-                workspace,
-                id,
-                items: parsed,
-            }
-        }
+            by_custom_id,
+        } => Prepared::Get {
+            workspace,
+            id,
+            by_custom_id,
+        },
         DatasourceCommand::Update {
             workspace,
             id,
@@ -259,116 +332,78 @@ pub fn run(
                 request,
             }
         }
-        other => Prepared::Other(other),
-    };
-
-    let paths = Paths::default_home().context("resolve MemoryLake config paths")?;
-    let runtime = resolve(&paths, &ResolveOverrides { profile, base_url })
-        .context("resolve API credentials")?;
-    let client = Client::new(&runtime.base_url, &runtime.api_key).context("build API client")?;
-    let workspace_of = |flag: Option<String>| require_workspace(&paths, &runtime.profile, flag);
-
-    match command {
-        Prepared::Annotate {
+        DatasourceCommand::Delete { workspace, id } => Prepared::Delete { workspace, id },
+        DatasourceCommand::Build { workspace, id } => Prepared::Build { workspace, id },
+        DatasourceCommand::Tables {
             workspace,
             id,
-            items,
-        } => {
-            let workspace = workspace_of(workspace)?;
-            let count = items.len();
-            update_db_datasource_schema_metadata(
-                &client,
-                &workspace,
-                &id,
-                &UpdateSchemaMetadataRequest { items },
-            )
-            .with_context(|| format!("edit schema metadata of datasource `{id}`"))?;
-            println!("Applied {count} schema metadata edit(s) to datasource `{id}`");
-            Ok(())
-        }
-        Prepared::Update {
+            name_fuzzy,
+        } => Prepared::Tables {
             workspace,
             id,
-            request,
+            name_fuzzy,
+        },
+        DatasourceCommand::Columns {
+            workspace,
+            id,
+            table,
+        } => Prepared::Columns {
+            workspace,
+            id,
+            table,
+        },
+        DatasourceCommand::Annotate {
+            workspace,
+            id,
+            table,
+            column,
+            schema,
+            comment,
+            embedding,
+            edits,
+            edits_file,
         } => {
-            let workspace = workspace_of(workspace)?;
-            let data = update_db_datasource(&client, &workspace, &id, &request)
-                .with_context(|| format!("update datasource `{id}`"))?;
-            print_json(&data)
+            let items = match (table, edits, edits_file) {
+                (Some(table_name), None, None) => {
+                    vec![single_edit(table_name, column, schema, comment, embedding)?]
+                }
+                (None, Some(json), None) => parse_edits(&json, "--edits")?,
+                (None, None, Some(path)) => {
+                    let json = read_file_or_stdin(&path, "edits file")?;
+                    parse_edits(&json, "--edits-file")?
+                }
+                // clap's conflicts / required_unless rules leave only the
+                // three cases above.
+                _ => bail!("pass exactly one of --table, --edits, or --edits-file"),
+            };
+            Prepared::Annotate {
+                workspace,
+                id,
+                items,
+            }
         }
-        Prepared::Other(command) => run_simple(&client, workspace_of, command),
-    }
+    })
 }
 
-/// A command whose local checks have already run.
-enum Prepared {
-    Annotate {
-        workspace: Option<String>,
-        id: String,
-        items: Vec<SchemaMetadataEdit>,
-    },
-    Update {
-        workspace: Option<String>,
-        id: String,
-        request: UpdateDbDatasourceRequest,
-    },
-    Other(DatasourceCommand),
-}
-
-/// Subcommands with nothing to check beyond what clap already did.
-fn run_simple(
+fn execute(
     client: &Client,
     workspace_of: impl Fn(Option<String>) -> Result<String>,
-    command: DatasourceCommand,
+    command: Prepared,
 ) -> Result<()> {
     match command {
-        DatasourceCommand::List {
-            workspace,
-            connection,
-            name_fuzzy,
-            page_size,
-            continuation_token,
-        } => {
+        Prepared::List { workspace, params } => {
             let workspace = workspace_of(workspace)?;
-            let data = list_db_datasources(
-                client,
-                &workspace,
-                &ListDbDatasourcesParams {
-                    db_connection_id: connection,
-                    name_fuzzy,
-                    page_size,
-                    continuation_token,
-                },
-            )
-            .with_context(|| format!("list datasources in workspace `{workspace}`"))?;
+            let data = list_db_datasources(client, &workspace, &params)
+                .with_context(|| format!("list datasources in workspace `{workspace}`"))?;
             print_json(&data)
         }
-        DatasourceCommand::Create {
-            workspace,
-            connection,
-            schema,
-            name,
-            description,
-            custom_id,
-            table_filter,
-        } => {
+        Prepared::Create { workspace, request } => {
             let workspace = workspace_of(workspace)?;
-            let data = create_db_datasource(
-                client,
-                &workspace,
-                &CreateDbDatasourceRequest {
-                    schemas: vec![schema],
-                    name,
-                    description,
-                    db_connection_id: connection,
-                    custom_id,
-                    table_filter_rule: table_filter,
-                },
-            )
-            .context("create datasource")?;
+            let data =
+                create_db_datasource(client, &workspace, &request).context("create datasource")?;
             print_json(&data)
         }
-        DatasourceCommand::Get {
+        Prepared::Get {
             workspace,
             id,
             by_custom_id,
@@ -383,24 +418,35 @@ fn run_simple(
             };
             print_json(&data)
         }
-        DatasourceCommand::Delete { workspace, id } => {
+        Prepared::Update {
+            workspace,
+            id,
+            request,
+        } => {
+            let workspace = workspace_of(workspace)?;
+            let data = update_db_datasource(client, &workspace, &id, &request)
+                .with_context(|| format!("update datasource `{id}`"))?;
+            print_json(&data)
+        }
+        Prepared::Delete { workspace, id } => {
             let workspace = workspace_of(workspace)?;
             delete_db_datasource(client, &workspace, &id)
                 .with_context(|| format!("delete datasource `{id}`"))?;
             println!("Deleted datasource `{id}` in workspace `{workspace}`");
             Ok(())
         }
-        DatasourceCommand::Build { workspace, id } => {
+        Prepared::Build { workspace, id } => {
             let workspace = workspace_of(workspace)?;
             build_db_datasource(client, &workspace, &id)
                 .with_context(|| format!("build datasource `{id}`"))?;
             println!(
                 "Started an index build for datasource `{id}`; \
-                 `memorylake datasource get {id}` shows `building_version` until it finishes"
+                 `memorylake datasource get {id} --workspace {workspace}` shows \
+                 `building_version` until it finishes"
             );
             Ok(())
         }
-        DatasourceCommand::Tables {
+        Prepared::Tables {
             workspace,
             id,
             name_fuzzy,
@@ -410,7 +456,7 @@ fn run_simple(
                 .with_context(|| format!("list tables of datasource `{id}`"))?;
             print_json(&data)
         }
-        DatasourceCommand::Columns {
+        Prepared::Columns {
             workspace,
             id,
             table,
@@ -420,9 +466,22 @@ fn run_simple(
                 .with_context(|| format!("list columns of `{table}` in datasource `{id}`"))?;
             print_json(&data)
         }
-        // Prepared by `run` before credentials were resolved.
-        DatasourceCommand::Annotate { .. } | DatasourceCommand::Update { .. } => {
-            bail!("internal error: command was not prepared")
+        Prepared::Annotate {
+            workspace,
+            id,
+            items,
+        } => {
+            let workspace = workspace_of(workspace)?;
+            let count = items.len();
+            update_db_datasource_schema_metadata(
+                client,
+                &workspace,
+                &id,
+                &UpdateSchemaMetadataRequest { items },
+            )
+            .with_context(|| format!("edit schema metadata of datasource `{id}`"))?;
+            println!("Applied {count} schema metadata edit(s) to datasource `{id}`");
+            Ok(())
         }
     }
 }

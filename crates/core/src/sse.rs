@@ -34,13 +34,19 @@ impl<R: BufRead> EventStream<R> {
         }
     }
 
-    /// Read lines up to the next blank line and collect the `data` field.
+    /// Read the next event, keeping its `event:` name.
+    ///
+    /// For streams whose event names carry meaning (an `error` event, say),
+    /// which the JSON [`Iterator`] deliberately drops. An event is anything
+    /// with an `event:` or a `data:` line; comments and stray blank lines are
+    /// skipped. The data is returned raw, not parsed.
     ///
     /// Returns `Ok(None)` at end of body. A body that ends without a trailing
     /// blank line still yields its final event: A2A servers close the
     /// connection right after the last frame, and the event is complete
     /// either way.
-    fn next_data(&mut self) -> Result<Option<String>> {
+    pub fn next_event(&mut self) -> Result<Option<SseEvent>> {
+        let mut event: Option<String> = None;
         let mut data: Vec<String> = Vec::new();
         let mut line = String::new();
         loop {
@@ -55,17 +61,17 @@ impl<R: BufRead> EventStream<R> {
                 })?;
             if read == 0 {
                 self.done = true;
-                return Ok((!data.is_empty()).then(|| data.join("\n")));
+                return Ok(SseEvent::assemble(event, data));
             }
 
             let line = line.trim_end_matches(['\r', '\n']);
             if line.is_empty() {
-                if data.is_empty() {
+                match SseEvent::assemble(event.take(), std::mem::take(&mut data)) {
+                    Some(complete) => return Ok(Some(complete)),
                     // Blank line between events with nothing pending: a
                     // keep-alive or a stray separator. Keep reading.
-                    continue;
+                    None => continue,
                 }
-                return Ok(Some(data.join("\n")));
             }
             if line.starts_with(':') {
                 // Comment line, used as a keep-alive by some servers.
@@ -75,10 +81,42 @@ impl<R: BufRead> EventStream<R> {
                 Some((field, value)) => (field, value.strip_prefix(' ').unwrap_or(value)),
                 None => (line, ""),
             };
-            if field == "data" {
-                data.push(value.to_string());
+            match field {
+                "data" => data.push(value.to_string()),
+                "event" => event = Some(value.to_string()),
+                _ => {}
             }
         }
+    }
+
+    /// The next event's `data`, skipping events that carry none.
+    fn next_data(&mut self) -> Result<Option<String>> {
+        loop {
+            match self.next_event()? {
+                None => return Ok(None),
+                Some(SseEvent {
+                    data: Some(data), ..
+                }) => return Ok(Some(data)),
+                Some(_) => continue,
+            }
+        }
+    }
+}
+
+/// One server-sent event, as read by [`EventStream::next_event`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseEvent {
+    /// The `event:` name, when one was sent.
+    pub event: Option<String>,
+    /// The `data:` lines joined with `\n`, when any were sent.
+    pub data: Option<String>,
+}
+
+impl SseEvent {
+    /// An event from its collected fields, or `None` when it has neither.
+    fn assemble(event: Option<String>, data: Vec<String>) -> Option<Self> {
+        let data = (!data.is_empty()).then(|| data.join("\n"));
+        (event.is_some() || data.is_some()).then_some(Self { event, data })
     }
 }
 
@@ -160,6 +198,33 @@ mod tests {
     fn an_empty_body_yields_nothing() {
         assert!(events("").is_empty());
         assert!(events("\n\n: only comments\n\n").is_empty());
+    }
+
+    #[test]
+    fn next_event_keeps_event_names_and_raw_data() {
+        let body = ": keep-alive\n\nevent: data\ndata: {\"a\":1}\n\nevent: end\n\nevent: error\ndata: not json\n";
+        let mut stream = EventStream::new(Cursor::new(body.as_bytes()));
+        let mut seen = Vec::new();
+        while let Some(event) = stream.next_event().expect("read") {
+            seen.push(event);
+        }
+        assert_eq!(
+            seen,
+            vec![
+                SseEvent {
+                    event: Some("data".into()),
+                    data: Some("{\"a\":1}".into())
+                },
+                SseEvent {
+                    event: Some("end".into()),
+                    data: None
+                },
+                SseEvent {
+                    event: Some("error".into()),
+                    data: Some("not json".into())
+                },
+            ]
+        );
     }
 
     #[test]

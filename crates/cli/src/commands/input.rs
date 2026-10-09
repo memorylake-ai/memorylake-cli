@@ -30,6 +30,18 @@ pub fn strip_one_line_ending(text: &str) -> &str {
         .unwrap_or(text)
 }
 
+/// Clap value parser for a value that must not be empty or blank.
+///
+/// For names and ids: an empty one is never what was meant, and for some
+/// fields (an analysis model id on update) the API reads `""` as an
+/// instruction of its own.
+pub fn parse_non_empty(raw: &str) -> std::result::Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("must not be empty".into());
+    }
+    Ok(raw.to_string())
+}
+
 /// Longest `custom_id` the database endpoints accept.
 const MAX_CUSTOM_ID_CHARS: usize = 255;
 
@@ -39,6 +51,7 @@ const MAX_CUSTOM_ID_CHARS: usize = 255;
 /// reject the reserved `_sys_` prefix; both are checked here so the mistake
 /// costs no round trip.
 pub fn parse_custom_id(raw: &str) -> std::result::Result<String, String> {
+    parse_non_empty(raw)?;
     if raw.chars().count() > MAX_CUSTOM_ID_CHARS {
         return Err(format!("must be at most {MAX_CUSTOM_ID_CHARS} characters"));
     }
@@ -58,6 +71,14 @@ mod tests {
         assert!(parse_custom_id(&"x".repeat(255)).is_ok());
         assert!(parse_custom_id(&"x".repeat(256)).is_err());
         assert!(parse_custom_id("_sys_mine").is_err());
+    }
+
+    #[test]
+    fn blank_values_are_refused() {
+        assert_eq!(parse_non_empty("db-1").as_deref(), Ok("db-1"));
+        assert!(parse_non_empty("").is_err());
+        assert!(parse_non_empty("  \t").is_err());
+        assert!(parse_custom_id("").is_err());
     }
 
     #[test]

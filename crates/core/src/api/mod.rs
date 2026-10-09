@@ -9,6 +9,7 @@ pub mod db_connections;
 pub mod db_datasources;
 pub mod documents;
 pub mod facts;
+pub(crate) mod lenient;
 pub mod library;
 pub mod projects;
 pub mod search;

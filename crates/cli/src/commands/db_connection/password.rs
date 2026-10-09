@@ -14,7 +14,7 @@ use clap::Args;
 use memorylake_core::api::db_connections::DbPassword;
 
 use crate::commands::input::{read_file_or_stdin, strip_one_line_ending};
-use crate::interactive::prompt_secret;
+use crate::interactive::prompt_secret_verbatim;
 
 /// The three ways to hand over a password; at most one may be used.
 #[derive(Debug, Clone, Default, Args)]
@@ -26,6 +26,7 @@ pub struct PasswordArgs {
     /// Read the password from standard input.
     ///
     /// One trailing newline is dropped, so `printf` and `echo` both work.
+    /// When standard input is a terminal, asks without echo instead.
     #[arg(long)]
     pub password_stdin: bool,
     /// Read the password from this file.
@@ -61,8 +62,14 @@ impl PasswordArgs {
                 }
             }
         } else if self.password_stdin {
-            let text = read_file_or_stdin(std::path::Path::new("-"), "password")?;
-            strip_one_line_ending(&text).to_string()
+            if std::io::stdin().is_terminal() {
+                // Reading a terminal line would echo the password as it is
+                // typed; ask without echo instead.
+                prompt_password()?
+            } else {
+                let text = read_file_or_stdin(std::path::Path::new("-"), "password")?;
+                strip_one_line_ending(&text).to_string()
+            }
         } else if let Some(path) = &self.password_file {
             let text = read_file_or_stdin(path, "password file")?;
             strip_one_line_ending(&text).to_string()
@@ -70,8 +77,7 @@ impl PasswordArgs {
             return match need {
                 PasswordNeed::Optional => Ok(None),
                 PasswordNeed::Required if std::io::stdin().is_terminal() => {
-                    let value = prompt_secret("Database password").context("read password")?;
-                    Ok(Some(DbPassword::new(value)))
+                    Ok(Some(DbPassword::new(prompt_password()?)))
                 }
                 PasswordNeed::Required => bail!(
                     "{missing}\n\
@@ -86,6 +92,12 @@ impl PasswordArgs {
         }
         Ok(Some(DbPassword::new(password)))
     }
+}
+
+/// Ask for the password without echo, keeping it exactly as typed — the same
+/// as a file or standard input would deliver it.
+fn prompt_password() -> Result<String> {
+    prompt_secret_verbatim("Database password").context("read password")
 }
 
 #[cfg(test)]

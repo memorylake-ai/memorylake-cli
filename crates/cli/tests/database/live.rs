@@ -14,51 +14,89 @@ use crate::common::{assert_failure, assert_success, require_api_key, run, temp_h
 use crate::datasource::live::{default_workspace, login_default};
 
 /// A scratch project that deletes itself, and the temp `$HOME`, on drop.
+///
+/// The project is known by the unique `custom_id` it is created with, so the
+/// guard exists before `project create` runs: a panic anywhere after that —
+/// even while reading the create response — still finds and deletes it.
 struct ScratchProject {
     home: PathBuf,
     workspace: String,
-    id: String,
+    custom_id: String,
+    id: Option<String>,
 }
 
 impl ScratchProject {
     fn create(home: PathBuf, workspace: String) -> Self {
-        let name = unique_name("dbmem-proj");
+        let mut project = Self {
+            home,
+            workspace,
+            custom_id: unique_name("dbmem-proj"),
+            id: None,
+        };
         let args = [
             "project",
             "create",
             "--workspace",
-            workspace.as_str(),
+            project.workspace.as_str(),
             "--name",
-            name.as_str(),
+            project.custom_id.as_str(),
             "--custom-id",
-            name.as_str(),
+            project.custom_id.as_str(),
         ];
-        let stdout = assert_success(&run(&home, &args), &args);
+        let stdout = assert_success(&run(&project.home, &args), &args);
         let created: Value = serde_json::from_str(&stdout).expect("project create JSON");
-        let id = created["id"].as_str().expect("project id").to_string();
-        Self {
-            home,
-            workspace,
-            id,
-        }
+        project.id = Some(created["id"].as_str().expect("project id").to_string());
+        project
     }
 
     fn home(&self) -> &Path {
         &self.home
     }
+
+    fn id(&self) -> &str {
+        self.id.as_deref().expect("project created")
+    }
+
+    /// The project's id, looked up by custom_id when create did not get as
+    /// far as reporting it.
+    fn find_id(&self) -> Option<String> {
+        if let Some(id) = &self.id {
+            return Some(id.clone());
+        }
+        let args = [
+            "project",
+            "get",
+            "--workspace",
+            self.workspace.as_str(),
+            "--by-custom-id",
+            self.custom_id.as_str(),
+        ];
+        let output = run(&self.home, &args);
+        if !output.status.success() {
+            return None;
+        }
+        let found: Value = serde_json::from_slice(&output.stdout).ok()?;
+        found["id"].as_str().map(str::to_string)
+    }
 }
 
 impl Drop for ScratchProject {
     fn drop(&mut self) {
-        let args = [
-            "project",
-            "delete",
-            "--workspace",
-            self.workspace.as_str(),
-            self.id.as_str(),
-        ];
         // Best effort: a failed cleanup must not mask the test's own result.
-        let _ = run(&self.home, &args);
+        // Production drops the odd request, so try a few times.
+        for _ in 0..3 {
+            let Some(id) = self.find_id() else { continue };
+            let args = [
+                "project",
+                "delete",
+                "--workspace",
+                self.workspace.as_str(),
+                id.as_str(),
+            ];
+            if run(&self.home, &args).status.success() {
+                break;
+            }
+        }
         let _ = fs::remove_dir_all(&self.home);
     }
 }
@@ -70,7 +108,7 @@ fn database_memory_reads_and_error_paths() {
     login_default(&home, &api_key);
     let workspace = default_workspace(&home);
     let project = ScratchProject::create(home, workspace.clone());
-    let (ws, proj) = (workspace.as_str(), project.id.as_str());
+    let (ws, proj) = (workspace.as_str(), project.id());
 
     // An empty project lists nothing; production includes `total` here.
     let args = [

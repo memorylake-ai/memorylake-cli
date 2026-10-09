@@ -16,8 +16,12 @@ pub struct DatabaseMemoryList {
     #[serde(default)]
     pub items: Vec<DatabaseMemory>,
     /// Exact cross-page count, when the server provides it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "crate::api::lenient::int",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub total: Option<i64>,
     /// Token for the next page; absent on the last one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_token: Option<String>,

@@ -20,8 +20,12 @@ pub struct DbColumnList {
     #[serde(default)]
     pub items: Vec<DbColumn>,
     /// Count, when the server provides it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "crate::api::lenient::int",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub total: Option<i64>,
     /// Never set in practice: there is no next page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_token: Option<String>,

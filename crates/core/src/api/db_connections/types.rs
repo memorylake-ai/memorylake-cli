@@ -60,8 +60,12 @@ pub struct DbConnection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     /// Server port.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
+    #[serde(
+        default,
+        deserialize_with = "crate::api::lenient::int",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub port: Option<i64>,
     /// User name the connection authenticates with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
@@ -73,8 +77,12 @@ pub struct DbConnection {
     pub custom_id: Option<String>,
     /// How many datasources read through this connection. Deleting the
     /// connection is refused while this is non-zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub datasource_count: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::api::lenient::int",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub datasource_count: Option<i64>,
     /// User or agent that created the connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
@@ -156,6 +164,21 @@ mod tests {
         let connection: DbConnection = serde_json::from_str("{}").expect("decode empty object");
         assert!(connection.id.is_none());
         assert!(connection.port.is_none());
+    }
+
+    #[test]
+    fn an_odd_count_or_port_does_not_fail_a_list_page() {
+        let list: super::super::DbConnectionList = serde_json::from_str(
+            r#"{"items":[{"id":"c1","port":70000,"datasource_count":-1},
+                         {"id":"c2","port":"5432","datasource_count":1.5}],
+                "total":"2"}"#,
+        )
+        .expect("odd numbers must not fail the page");
+        assert_eq!(list.items[0].port, Some(70_000));
+        assert_eq!(list.items[0].datasource_count, Some(-1));
+        assert_eq!(list.items[1].port, Some(5432));
+        assert_eq!(list.items[1].datasource_count, None);
+        assert_eq!(list.total, Some(2));
     }
 
     #[test]
