@@ -482,3 +482,95 @@ fn every_subcommand_without_login_fails() {
     }
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn memory_audit_subcommands_are_listed() {
+    let home = temp_home();
+    let args = ["conversation", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    for subcommand in ["fact-actions", "consumed-messages"] {
+        assert!(
+            stdout.contains(subcommand),
+            "missing `{subcommand}`: {stdout}"
+        );
+    }
+    let args = ["conversation", "message", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("get"), "{stdout}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn fact_actions_need_exactly_one_owner_before_credentials() {
+    let home = temp_home();
+    for (args, expected) in [
+        (
+            vec![
+                "conversation",
+                "fact-actions",
+                "--workspace",
+                "ws-1",
+                "conv-1",
+            ],
+            "--project",
+        ),
+        (
+            vec![
+                "conversation",
+                "fact-actions",
+                "--workspace",
+                "ws-1",
+                "conv-1",
+                "--project",
+                "p",
+                "--actor",
+                "a",
+            ],
+            "cannot be used with",
+        ),
+        (
+            vec![
+                "conversation",
+                "fact-actions",
+                "--workspace",
+                "ws-1",
+                "conv-1",
+                "--actor",
+                "a",
+                "--page-size",
+                "101",
+            ],
+            "101",
+        ),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn consumed_messages_require_a_message() {
+    let home = temp_home();
+    let args = ["conversation", "consumed", "--workspace", "ws-1", "conv-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("--message"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn message_get_takes_one_to_a_hundred_ids_before_credentials() {
+    let home = temp_home();
+    let args = ["conversation", "message", "get", "conv-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("<MESSAGE_ID>"), "{err}");
+
+    let ids: Vec<String> = (0..101).map(|n| format!("conv-entry-{n}")).collect();
+    let mut args = vec!["conversation", "message", "get", "conv-1"];
+    args.extend(ids.iter().map(String::as_str));
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(!err.contains("not logged in"), "{err}");
+    assert!(err.contains("100"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}

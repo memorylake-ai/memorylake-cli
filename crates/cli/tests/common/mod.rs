@@ -186,3 +186,57 @@ pub fn assert_failure(output: &Output, args: &[&str]) -> String {
     );
     format!("{stdout}{stderr}")
 }
+
+/// Custom id of the one workspace that live tests needing *a* workspace share.
+const SCRATCH_WORKSPACE_CUSTOM_ID: &str = "mlcli-live-scratch";
+
+/// The shared scratch workspace's id, created on first use.
+///
+/// Workspaces cannot be deleted through this CLI (see issue #15), so a test
+/// that creates one per run leaves the account a little more cluttered every
+/// time. Tests that only need somewhere to put their own projects, folders or
+/// conversations look this one up by a fixed custom id instead, and create it
+/// once. `MEMORYLAKE_LIVE_WORKSPACE` (environment or `.env`) names a different
+/// custom id. `home` must already be logged in.
+pub fn scratch_workspace(home: &Path) -> String {
+    load_dotenv();
+    let custom_id = std::env::var("MEMORYLAKE_LIVE_WORKSPACE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| SCRATCH_WORKSPACE_CUSTOM_ID.to_string());
+
+    let lookup = || {
+        let output = run(home, &["ws", "get", custom_id.as_str(), "--by-custom-id"]);
+        output.status.success().then(|| id_in(&output.stdout))
+    };
+    if let Some(id) = lookup() {
+        return id;
+    }
+    let args = [
+        "ws",
+        "create",
+        "--name",
+        custom_id.as_str(),
+        "--custom-id",
+        custom_id.as_str(),
+        "--description",
+        "Shared scratch workspace for memorylake-cli live tests",
+    ];
+    let output = run(home, &args);
+    if output.status.success() {
+        return id_in(&output.stdout);
+    }
+    // A concurrent test may have created it between the lookup and the create.
+    lookup().unwrap_or_else(|| {
+        assert_success(&output, &args);
+        unreachable!("create failed above")
+    })
+}
+
+fn id_in(stdout: &[u8]) -> String {
+    let value: serde_json::Value = serde_json::from_slice(stdout).expect("workspace JSON");
+    value["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("workspace JSON has an id: {value}"))
+        .to_string()
+}

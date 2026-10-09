@@ -23,9 +23,12 @@
 //! `custom_id` that makes a retry idempotent.
 
 mod append_message;
+mod batch_get_messages;
+mod consumed_messages;
 mod cook_status;
 mod create;
 mod delete;
+mod fact_actions;
 mod get;
 mod list;
 mod list_messages;
@@ -33,9 +36,15 @@ mod path;
 mod types;
 
 pub use append_message::{AppendMessageRequest, append_message};
+pub use batch_get_messages::{BATCH_GET_MAX_MESSAGES, BatchGetMessagesRequest, batch_get_messages};
+pub use consumed_messages::{ConsumedMessage, list_consumed_messages};
 pub use cook_status::{get_cook_status, get_cook_status_by_custom_id};
 pub use create::{CreateConversationRequest, create_conversation};
 pub use delete::delete_conversation;
+pub use fact_actions::{
+    FACT_ACTIONS_MAX_PAGE_SIZE, FactAction, FactActionList, FactOwner, ListFactActionsParams,
+    list_fact_actions,
+};
 pub use get::{get_conversation, get_conversation_by_custom_id};
 pub use list::{ConversationList, ListConversationsParams, list_conversations};
 pub use list_messages::{ListMessagesParams, MessageList, list_messages};

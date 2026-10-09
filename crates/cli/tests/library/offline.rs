@@ -67,3 +67,72 @@ fn on_conflict_rejects_an_unknown_strategy() {
     );
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn xattr_subcommands_and_flags_are_listed() {
+    let home = temp_home();
+    for (args, needles) in [
+        (vec!["library", "--help"], vec!["xattr"]),
+        (vec!["library", "xattr", "--help"], vec!["set", "delete"]),
+        (vec!["library", "mkdir", "--help"], vec!["--xattrs"]),
+        (vec!["library", "upload", "--help"], vec!["--xattrs"]),
+        (vec!["library", "list", "--help"], vec!["--xattr-keys"]),
+    ] {
+        let stdout = assert_success(&run(&home, &args), &args);
+        for needle in needles {
+            assert!(
+                stdout.contains(needle),
+                "{args:?} missing `{needle}`: {stdout}"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn xattr_input_is_validated_before_credentials() {
+    // Not logged in: each failure must be the local check, not the login.
+    let home = temp_home();
+    for (args, expected) in [
+        (
+            vec!["library", "xattr", "set", "sc-a:inode-b", "--attrs", "{}"],
+            "at least one attribute",
+        ),
+        (
+            vec![
+                "library",
+                "xattr",
+                "set",
+                "sc-a:inode-b",
+                "--attrs",
+                r#"{"n":1}"#,
+            ],
+            "must be a JSON string",
+        ),
+        (
+            vec![
+                "library",
+                "xattr",
+                "delete",
+                "sc-a:inode-b",
+                "--keys",
+                "a,,b",
+            ],
+            "empty entry",
+        ),
+        (vec!["library", "xattr", "delete", "sc-a:inode-b"], "--keys"),
+        (
+            vec!["library", "mkdir", "docs", "--xattrs", "[]"],
+            "JSON object",
+        ),
+        (
+            vec!["library", "list", "--xattr-keys", ""],
+            "must not be empty",
+        ),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}

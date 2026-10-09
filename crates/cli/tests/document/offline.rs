@@ -251,3 +251,78 @@ fn delete_requires_at_least_one_document_id() {
     );
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn inspect_and_reload_are_listed_and_explain_themselves() {
+    let home = temp_home();
+    let args = ["project", "document", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    for subcommand in ["inspect", "reload"] {
+        assert!(
+            stdout.contains(subcommand),
+            "missing `{subcommand}`: {stdout}"
+        );
+    }
+
+    let args = ["project", "document", "inspect", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("pre-signed"), "{stdout}");
+
+    let args = ["project", "document", "reload", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("error"), "{stdout}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn inspect_takes_one_to_a_hundred_ids_before_credentials() {
+    let home = temp_home();
+    let args = [
+        "project",
+        "doc",
+        "inspect",
+        "--workspace",
+        "ws-1",
+        "--project",
+        "proj-1",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("<DOCUMENT_ID>"), "{err}");
+
+    let ids: Vec<String> = (0..101).map(|n| format!("doc-{n}")).collect();
+    let mut args = vec![
+        "project",
+        "doc",
+        "inspect",
+        "--workspace",
+        "ws-1",
+        "--project",
+        "proj-1",
+    ];
+    args.extend(ids.iter().map(String::as_str));
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("100"), "{err}");
+    assert!(!err.contains("not logged in"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn reload_needs_a_project_and_one_document() {
+    let home = temp_home();
+    let args = ["project", "doc", "reload", "--workspace", "ws-1", "doc-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("--project"), "{err}");
+
+    let args = [
+        "project",
+        "doc",
+        "reload",
+        "--workspace",
+        "ws-1",
+        "--project",
+        "proj-1",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("<DOCUMENT_ID>"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}

@@ -1,5 +1,7 @@
 //! Create a folder or finalize an uploaded file (`POST /api/v1/drives/items`).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
@@ -18,6 +20,8 @@ pub struct CreateFolderRequest {
     /// Behavior on name collision. `None` uses the server default (`rename`).
     /// Folders accept only `rename` and `deny`.
     pub name_conflict_strategy: Option<NameConflictStrategy>,
+    /// Extended attributes to create the folder with. `None` sends none.
+    pub x_attrs: Option<BTreeMap<String, String>>,
 }
 
 /// Finalize a chunked upload as a file item.
@@ -33,6 +37,8 @@ pub struct CreateFileRequest {
     pub part_etags: Vec<PartETag>,
     /// Behavior on name collision. `None` uses the server default (`rename`).
     pub name_conflict_strategy: Option<NameConflictStrategy>,
+    /// Extended attributes to create the file with. `None` sends none.
+    pub x_attrs: Option<BTreeMap<String, String>>,
 }
 
 /// A part number paired with the ETag storage returned for it.
@@ -69,15 +75,30 @@ struct UploadSource<'a> {
     part_etags: &'a [PartETag],
 }
 
+/// A create body plus the optional `x_attrs` both item types accept.
+///
+/// A wrapper rather than one more field on each body, so the bodies keep the
+/// shape their own tests pin.
+#[derive(Debug, Serialize)]
+struct WithXattrs<'a, B> {
+    #[serde(flatten)]
+    body: B,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    x_attrs: Option<&'a BTreeMap<String, String>>,
+}
+
 /// Create an empty folder.
 pub fn create_folder(client: &Client, request: &CreateFolderRequest) -> Result<CreatedItem> {
     client.post_data(
         ITEMS_PATH,
-        &CreateFolderBody {
-            item_type: ITEM_TYPE_FOLDER,
-            parent_item_id: &request.parent_item_id,
-            name: &request.name,
-            name_conflict_strategy: request.name_conflict_strategy,
+        &WithXattrs {
+            body: CreateFolderBody {
+                item_type: ITEM_TYPE_FOLDER,
+                parent_item_id: &request.parent_item_id,
+                name: &request.name,
+                name_conflict_strategy: request.name_conflict_strategy,
+            },
+            x_attrs: request.x_attrs.as_ref(),
         },
     )
 }
@@ -88,15 +109,18 @@ pub fn create_folder(client: &Client, request: &CreateFolderRequest) -> Result<C
 pub fn create_file(client: &Client, request: &CreateFileRequest) -> Result<CreatedItem> {
     client.post_data(
         ITEMS_PATH,
-        &CreateFileBody {
-            item_type: ITEM_TYPE_FILE,
-            parent_item_id: &request.parent_item_id,
-            name: &request.name,
-            from: UploadSource {
-                upload_id: &request.upload_id,
-                part_etags: &request.part_etags,
+        &WithXattrs {
+            body: CreateFileBody {
+                item_type: ITEM_TYPE_FILE,
+                parent_item_id: &request.parent_item_id,
+                name: &request.name,
+                from: UploadSource {
+                    upload_id: &request.upload_id,
+                    part_etags: &request.part_etags,
+                },
+                name_conflict_strategy: request.name_conflict_strategy,
             },
-            name_conflict_strategy: request.name_conflict_strategy,
+            x_attrs: request.x_attrs.as_ref(),
         },
     )
 }
@@ -104,6 +128,34 @@ pub fn create_file(client: &Client, request: &CreateFileRequest) -> Result<Creat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x_attrs_are_appended_only_when_given() {
+        let folder = || CreateFolderBody {
+            item_type: ITEM_TYPE_FOLDER,
+            parent_item_id: "MY_SPACE",
+            name: "docs",
+            name_conflict_strategy: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&WithXattrs {
+                body: folder(),
+                x_attrs: None,
+            })
+            .unwrap(),
+            r#"{"item_type":"folder","parent_item_id":"MY_SPACE","name":"docs"}"#
+        );
+
+        let attrs = BTreeMap::from([("team".to_string(), "core".to_string())]);
+        assert_eq!(
+            serde_json::to_string(&WithXattrs {
+                body: folder(),
+                x_attrs: Some(&attrs),
+            })
+            .unwrap(),
+            r#"{"item_type":"folder","parent_item_id":"MY_SPACE","name":"docs","x_attrs":{"team":"core"}}"#
+        );
+    }
 
     #[test]
     fn folder_body_omits_strategy_when_unset() {

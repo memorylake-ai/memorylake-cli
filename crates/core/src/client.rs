@@ -364,6 +364,34 @@ impl Client {
             .header(ACCEPT, "text/event-stream")
             .json(body)
             .build()?;
+        self.open_event_stream(request)
+    }
+
+    /// [`Self::post_event_stream`] for a GET with query parameters, such as
+    /// re-attaching to a task that is already running.
+    pub fn get_event_stream(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        headers: &[(&str, &str)],
+    ) -> Result<EventStream<std::io::BufReader<reqwest::blocking::Response>>> {
+        let url = self.url(path);
+        let mut builder = apply_headers(self.http.get(&url), headers)
+            .headers(self.auth_headers()?)
+            .header(ACCEPT, "text/event-stream");
+        for (key, value) in query {
+            builder = builder.query(&[(key, value)]);
+        }
+        self.open_event_stream(builder.build()?)
+    }
+
+    /// Execute a request expected to answer with an event stream, and wrap the
+    /// body once it is known to be one.
+    fn open_event_stream(
+        &self,
+        request: reqwest::blocking::Request,
+    ) -> Result<EventStream<std::io::BufReader<reqwest::blocking::Response>>> {
+        let url = request.url().to_string();
         let response = self.execute(request)?;
 
         let status = response.status();
@@ -430,6 +458,60 @@ impl Client {
         let request = self
             .http
             .delete(&url)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .build()?;
+        validate_envelope(self.execute(request)?)?;
+        Ok(())
+    }
+
+    /// Perform a DELETE with query parameters and no usable payload.
+    ///
+    /// For endpoints that name what to remove in the query string, such as
+    /// extended-attribute keys. Envelope handling matches
+    /// [`Self::delete_empty`].
+    pub fn delete_empty_with_query(&self, path: &str, query: &[(&str, String)]) -> Result<()> {
+        let url = self.url(path);
+        let mut builder = self.http.delete(&url).headers(self.auth_headers()?);
+        for (key, value) in query {
+            builder = builder.query(&[(key, value)]);
+        }
+        validate_envelope(self.execute(builder.build()?)?)?;
+        Ok(())
+    }
+
+    /// Perform a POST whose successful response carries no usable payload.
+    ///
+    /// The `ResponseWrapperVoid` counterpart of [`Self::post_data`]: the
+    /// server may send `data: {}`, `data: null` or no `data` at all, none of
+    /// which decodes into `()`. The envelope is still validated, so a non-2xx
+    /// status or `success: false` is an error.
+    pub fn post_empty<B>(&self, path: &str, body: &B) -> Result<()>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path);
+        let request = self
+            .http
+            .post(&url)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .build()?;
+        validate_envelope(self.execute(request)?)?;
+        Ok(())
+    }
+
+    /// Perform a PUT whose successful response carries no usable payload.
+    ///
+    /// Envelope handling matches [`Self::post_empty`].
+    pub fn put_empty<B>(&self, path: &str, body: &B) -> Result<()>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path);
+        let request = self
+            .http
+            .put(&url)
             .headers(self.auth_headers()?)
             .json(body)
             .build()?;
@@ -934,6 +1016,117 @@ mod tests {
             request.head
         );
         assert!(request.has_header("authorization"));
+    }
+
+    #[test]
+    fn empty_payload_helpers_accept_every_void_envelope_shape() {
+        // `ResponseWrapperVoid` has been observed with no `data`, and is
+        // documented with `data: {}`; neither decodes into `()`.
+        for body in [
+            r#"{"success":true,"message":"Xattrs set successfully"}"#,
+            r#"{"success":true,"data":{}}"#,
+            r#"{"success":true,"data":null}"#,
+        ] {
+            let (base, server) = one_shot_server(json_ok(body));
+            let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+            client
+                .post_empty("/x", &serde_json::json!({}))
+                .unwrap_or_else(|err| panic!("{body}: {err}"));
+            assert!(server.join().unwrap().head.starts_with("POST /x "));
+
+            let (base, server) = one_shot_server(json_ok(body));
+            let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+            client
+                .put_empty("/y", &serde_json::json!({"a": 1}))
+                .unwrap_or_else(|err| panic!("{body}: {err}"));
+            let request = server.join().unwrap();
+            assert!(request.head.starts_with("PUT /y "), "{}", request.head);
+            assert_eq!(request.body, br#"{"a":1}"#);
+        }
+    }
+
+    #[test]
+    fn empty_payload_helpers_still_report_a_failed_envelope() {
+        let body = r#"{"success":false,"message":"Only a document that failed to process can be reloaded","error_code":"STATE_NOT_READY"}"#;
+        let (base, _server) = one_shot_server(format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .post_empty("/reload", &serde_json::json!({}))
+            .expect_err("a failed envelope is an error");
+        assert!(
+            matches!(&err, Error::Api { code: Some(code), .. } if code == "STATE_NOT_READY"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn delete_with_query_sends_the_parameters() {
+        let (base, server) = one_shot_server(json_ok(r#"{"success":true}"#));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+        client
+            .delete_empty_with_query(
+                "/api/v1/drives/items/sc-a:inode-b/xattrs",
+                &[("key", "k1,k2".into())],
+            )
+            .expect("delete succeeds");
+        let request = server.join().unwrap();
+        assert!(
+            request
+                .head
+                .starts_with("DELETE /api/v1/drives/items/sc-a:inode-b/xattrs?key=k1%2Ck2 "),
+            "{}",
+            request.head
+        );
+    }
+
+    #[test]
+    fn get_event_stream_asks_for_a_stream_and_yields_its_events() {
+        let body = "data:{\"statusUpdate\":{\"taskId\":\"run-1\"}}\n\n";
+        let (base, server) = one_shot_server(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+        let events: Vec<Value> = client
+            .get_event_stream("/s", &[("q", "1".into())], &[])
+            .expect("open stream")
+            .collect::<Result<_>>()
+            .expect("read events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["statusUpdate"]["taskId"], "run-1");
+
+        let request = server.join().unwrap();
+        assert!(request.head.starts_with("GET /s?q=1 "), "{}", request.head);
+        assert!(
+            request
+                .head
+                .to_ascii_lowercase()
+                .contains("accept: text/event-stream"),
+            "{}",
+            request.head
+        );
+    }
+
+    #[test]
+    fn get_event_stream_turns_an_error_envelope_into_an_error() {
+        // Observed in production: subscribing to an unknown task answers 500
+        // with an ordinary envelope rather than a stream.
+        let body = r#"{"success":false,"message":"An unexpected error occurred.","error_code":"INTERNAL_ERROR"}"#;
+        let (base, _server) = one_shot_server(format!(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .get_event_stream("/s", &[], &[])
+            .expect_err("an envelope is not a stream");
+        assert!(
+            matches!(&err, Error::Api { code: Some(code), .. } if code == "INTERNAL_ERROR"),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -540,3 +540,65 @@ fn task_list_rejects_a_page_size_over_the_api_limit() {
     assert!(err.contains("101"), "{err}");
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn fork_and_task_subscribe_are_listed() {
+    let home = temp_home();
+    let args = ["agent", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("fork"), "{stdout}");
+
+    let args = ["agent", "task", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("subscribe"), "{stdout}");
+
+    let args = ["agent", "task", "subscribe", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    for flag in ["--raw", "--workspace"] {
+        assert!(stdout.contains(flag), "missing `{flag}`: {stdout}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn fork_is_validated_before_credentials_are_needed() {
+    // Not logged in: each failure must be the local check, not the login.
+    let home = temp_home();
+    for (args, expected) in [
+        (vec!["agent", "fork", "agent-1"], "--custom-id"),
+        (
+            vec!["agent", "fork", "agent-1", "--custom-id", "c", "--name", ""],
+            "1 to 255 characters",
+        ),
+        (
+            vec![
+                "agent",
+                "fork",
+                "agent-1",
+                "--custom-id",
+                "c",
+                "--metadata",
+                r#"{"n":true}"#,
+            ],
+            "must be a JSON string",
+        ),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+
+    let args = ["agent", "fork", "agent-1", "--custom-id", "c"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("not logged in"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn task_subscribe_needs_an_agent_and_a_task() {
+    let home = temp_home();
+    let args = ["agent", "task", "subscribe", "agt-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("<TASK_ID>"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}

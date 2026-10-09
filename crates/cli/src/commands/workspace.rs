@@ -1,10 +1,17 @@
 //! `memorylake workspace` / `ws` commands.
+//!
+//! There is deliberately no `workspace delete`: the API offers one, but a
+//! workspace holds everything else, and an agent driving this CLI should not
+//! be one command away from erasing it.
+
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::workspaces::{
-    CreateWorkspaceRequest, ListWorkspacesParams, Workspace, create_workspace, get_workspace,
-    get_workspace_by_custom_id, list_workspaces,
+    CreateWorkspaceRequest, ListWorkspacesParams, UpdateWorkspaceRequest,
+    WORKSPACE_DESCRIPTION_MAX_CHARS, WORKSPACE_NAME_MAX_CHARS, Workspace, create_workspace,
+    get_workspace, get_workspace_by_custom_id, list_workspaces, update_workspace,
 };
 use memorylake_core::{
     Client, DEFAULT_PROFILE, Paths, ResolveOverrides, clear_profile_workspace, load_file_config,
@@ -48,6 +55,26 @@ pub enum WorkspaceCommand {
         #[arg(long)]
         by_custom_id: bool,
     },
+    /// Update a workspace's name, description or metadata.
+    ///
+    /// Only the flags you pass are sent; at least one is required.
+    /// `--metadata` replaces the whole stored map rather than merging into
+    /// it, so pass every key you want to keep; `--metadata '{}'` clears it.
+    /// `--description ""` clears the description.
+    Update {
+        /// Workspace id.
+        id: String,
+        /// New display name (1–255 characters).
+        #[arg(long, value_parser = parse_workspace_name)]
+        name: Option<String>,
+        /// New description (at most 2000 characters).
+        #[arg(long, value_parser = parse_workspace_description)]
+        description: Option<String>,
+        /// Replacement metadata as a JSON object of strings,
+        /// e.g. '{"team":"core"}'.
+        #[arg(long, value_name = "JSON", value_parser = super::parse_string_map)]
+        metadata: Option<BTreeMap<String, String>>,
+    },
     /// Remember a workspace so other commands can omit `--workspace`.
     ///
     /// Without an id this lists your workspaces and lets you pick one. The
@@ -83,6 +110,14 @@ pub fn run(
         WorkspaceCommand::Use { clear: true, .. } => {
             return forget_workspace(&paths, profile.as_deref());
         }
+        // An empty update is a caller mistake the server would answer with
+        // the unchanged workspace; say so before asking for credentials.
+        WorkspaceCommand::Update {
+            name: None,
+            description: None,
+            metadata: None,
+            ..
+        } => bail!("nothing to update; pass --name, --description or --metadata"),
         _ => {}
     }
 
@@ -131,6 +166,24 @@ pub fn run(
             };
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
+        WorkspaceCommand::Update {
+            id,
+            name,
+            description,
+            metadata,
+        } => {
+            let data = update_workspace(
+                &client,
+                &id,
+                &UpdateWorkspaceRequest {
+                    name,
+                    description,
+                    metadata,
+                },
+            )
+            .with_context(|| format!("update workspace `{id}`"))?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
+        }
         WorkspaceCommand::Use { id, .. } => {
             // `--clear` returned earlier, before credentials were needed.
             let chosen = match id {
@@ -149,6 +202,29 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Accept a workspace name the API will take: 1–255 characters.
+fn parse_workspace_name(raw: &str) -> std::result::Result<String, String> {
+    let chars = raw.chars().count();
+    if chars == 0 || chars > WORKSPACE_NAME_MAX_CHARS {
+        return Err(format!(
+            "must be 1 to {WORKSPACE_NAME_MAX_CHARS} characters, got {chars}"
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+/// Accept a workspace description the API will take: at most 2000
+/// characters. Empty is allowed and clears the description.
+fn parse_workspace_description(raw: &str) -> std::result::Result<String, String> {
+    let chars = raw.chars().count();
+    if chars > WORKSPACE_DESCRIPTION_MAX_CHARS {
+        return Err(format!(
+            "must be at most {WORKSPACE_DESCRIPTION_MAX_CHARS} characters, got {chars}"
+        ));
+    }
+    Ok(raw.to_string())
 }
 
 /// Resolve which profile to act on without requiring credentials.

@@ -6,7 +6,8 @@ use crate::error::Result;
 
 use super::types::Workspace;
 
-fn workspace_path(id: &str) -> String {
+/// `/api/v3/workspaces/{id}`
+pub(super) fn workspace_path(id: &str) -> String {
     format!("/api/v3/workspaces/{}", encode_segment(id))
 }
 

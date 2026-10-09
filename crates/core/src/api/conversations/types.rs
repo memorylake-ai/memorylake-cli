@@ -127,6 +127,10 @@ pub struct Message {
     /// Actor who sent the message.
     #[serde(default)]
     pub actor_id: Option<String>,
+    /// Agent that sent the message, when the sender is an agent rather than a
+    /// person; the same id the Agent API reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     /// `HUMAN` or `ASSISTANT`.
     #[serde(default)]
     pub actor_type: Option<String>,
@@ -139,6 +143,10 @@ pub struct Message {
     /// Creation timestamp (ISO 8601).
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing a message never
+    /// drops what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Whether a conversation's memory has finished building.

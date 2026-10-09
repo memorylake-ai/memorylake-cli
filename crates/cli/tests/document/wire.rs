@@ -860,3 +860,100 @@ fn download_leaves_no_partial_file_when_the_server_errors() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn inspect_posts_the_ids_and_names_the_ones_left_out() {
+    // Production leaves `error` documents out of the response entirely.
+    let response = r#"{"success":true,"data":{"items":[{"document_id":"doc-1","name":"a.txt","status":"okay","content_type":"txt","source_type":"txt_file","summary":"s","llm_artifact":{}}]}}"#;
+    let (requests, output) = exchange(
+        &[response],
+        &[
+            "project",
+            "document",
+            "inspect",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-1",
+            "doc-2",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(requests.len(), 1);
+    assert!(
+        request_line(&requests[0]).starts_with(&format!("POST {DOCUMENTS_PATH}/inspect ")),
+        "{}",
+        request_line(&requests[0])
+    );
+    assert!(
+        requests[0].ends_with(r#"{"document_ids":["doc-1","doc-2"]}"#),
+        "{}",
+        requests[0]
+    );
+
+    let printed: serde_json::Value =
+        serde_json::from_str(&stdout_of(&output)).expect("inspection JSON");
+    assert_eq!(
+        printed["items"][0]["summary"], "s",
+        "content fields survive"
+    );
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("doc-2") && !stderr.contains("doc-1"),
+        "only the missing id is named: {stderr}"
+    );
+}
+
+#[test]
+fn reload_posts_to_the_document_verb_and_confirms() {
+    let (requests, output) = exchange(
+        &[r#"{"success":true}"#],
+        &[
+            "project",
+            "doc",
+            "reload",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-9",
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert!(
+        request_line(&requests[0]).starts_with(&format!("POST {DOCUMENTS_PATH}/doc-9/reload ")),
+        "{}",
+        request_line(&requests[0])
+    );
+    assert!(
+        stdout_of(&output).contains("doc-9"),
+        "{}",
+        stdout_of(&output)
+    );
+}
+
+#[test]
+fn reload_of_a_healthy_document_reports_the_refusal() {
+    let response = r#"{"success":false,"message":"Only a document that failed to process can be reloaded","error_code":"STATE_NOT_READY"}"#;
+    let (_, output) = exchange(
+        &[response],
+        &[
+            "project",
+            "doc",
+            "reload",
+            "--workspace",
+            "ws-1",
+            "--project",
+            "proj-1",
+            "doc-9",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        stderr_of(&output).contains("STATE_NOT_READY"),
+        "{}",
+        stderr_of(&output)
+    );
+}

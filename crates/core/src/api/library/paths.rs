@@ -19,6 +19,11 @@ pub(super) fn children_path(item_id: &str) -> String {
     format!("{}/children", item_path(item_id))
 }
 
+/// Path to an item's extended attributes.
+pub(super) fn xattrs_path(item_id: &str) -> String {
+    format!("{}/xattrs", item_path(item_id))
+}
+
 /// Path for starting a chunked upload session.
 pub(super) fn upload_path() -> String {
     format!("{ITEMS_PATH}/upload")
@@ -46,6 +51,14 @@ mod tests {
         assert_eq!(
             children_path("MY_SPACE"),
             "/api/v1/drives/items/MY_SPACE/children"
+        );
+    }
+
+    #[test]
+    fn xattrs_path_keeps_the_colon() {
+        assert_eq!(
+            xattrs_path("sc-a:inode-b"),
+            "/api/v1/drives/items/sc-a:inode-b/xattrs"
         );
     }
 

@@ -20,7 +20,7 @@ use memorylake_core::api::agents::a2a::{
     FEEDBACK_COMMENT_MAX_CHARS, ListTasksParams, MemorylakeExtension, Message, ROLE_USER, Rating,
     SendConfiguration, SendMessageRequest, SendMetadata, TASK_STATE_INPUT_REQUIRED,
     TaskFeedbackRequest, cancel_task, get_agent_card, get_task, list_tasks, send_message,
-    stream_message, submit_task_feedback, text_part,
+    stream_message, submit_task_feedback, subscribe_task, text_part,
 };
 use serde_json::{Map, Value};
 
@@ -142,6 +142,27 @@ pub enum TaskCommand {
         #[arg(long)]
         workspace: Option<String>,
     },
+    /// Follow a task's events and print its reply as it is produced.
+    ///
+    /// The output matches `agent send --stream`: the reply text on stdout,
+    /// task, context and final state on stderr, or one JSON event per line
+    /// with `--raw`. Use it to re-attach to a task started with
+    /// `send --no-wait`. A task that already finished is replayed from the
+    /// start.
+    Subscribe {
+        /// Agent that owns the task.
+        agent_id: String,
+        /// Task id.
+        task_id: String,
+        /// Print each protocol event as one line of JSON instead of the text.
+        #[arg(long)]
+        raw: bool,
+        /// Workspace the agent is bound in.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+    },
     /// Rate a task's result.
     Feedback {
         /// Agent that owns the task.
@@ -252,6 +273,16 @@ pub fn run_task(client: &Client, workspace: &str, command: TaskCommand) -> Resul
                 .with_context(|| format!("cancel task `{task_id}` of agent `{agent_id}`"))?;
             print_json(&data)
         }
+        TaskCommand::Subscribe {
+            agent_id,
+            task_id,
+            raw,
+            workspace: _,
+        } => {
+            let events = subscribe_task(client, workspace, &agent_id, &task_id)
+                .with_context(|| format!("subscribe to task `{task_id}` of agent `{agent_id}`"))?;
+            print_stream(events, raw)
+        }
         TaskCommand::Feedback {
             agent_id,
             task_id,
@@ -284,6 +315,7 @@ pub fn task_workspace_flag(command: &TaskCommand) -> Option<String> {
         TaskCommand::List { workspace, .. }
         | TaskCommand::Get { workspace, .. }
         | TaskCommand::Cancel { workspace, .. }
+        | TaskCommand::Subscribe { workspace, .. }
         | TaskCommand::Feedback { workspace, .. } => workspace.clone(),
     }
 }

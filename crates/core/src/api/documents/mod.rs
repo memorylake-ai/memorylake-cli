@@ -15,15 +15,22 @@ mod delete;
 mod download;
 mod get;
 mod import;
+mod inspect;
 mod list;
 mod path;
+mod reload;
 mod types;
 
 pub use delete::{DeleteDocumentsRequest, delete_documents};
 pub use download::download_document;
 pub use get::get_document;
 pub use import::{ImportDocumentsRequest, import_documents};
+pub use inspect::{
+    DocumentInspection, INSPECT_MAX_DOCUMENTS, InspectDocumentsRequest, InspectedDocument,
+    inspect_documents,
+};
 pub use list::{DocumentList, ListDocumentsParams, list_documents};
+pub use reload::reload_document;
 pub use types::{
     DOCUMENT_STATUS_ERROR, DOCUMENT_STATUS_OKAY, DOCUMENT_STATUS_PENDING, DOCUMENT_STATUS_RUNNING,
     Document, DocumentUsage, IMPORT_RESULT_DUPLICATE, IMPORT_RESULT_FAILED, IMPORT_RESULT_SUCCESS,

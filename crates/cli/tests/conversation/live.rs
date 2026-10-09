@@ -58,7 +58,23 @@ impl Live {
             ),
             "workspace create",
         );
+        Self::populate(home, workspace, tag)
+    }
 
+    /// Log in, then create a project and a bound actor in the shared scratch
+    /// workspace rather than a new one.
+    fn start_in_scratch_workspace(tag: &str) -> Self {
+        let api_key = require_api_key();
+        let home = temp_home();
+        let base_url = live_base_url();
+        let args = login_args(&api_key, "default", base_url.as_deref());
+        assert_success(&run(&home, &args), &args);
+        let workspace = crate::common::scratch_workspace(&home);
+        Self::populate(home, workspace, tag)
+    }
+
+    /// Create a project and an actor bound to `workspace`.
+    fn populate(home: PathBuf, workspace: String, tag: &str) -> Self {
         let project_name = unique_name(&format!("{tag}-proj"));
         let project = id_of(
             &json_of(
@@ -129,6 +145,19 @@ impl Drop for Live {
                 "--workspace",
                 &self.workspace,
                 &self.project,
+            ],
+        );
+        // Deleting an actor leaves its workspace binding listed (measured
+        // 2026-10-09), which would pile up in the shared scratch workspace.
+        let _ = run(
+            &self.home,
+            &[
+                "actor",
+                "unbind",
+                "--workspace",
+                &self.workspace,
+                "--actor",
+                &self.actor,
             ],
         );
         let _ = run(&self.home, &["actor", "delete", &self.actor]);
@@ -714,5 +743,153 @@ fn conversation_options_reach_the_server() {
             id.as_str(),
         ];
         assert_success(&run(&live.home, &args), &args);
+    }
+}
+
+/// `message get`, `consumed-messages` and `fact-actions` against a real
+/// conversation. Memory extraction is asynchronous, so the audit endpoints
+/// are checked for shape rather than for particular facts.
+#[test]
+fn message_get_and_the_memory_audit_trail() {
+    let live = Live::start_in_scratch_workspace("conv-audit");
+    let ws = live.workspace.as_str();
+
+    let conversation_custom_id = unique_name("conv-audit");
+    let created = live.json(&[
+        "conversation",
+        "create",
+        "--workspace",
+        ws,
+        "--custom-id",
+        conversation_custom_id.as_str(),
+        "--project",
+        live.project.as_str(),
+        "--actors",
+        live.actor.as_str(),
+    ]);
+    let conversation = id_of(&created, "conversation create");
+    // Declared after `live`, so it drops (and deletes) before `live` removes
+    // the project, the actor and the logged-in home.
+    let _conversation_cleanup = DeleteConversation {
+        home: &live.home,
+        workspace: ws,
+        id: &conversation,
+    };
+
+    let mut appended = Vec::new();
+    for text in ["The audit test prefers tea.", "It also sails on weekends."] {
+        let custom_id = unique_name("conv-audit-msg");
+        let message = live.json(&[
+            "conversation",
+            "message",
+            "append",
+            conversation.as_str(),
+            "--workspace",
+            ws,
+            "--actor",
+            live.actor.as_str(),
+            "--custom-id",
+            custom_id.as_str(),
+            "--text",
+            text,
+        ]);
+        appended.push(id_of(&message, "message append"));
+    }
+    let first = &appended[0];
+    let second = &appended[1];
+
+    // Batch-get answers in request order, whatever order they were written.
+    let fetched = live.json(&[
+        "conversation",
+        "message",
+        "get",
+        conversation.as_str(),
+        second.as_str(),
+        first.as_str(),
+    ]);
+    let ids: Vec<&str> = fetched
+        .as_array()
+        .unwrap_or_else(|| panic!("message get prints an array: {fetched}"))
+        .iter()
+        .filter_map(|message| message["id"].as_str())
+        .collect();
+    assert_eq!(ids, [second.as_str(), first.as_str()], "{fetched}");
+
+    // An unknown id fails the whole batch (HTTP 500, measured 2026-10-09).
+    let args = [
+        "conversation",
+        "message",
+        "get",
+        conversation.as_str(),
+        first.as_str(),
+        "conv-entry-does-not-exist",
+    ];
+    crate::common::assert_failure(&run(&live.home, &args), &args);
+
+    // `--by-custom-id` names the conversation; the message id is always an
+    // internal one.
+    for (target, by_custom_id) in [
+        (conversation.as_str(), false),
+        (conversation_custom_id.as_str(), true),
+    ] {
+        let mut args = vec![
+            "conversation",
+            "consumed-messages",
+            "--workspace",
+            ws,
+            target,
+            "--message",
+            first.as_str(),
+        ];
+        if by_custom_id {
+            args.push("--by-custom-id");
+        }
+        let consumed = live.json(&args);
+        assert!(consumed.is_array(), "{consumed}");
+    }
+
+    for owner in [
+        ["--project", live.project.as_str()],
+        ["--actor", live.actor.as_str()],
+    ] {
+        let mut args = vec![
+            "conversation",
+            "fact-actions",
+            "--workspace",
+            ws,
+            conversation.as_str(),
+            "--page-size",
+            "5",
+        ];
+        args.extend(owner);
+        let actions = live.json(&args);
+        assert!(actions["items"].is_array(), "{actions}");
+    }
+}
+
+/// Deletes a conversation when the test ends, including on a panic.
+struct DeleteConversation<'a> {
+    home: &'a Path,
+    workspace: &'a str,
+    id: &'a str,
+}
+
+impl Drop for DeleteConversation<'_> {
+    fn drop(&mut self) {
+        let args = [
+            "conversation",
+            "delete",
+            "--workspace",
+            self.workspace,
+            self.id,
+        ];
+        let output = run(self.home, &args);
+        if !output.status.success() {
+            eprintln!(
+                "cleanup: `memorylake {}` failed:\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }

@@ -22,9 +22,26 @@ pub(super) fn project_path(workspace_id: &str, project_id: &str) -> String {
     )
 }
 
+/// Path for a project's document and database counts.
+pub(super) fn project_statistics_path(workspace_id: &str, project_id: &str) -> String {
+    format!("{}/statistics", project_path(workspace_id, project_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statistics_hang_off_the_project() {
+        assert_eq!(
+            project_statistics_path("ws-1", "proj-1"),
+            "/api/v3/workspaces/ws-1/projects/proj-1/statistics"
+        );
+        assert_eq!(
+            project_statistics_path("ws-1", "p/../x"),
+            "/api/v3/workspaces/ws-1/projects/p%2F..%2Fx/statistics"
+        );
+    }
 
     #[test]
     fn typical_ids_stay_readable() {

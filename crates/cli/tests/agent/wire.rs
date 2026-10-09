@@ -424,3 +424,121 @@ fn an_a2a_error_is_reported_by_its_reason_not_as_escaped_json() {
         "the escaped document must not be the headline: {err}"
     );
 }
+
+#[test]
+fn task_subscribe_gets_the_v1_verb_and_prints_like_a_stream() {
+    // The production replay: no leading `task` event, token-by-token status
+    // updates, the whole reply again as an artifact, then the terminal state.
+    let events = [
+        r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING"}}}"#,
+        r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING","message":{"parts":[{"text":"PO"}]}}}}"#,
+        r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING","message":{"parts":[{"text":"NG"}]}}}}"#,
+        r#"{"artifactUpdate":{"taskId":"run-1","contextId":"ctx-1","artifact":{"parts":[{"text":"PONG"}]}}}"#,
+        r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_COMPLETED"}}}"#,
+    ];
+    let args = ["agent", "task", "subscribe", AGENT, "run-1"];
+    let (request, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
+    assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        format!("GET {ROOT}/a2a/tasks/run-1:subscribe HTTP/1.1")
+    );
+    assert_eq!(
+        request_header(&request, "accept").map(str::to_ascii_lowercase),
+        Some("text/event-stream".into()),
+        "{request}"
+    );
+    assert_eq!(stdout_of(&output), "PONG\n");
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("task run-1")
+            && stderr.contains("context ctx-1")
+            && stderr.contains("TASK_STATE_COMPLETED"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn task_subscribe_raw_prints_one_event_per_line() {
+    let events = [
+        r#"{"statusUpdate":{"taskId":"run-1","status":{"state":"TASK_STATE_WORKING"}}}"#,
+        r#"{"statusUpdate":{"taskId":"run-1","status":{"state":"TASK_STATE_COMPLETED"}}}"#,
+    ];
+    let args = [
+        "agent",
+        "task",
+        "subscribe",
+        AGENT,
+        "run-1",
+        "--raw",
+        "--workspace",
+        "ws-explicit",
+    ];
+    let (request, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
+    assert_success(&output, &args);
+
+    assert!(
+        request_line(&request).starts_with(
+            "GET /api/v3/workspaces/ws-explicit/agents/agt-1/a2a/tasks/run-1:subscribe "
+        ),
+        "{request}"
+    );
+    let lines: Vec<Value> = stdout_of(&output)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each line is one JSON event"))
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert!(stderr_of(&output).is_empty(), "raw mode adds no summary");
+}
+
+#[test]
+fn fork_posts_the_copy_request_and_prints_the_new_agent() {
+    let response = r#"{"success":true,"data":{"id":"agent-copy","name":"Copy","custom_id":"copy-1","agent_type":"INTERNAL"}}"#;
+    let args = [
+        "agent",
+        "fork",
+        "agent-src",
+        "--custom-id",
+        "copy-1",
+        "--name",
+        "Copy",
+        "--metadata",
+        r#"{"team":"core"}"#,
+    ];
+    let (request, output) = exchange_with_remembered_workspace(response, WS, &args);
+    let stdout = assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "POST /api/v3/agents/agent-src/fork HTTP/1.1"
+    );
+    assert_eq!(
+        body_json(&request),
+        serde_json::json!({"custom_id": "copy-1", "name": "Copy", "metadata": {"team": "core"}})
+    );
+    let printed: Value = serde_json::from_str(&stdout).expect("agent JSON");
+    assert_eq!(printed["id"], "agent-copy");
+    assert_eq!(
+        printed["agent_type"], "INTERNAL",
+        "unmodelled fields survive"
+    );
+}
+
+#[test]
+fn fork_sends_only_the_custom_id_when_nothing_else_is_given() {
+    let response = r#"{"success":true,"data":{"id":"agent-copy","name":"Src (copy)"}}"#;
+    let args = ["agent", "fork", "agent-src", "--custom-id", "copy-1"];
+    let (request, output) = exchange_with_remembered_workspace(response, WS, &args);
+    assert_success(&output, &args);
+    assert_eq!(request_body(&request), r#"{"custom_id":"copy-1"}"#);
+}
+
+#[test]
+fn fork_of_an_external_agent_reports_the_server_refusal() {
+    let response = r#"{"success":false,"message":"Operation not supported for EXTERNAL agents","error_code":"AGENT_OPERATION_NOT_SUPPORTED"}"#;
+    let args = ["agent", "fork", "agent-ext", "--custom-id", "copy-1"];
+    let (_, output) = exchange_with_remembered_workspace(response, WS, &args);
+    let err = assert_failure(&output, &args);
+    assert!(err.contains("AGENT_OPERATION_NOT_SUPPORTED"), "{err}");
+}

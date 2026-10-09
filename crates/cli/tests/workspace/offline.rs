@@ -74,3 +74,62 @@ fn use_requires_login_because_it_talks_to_the_api() {
     }
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn update_help_documents_replacement_metadata() {
+    let home = temp_home();
+    let args = ["workspace", "update", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    for needle in ["--name", "--description", "--metadata", "replaces"] {
+        assert!(stdout.contains(needle), "missing `{needle}`: {stdout}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn update_is_rejected_locally_before_credentials_are_needed() {
+    // Not logged in: each of these must fail on its own merits, never with
+    // "not logged in", which would mean the check came too late.
+    let home = temp_home();
+    for (args, expected) in [
+        (vec!["workspace", "update", "ws-1"], "nothing to update"),
+        (
+            vec!["workspace", "update", "ws-1", "--name", ""],
+            "1 to 255 characters",
+        ),
+        (
+            vec!["workspace", "update", "ws-1", "--metadata", "[1]"],
+            "JSON object",
+        ),
+        (
+            vec!["workspace", "update", "ws-1", "--metadata", r#"{"n":1}"#],
+            "must be a JSON string",
+        ),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+
+    let long = "x".repeat(2001);
+    let args = [
+        "workspace",
+        "update",
+        "ws-1",
+        "--description",
+        long.as_str(),
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("at most 2000 characters"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn there_is_no_workspace_delete() {
+    // Deliberately not exposed: a workspace holds everything else.
+    let home = temp_home();
+    let args = ["workspace", "delete", "ws-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("unrecognized subcommand"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}

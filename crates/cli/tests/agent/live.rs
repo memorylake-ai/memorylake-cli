@@ -518,3 +518,119 @@ fn a2a_round_trip_against_the_default_agent() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn fork_copies_an_agent_under_a_new_custom_id() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let suffix = unique_suffix();
+    let source_custom_id = format!("cli-agent-fork-src-{suffix}");
+    let create_args = [
+        "agent",
+        "create",
+        "--name",
+        source_custom_id.as_str(),
+        "--custom-id",
+        source_custom_id.as_str(),
+    ];
+    let source = parse_json(
+        &assert_success(&run(&home, &create_args), &create_args),
+        "create",
+    );
+    let source_id = str_field(&source, "id", "create").to_string();
+    let source_cleanup = AgentCleanup::new(&home, &source_id);
+
+    let fork_custom_id = format!("cli-agent-fork-{suffix}");
+    let fork_args = [
+        "agent",
+        "fork",
+        source_id.as_str(),
+        "--custom-id",
+        fork_custom_id.as_str(),
+        "--name",
+        "CLI fork live",
+        "--metadata",
+        r#"{"origin":"fork-test"}"#,
+    ];
+    let fork = parse_json(&assert_success(&run(&home, &fork_args), &fork_args), "fork");
+    let fork_id = str_field(&fork, "id", "fork").to_string();
+    let fork_cleanup = AgentCleanup::new(&home, &fork_id);
+    assert_ne!(fork_id, source_id, "a fork is a new agent: {fork}");
+    assert_eq!(str_field(&fork, "custom_id", "fork"), fork_custom_id);
+    assert_eq!(str_field(&fork, "name", "fork"), "CLI fork live");
+
+    // The custom id is unique across agents (409 CUSTOM_ID_CONFLICT,
+    // measured 2026-10-09), so forking again under it is refused.
+    let err = assert_failure(&run(&home, &fork_args), &fork_args);
+    assert!(err.contains("CUSTOM_ID_CONFLICT"), "{err}");
+
+    // The guards log in through `home`, so they must run before it goes.
+    drop(fork_cleanup);
+    drop(source_cleanup);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn task_subscribe_replays_a_finished_task() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+    let (workspace, agent) = default_workspace_and_agent(&home);
+    let ws = workspace.as_str();
+    let agent = agent.as_str();
+
+    let send_args = [
+        "agent",
+        "send",
+        agent,
+        "--workspace",
+        ws,
+        "--text",
+        "Reply with exactly the word PONG and nothing else.",
+        "--skip-memory",
+    ];
+    let output = run(&home, &send_args);
+    assert_success(&output, &send_args);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let task_id = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("task "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("stderr names no task: {stderr}"))
+        .to_string();
+
+    // Production replays a finished task's events rather than refusing the
+    // subscription as A2A 1.0 describes (measured 2026-10-09).
+    let subscribe_args = [
+        "agent",
+        "task",
+        "subscribe",
+        agent,
+        task_id.as_str(),
+        "--workspace",
+        ws,
+    ];
+    let output = run(&home, &subscribe_args);
+    let stdout = assert_success(&output, &subscribe_args);
+    assert!(stdout.to_uppercase().contains("PONG"), "{stdout}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("TASK_STATE_COMPLETED"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let unknown_args = [
+        "agent",
+        "task",
+        "subscribe",
+        agent,
+        "task-does-not-exist",
+        "--workspace",
+        ws,
+    ];
+    assert_failure(&run(&home, &unknown_args), &unknown_args);
+
+    let _ = fs::remove_dir_all(&home);
+}

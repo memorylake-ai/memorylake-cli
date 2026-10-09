@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use memorylake_core::api::projects::{
     CreateProjectRequest, ListProjectsParams, UpdateProjectRequest, create_project, delete_project,
-    get_project, get_project_by_custom_id, list_projects, update_project,
+    get_project, get_project_by_custom_id, get_project_statistics, list_projects, update_project,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
@@ -95,6 +95,18 @@ pub enum ProjectCommand {
         #[arg(long)]
         workspace: Option<String>,
         /// Project id.
+        id: String,
+    },
+    /// Show how many documents and databases a project holds, and how many
+    /// of each are pending, running, okay or in error.
+    #[command(visible_alias = "statistics")]
+    Stats {
+        /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Project id (custom_ids are not accepted here).
         id: String,
     },
     /// Manage the Library files imported into a project.
@@ -189,6 +201,12 @@ pub fn run(
             let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             delete_project(&client, &workspace, &id).context("delete project")?;
             println!("Deleted project `{id}` in workspace `{workspace}`");
+        }
+        ProjectCommand::Stats { workspace, id } => {
+            let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
+            let data = get_project_statistics(&client, &workspace, &id)
+                .with_context(|| format!("get statistics of project `{id}`"))?;
+            println!("{}", serde_json::to_string_pretty(&data)?);
         }
         ProjectCommand::Document { command } => {
             run_document(&client, &paths, &runtime.profile, command)?

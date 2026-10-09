@@ -14,6 +14,7 @@ mod list;
 mod paths;
 mod types;
 mod upload;
+mod xattrs;
 
 pub use create::{CreateFileRequest, CreateFolderRequest, PartETag, create_file, create_folder};
 pub use delete::delete_item;
@@ -24,3 +25,4 @@ pub use types::{
     ROOT_ALIAS,
 };
 pub use upload::{PartItem, UploadFileRequest, UploadSession, create_upload_session, upload_file};
+pub use xattrs::{delete_xattrs, set_xattrs};

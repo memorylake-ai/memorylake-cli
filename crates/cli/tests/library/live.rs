@@ -226,3 +226,100 @@ fn deleting_the_workspace_root_is_refused() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+/// Deletes a scratch folder when the test ends, including on a panic.
+struct FolderCleanup<'a> {
+    home: &'a Path,
+    item_id: String,
+}
+
+impl Drop for FolderCleanup<'_> {
+    fn drop(&mut self) {
+        let args = ["library", "delete", self.item_id.as_str()];
+        let output = run(self.home, &args);
+        if !output.status.success() {
+            eprintln!(
+                "cleanup: `memorylake {}` failed:\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+/// The `x_attrs` of `name` in a listing of `parent` restricted to `keys`.
+fn listed_xattrs(home: &Path, parent: &str, name: &str, keys: &str) -> Value {
+    let args = ["library", "list", parent, "--xattr-keys", keys];
+    let listing = json(&assert_success(&run(home, &args), &args));
+    listing["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("listing has items: {listing}"))
+        .iter()
+        .find(|item| item["name"] == name)
+        .unwrap_or_else(|| panic!("`{name}` is listed: {listing}"))["x_attrs"]
+        .clone()
+}
+
+#[test]
+fn xattrs_are_created_merged_listed_and_deleted() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login(&home, &api_key);
+    let folder = FolderCleanup {
+        home: &home,
+        item_id: make_scratch_folder(&home, "cli-lib-xattrs"),
+    };
+    let parent = folder.item_id.as_str();
+
+    let args = [
+        "library",
+        "mkdir",
+        "tagged",
+        "--parent",
+        parent,
+        "--xattrs",
+        r#"{"team":"core","stage":"draft"}"#,
+    ];
+    let tagged = field(&json(&assert_success(&run(&home, &args), &args)), "item_id").to_string();
+    assert_eq!(
+        listed_xattrs(&home, parent, "tagged", "team,stage"),
+        serde_json::json!({"team": "core", "stage": "draft"})
+    );
+
+    // `set` merges: `team` survives, `stage` is overwritten, `owner` is new.
+    let args = [
+        "library",
+        "xattr",
+        "set",
+        tagged.as_str(),
+        "--attrs",
+        r#"{"stage":"final","owner":"cli"}"#,
+    ];
+    assert_success(&run(&home, &args), &args);
+    assert_eq!(
+        listed_xattrs(&home, parent, "tagged", "team,stage,owner"),
+        serde_json::json!({"team": "core", "stage": "final", "owner": "cli"})
+    );
+    // `--xattr-keys` limits the listing to the keys asked for.
+    assert_eq!(
+        listed_xattrs(&home, parent, "tagged", "owner"),
+        serde_json::json!({"owner": "cli"})
+    );
+
+    let args = [
+        "library",
+        "xattr",
+        "delete",
+        tagged.as_str(),
+        "--keys",
+        "team,owner",
+    ];
+    assert_success(&run(&home, &args), &args);
+    assert_eq!(
+        listed_xattrs(&home, parent, "tagged", "team,stage,owner"),
+        serde_json::json!({"stage": "final"})
+    );
+
+    drop(folder);
+    let _ = fs::remove_dir_all(&home);
+}

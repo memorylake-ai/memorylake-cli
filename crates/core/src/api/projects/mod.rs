@@ -9,6 +9,7 @@ mod delete;
 mod get;
 mod list;
 mod path;
+mod statistics;
 mod types;
 mod update;
 
@@ -16,5 +17,6 @@ pub use create::{CreateProjectRequest, create_project};
 pub use delete::delete_project;
 pub use get::{get_project, get_project_by_custom_id};
 pub use list::{ListProjectsParams, ProjectList, list_projects};
+pub use statistics::{ProjectStatistics, StatusSummary, get_project_statistics};
 pub use types::{Industry, Project};
 pub use update::{UpdateProjectRequest, update_project};
