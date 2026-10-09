@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use reqwest::blocking::{Body, Client as HttpClient};
 use reqwest::header::{
@@ -171,7 +172,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let mut builder = self.http.get(&url).headers(self.auth_headers()?);
         for (key, value) in query {
             builder = builder.query(&[(key, value)]);
@@ -199,12 +200,40 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path);
-        let request = apply_headers(self.http.post(&url), headers)
-            .headers(self.auth_headers()?)
-            .json(body)
-            .build()?;
+        let request = self.json_post(path, body, headers)?.build()?;
         self.send(request)
+    }
+
+    /// [`Self::post_data`] with a per-request timeout replacing the client's
+    /// default (30 seconds), for endpoints documented to run long.
+    pub fn post_data_with_timeout<T, B>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: std::time::Duration,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
+        let request = self.json_post(path, body, &[])?.timeout(timeout).build()?;
+        self.send(request)
+    }
+
+    /// An authenticated POST of `body` as JSON, with extra headers applied.
+    fn json_post<B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<reqwest::blocking::RequestBuilder>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path)?;
+        Ok(apply_headers(self.http.post(&url), headers)
+            .headers(self.auth_headers()?)
+            .json(body))
     }
 
     /// Perform a PATCH with a JSON body and deserialize the API `data` payload.
@@ -227,7 +256,7 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.patch(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
@@ -251,7 +280,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.delete(&url), headers)
             .headers(self.auth_headers()?)
             .build()?;
@@ -271,7 +300,7 @@ impl Client {
     /// to the storage provider — which needs no such thing, the signature being
     /// in the URL.
     pub fn download_to<W: std::io::Write>(&self, path: &str, writer: &mut W) -> Result<Downloaded> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self.http.get(&url).headers(self.auth_headers()?).build()?;
         let mut response = self.execute(request)?;
 
@@ -332,7 +361,7 @@ impl Client {
         query: &[(&str, String)],
         headers: &[(&str, &str)],
     ) -> Result<Value> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let mut builder = apply_headers(self.http.get(&url), headers).headers(self.auth_headers()?);
         for (key, value) in query {
             builder = builder.query(&[(key, value)]);
@@ -350,7 +379,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .json(body)
@@ -379,7 +408,7 @@ impl Client {
             StreamOrData::Data { content_type, .. } => Err(Error::Api {
                 message: format!(
                     "expected a text/event-stream from {}, got {}",
-                    self.url(path),
+                    self.url(path)?,
                     if content_type.is_empty() {
                         "no content type"
                     } else {
@@ -407,7 +436,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = apply_headers(self.http.post(&url), headers)
             .headers(self.auth_headers()?)
             .header(ACCEPT, "text/event-stream")
@@ -443,7 +472,7 @@ impl Client {
     /// response. This variant validates the envelope — a non-2xx status or
     /// `success: false` is still an error — and discards whatever `data` holds.
     pub fn delete_empty(&self, path: &str) -> Result<()> {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self
             .http
             .delete(&url)
@@ -466,7 +495,7 @@ impl Client {
     where
         B: Serialize,
     {
-        let url = self.url(path);
+        let url = self.url(path)?;
         let request = self
             .http
             .delete(&url)
@@ -501,7 +530,11 @@ impl Client {
     }
 
     /// Upload one part of a chunked upload to its pre-signed `upload_url` and
-    /// return the `ETag` the storage backend assigned to it.
+    /// return the `ETag` the storage backend assigned to it, quotes stripped.
+    ///
+    /// A missing `ETag` is `Ok(None)`, not an error: the API asks for the part
+    /// to be reported without one in that case and never for the upload to be
+    /// abandoned over it.
     ///
     /// No `Authorization` header is sent: `upload_url` carries its own
     /// signature over a fixed header set, and MemoryLake credentials have no
@@ -515,7 +548,7 @@ impl Client {
         &self,
         upload_url: &str,
         body: Body,
-    ) -> std::result::Result<String, PartUploadError> {
+    ) -> std::result::Result<Option<String>, PartUploadError> {
         // `self.http`'s default headers carry only `Content-Type`; auth is
         // applied per-request via `auth_headers`, which is deliberately not
         // called here. Override the JSON default so the part is not mislabeled.
@@ -524,7 +557,11 @@ impl Client {
             .put(upload_url)
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(body)
-            .send()?;
+            .send()
+            // A transport error's Display names the URL, and this one carries
+            // a working signature. Strip it before the error can reach a log
+            // or the user's terminal.
+            .map_err(reqwest::Error::without_url)?;
 
         let status = response.status();
         tracing::trace!(
@@ -541,21 +578,85 @@ impl Client {
             });
         }
 
-        response
+        Ok(response
             .headers()
             .get(ETAG)
             .and_then(|value| value.to_str().ok())
-            .map(str::to_string)
-            .ok_or(PartUploadError::MissingETag)
+            .map(|etag| etag.trim_matches('"'))
+            .filter(|etag| !etag.is_empty())
+            .map(str::to_string))
     }
 
-    fn url(&self, path: &str) -> String {
+    /// Upload a whole object to a single-shot pre-signed `upload_url`, sending
+    /// exactly the `headers` the slot was signed for.
+    ///
+    /// Unlike [`Self::put_presigned_part`], the slot dictates the headers: the
+    /// URL's signature covers them, so they are replayed verbatim and nothing
+    /// is guessed. The one exception is `Content-Type` — this client sends JSON
+    /// by default, so when the slot names none, `default_content_type` is used
+    /// instead of letting the JSON default leak onto a binary upload.
+    ///
+    /// No `Authorization` header is sent, for the same reason as part uploads.
+    /// `body` should carry a known length: storage backends reject the chunked
+    /// encoding an unsized body would fall back to. `timeout` replaces the
+    /// client default for this request, so a large body on a slow link has
+    /// time to finish.
+    pub fn put_presigned_object(
+        &self,
+        upload_url: &str,
+        headers: &BTreeMap<String, String>,
+        default_content_type: &str,
+        body: Body,
+        timeout: Duration,
+    ) -> Result<()> {
+        let mut builder = self.http.put(upload_url).timeout(timeout);
+        if !headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(CONTENT_TYPE.as_str()))
+        {
+            builder = builder.header(CONTENT_TYPE, default_content_type);
+        }
+        for (name, value) in headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
+        // `without_url`: a transport error's Display names the URL, which
+        // here is a working credential.
+        let response = builder
+            .body(body)
+            .send()
+            .map_err(|source| Error::StorageTransport {
+                source: source.without_url(),
+            })?;
+
+        let status = response.status();
+        tracing::trace!(
+            status = status.as_u16(),
+            url = %redact_presigned(upload_url),
+            "object upload response"
+        );
+
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(Error::StorageUploadRefused {
+                status: status.as_u16(),
+                body: redact_presigned(body.trim()).into_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Join `path` onto the base URL, refusing paths that URL parsing would
+    /// rewrite into a different resource (see [`Error::InvalidPathSegment`]).
+    fn url(&self, path: &str) -> Result<String> {
         let path = if path.starts_with('/') {
             path.to_string()
         } else {
             format!("/{path}")
         };
-        format!("{}{path}", self.base_url)
+        if has_unsafe_segment(&path) {
+            return Err(Error::InvalidPathSegment { path });
+        }
+        Ok(format!("{}{path}", self.base_url))
     }
 
     fn auth_headers(&self) -> Result<HeaderMap> {
@@ -569,6 +670,19 @@ impl Client {
         headers.insert(AUTHORIZATION, value);
         Ok(headers)
     }
+}
+
+/// Whether any segment of `path` (query excluded) is empty or a dot segment.
+///
+/// Dot segments are matched in their percent-encoded spellings too: the URL
+/// parser treats `%2e` as `.` when it normalizes a path, so encoding an id
+/// does not stop `..` from being collapsed.
+fn has_unsafe_segment(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    path.split('/').skip(1).any(|segment| {
+        let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+        segment.is_empty() || decoded == "." || decoded == ".."
+    })
 }
 
 /// Apply extra per-request headers to a builder.
@@ -606,11 +720,6 @@ pub enum PartUploadError {
         /// Response body, with credential-bearing parameters redacted.
         body: String,
     },
-
-    /// The upload succeeded but no `ETag` came back, so the part cannot be
-    /// referenced when finalizing.
-    #[error("storage backend accepted the part but returned no ETag header")]
-    MissingETag,
 }
 
 impl PartUploadError {
@@ -626,7 +735,6 @@ impl PartUploadError {
             Self::Status { status, .. } => {
                 status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
             }
-            Self::MissingETag => false,
         }
     }
 
@@ -1049,10 +1157,8 @@ mod tests {
             )
             .expect("part upload succeeds");
 
-        // ETag is passed through verbatim, quotes included: the finalize
-        // endpoint accepts it either way, and echoing what storage returned is
-        // the form least likely to break.
-        assert_eq!(etag, "\"ef370f8d0a3551d387b27728c34c5906\"");
+        // The finalize endpoint documents the ETag with its quotes stripped.
+        assert_eq!(etag.as_deref(), Some("ef370f8d0a3551d387b27728c34c5906"));
 
         let request = server.join().expect("server thread");
         assert!(
@@ -1105,16 +1211,187 @@ mod tests {
     }
 
     #[test]
-    fn part_upload_rejects_response_without_etag() {
+    fn part_upload_accepts_response_without_etag() {
+        // The API says never to stop an upload because of a missing ETag; the
+        // part is reported without one instead.
         let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
 
-        let err = client
+        let etag = client
             .put_presigned_part(&format!("{base}/p"), Body::from(vec![0u8]))
-            .expect_err("missing ETag is an error");
-        assert!(matches!(err, PartUploadError::MissingETag));
-        assert!(!err.is_retryable());
+            .expect("a missing ETag is not an error");
+        assert_eq!(etag, None);
         let _ = server.join();
+    }
+
+    #[test]
+    fn part_upload_treats_an_empty_etag_as_absent() {
+        let (base, server) =
+            one_shot_server("HTTP/1.1 200 OK\r\nETag: \"\"\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let etag = client
+            .put_presigned_part(&format!("{base}/p"), Body::from(vec![0u8]))
+            .expect("an empty ETag is not an error");
+        assert_eq!(etag, None);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn object_upload_replays_the_signed_headers_without_authorization() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let headers = BTreeMap::from([
+            ("Content-Type".to_string(), "application/zip".to_string()),
+            ("x-amz-meta-origin".to_string(), "cli".to_string()),
+        ]);
+
+        client
+            .put_presigned_object(
+                &format!("{base}/bucket/k.zip?X-Amz-Signature=deadbeef"),
+                &headers,
+                "application/octet-stream",
+                Body::from(vec![b'P', b'K', 5, 6]),
+                Duration::from_secs(30),
+            )
+            .expect("object upload succeeds");
+
+        let request = server.join().expect("server thread");
+        let head = request.head.to_ascii_lowercase();
+        assert!(!request.has_header("authorization"), "{}", request.head);
+        assert!(head.contains("content-type: application/zip"), "{head}");
+        assert!(
+            !head.contains("application/json"),
+            "the JSON default must not leak onto the upload: {head}"
+        );
+        assert!(head.contains("x-amz-meta-origin: cli"), "{head}");
+        assert!(head.contains("content-length: 4"), "{head}");
+        assert_eq!(request.body, vec![b'P', b'K', 5, 6]);
+    }
+
+    #[test]
+    fn object_upload_falls_back_to_the_default_content_type() {
+        let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(30),
+            )
+            .expect("object upload succeeds");
+
+        let head = server
+            .join()
+            .expect("server thread")
+            .head
+            .to_ascii_lowercase();
+        assert!(head.contains("content-type: application/zip"), "{head}");
+    }
+
+    #[test]
+    fn object_upload_reports_a_refusal_with_a_redacted_body() {
+        let body = "<Error>https://s3/x?X-Amz-Signature=secret</Error>";
+        let (base, server) = one_shot_server(format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let err = client
+            .put_presigned_object(
+                &format!("{base}/k"),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(30),
+            )
+            .expect_err("403 is an error");
+        match err {
+            Error::StorageUploadRefused { status, body } => {
+                assert_eq!(status, 403);
+                assert!(!body.contains("secret"), "{body}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        let _ = server.join();
+    }
+
+    /// A URL on a loopback port nothing listens on, carrying a fake signature.
+    fn refused_presigned_url() -> String {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a port")
+            .port();
+        // The listener is dropped here, so connecting is refused.
+        format!(
+            "http://127.0.0.1:{port}/bucket/k.zip?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=deadbeefsecret"
+        )
+    }
+
+    /// Display of `err` and of every error in its `source()` chain.
+    fn error_chain(err: &dyn std::error::Error) -> String {
+        let mut rendered = err.to_string();
+        let mut source = err.source();
+        while let Some(next) = source {
+            rendered.push_str(" | ");
+            rendered.push_str(&next.to_string());
+            source = next.source();
+        }
+        rendered
+    }
+
+    fn assert_no_credentials(rendered: &str) {
+        for secret in ["X-Amz-Signature", "deadbeefsecret", "AKIDEXAMPLE"] {
+            assert!(
+                !rendered.contains(secret),
+                "`{secret}` leaked into the error: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn object_upload_transport_errors_do_not_carry_the_signed_url() {
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .put_presigned_object(
+                &refused_presigned_url(),
+                &BTreeMap::new(),
+                "application/zip",
+                Body::from(vec![0u8]),
+                Duration::from_secs(5),
+            )
+            .expect_err("nothing is listening");
+        assert!(matches!(err, Error::StorageTransport { .. }), "{err:?}");
+        let rendered = error_chain(&err);
+        assert!(rendered.contains("storage"), "{rendered}");
+        assert!(!rendered.contains("MemoryLake API"), "{rendered}");
+        assert_no_credentials(&rendered);
+        assert_no_credentials(&format!("{err:?}"));
+    }
+
+    #[test]
+    fn part_upload_transport_errors_do_not_carry_the_signed_url() {
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .put_presigned_part(&refused_presigned_url(), Body::from(vec![0u8]))
+            .expect_err("nothing is listening");
+        assert!(err.is_retryable());
+        // The library uploader logs this one between retries, then wraps it.
+        assert_no_credentials(&error_chain(&err));
+        assert_no_credentials(&format!("{err:?}"));
+
+        let wrapped = Error::PartUpload {
+            path: std::path::PathBuf::from("file.bin"),
+            number: 1,
+            total: 1,
+            attempts: 4,
+            source: err,
+        };
+        assert_no_credentials(&error_chain(&wrapped));
     }
 
     #[test]
@@ -1577,6 +1854,48 @@ mod tests {
     }
 
     #[test]
+    fn unsafe_segments_are_detected_in_every_spelling() {
+        for path in [
+            "/api/v3/workspaces/ws-1/projects/..",
+            "/api/v3/workspaces/ws-1/projects/.",
+            "/api/v3/workspaces/ws-1/projects/%2e%2E",
+            "/api/v3/workspaces/ws-1/projects/.%2e",
+            "/api/v3/workspaces/../projects/p-1",
+            "/api/v3/actors/",
+            "/api/v3/workspaces//projects",
+            "/api/v3/workspaces/ws-1/analysis-models/m/entries/..?entity_type=x",
+        ] {
+            assert!(has_unsafe_segment(path), "{path} must be refused");
+        }
+        for path in [
+            "/api/v3/workspaces/ws-1/projects/p-1",
+            "/api/v1/drives/items/sc-a:inode-b",
+            // An encoded `/` keeps `../..` inside one segment, which the
+            // server receives as an opaque id rather than a traversal.
+            "/api/v3/workspaces/ws-1/projects/..%2F..",
+            "/api/v3/workspaces/ws-1/projects/...",
+            "/api/v3/workspaces/ws-1/projects/a..b",
+            "/api/v3/actors/act-1?by_custom_id=..",
+        ] {
+            assert!(!has_unsafe_segment(path), "{path} must be allowed");
+        }
+    }
+
+    #[test]
+    fn a_dot_dot_id_is_refused_before_any_request_is_sent() {
+        // `project delete ..` would otherwise collapse into
+        // `DELETE /api/v3/workspaces/ws-1/` -- a workspace delete.
+        let client = Client::new("http://127.0.0.1:9", "sk_test_key_1234").unwrap();
+        let err = client
+            .delete_empty("/api/v3/workspaces/ws-1/projects/..")
+            .expect_err("a dot segment must be refused");
+        assert!(
+            matches!(err, Error::InvalidPathSegment { ref path } if path.ends_with("/projects/..")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
     fn delete_accepts_success_envelope_without_data() {
         let server = StubServer::new(
             "200 OK",
@@ -1617,6 +1936,67 @@ mod tests {
             request.contains(r#"{"display_name":"Alice"}"#),
             "body not sent: {request}"
         );
+    }
+
+    #[test]
+    fn post_with_timeout_sends_json_body_and_decodes_data() {
+        let server = StubServer::new("200 OK", r#"{"success":true,"data":{"ok":true}}"#);
+        let client = Client::new(&server.base_url, "sk_test_key_1234").unwrap();
+
+        let data: Value = client
+            .post_data_with_timeout(
+                "/api/v3/drafts",
+                &serde_json::json!({"guidance": "g"}),
+                std::time::Duration::from_secs(5),
+            )
+            .expect("post should decode data");
+        assert_eq!(data["ok"], true);
+
+        let request = server.received();
+        assert!(
+            request.starts_with("POST /api/v3/drafts "),
+            "unexpected request line: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sk_test_key_1234"),
+            "authorization not sent: {request}"
+        );
+        assert!(
+            request.contains(r#"{"guidance":"g"}"#),
+            "body not sent: {request}"
+        );
+    }
+
+    #[test]
+    fn post_with_timeout_gives_up_on_a_silent_server() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent server");
+        let base_url = format!("http://{}", listener.local_addr().expect("address"));
+        // Accept the connection and hold it open, unanswered, until the
+        // client has given up.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept the client");
+            // Released by the test body, or by its sender dropping if the
+            // body panicked; the connection closes either way.
+            let _ = released.recv_timeout(std::time::Duration::from_secs(10));
+            drop(stream);
+        });
+        let client = Client::new(&base_url, "sk_test_key_1234").unwrap();
+
+        let err = client
+            .post_data_with_timeout::<Value, _>(
+                "/api/v3/drafts",
+                &serde_json::json!({}),
+                std::time::Duration::from_millis(200),
+            )
+            .expect_err("a silent server must time out");
+        assert!(err.to_string().contains("timed out"), "{err}");
+        release.send(()).expect("holder thread is waiting");
+        holder.join().expect("holder thread finished cleanly");
     }
 
     #[test]

@@ -140,19 +140,24 @@ pub fn login_args<'a>(
     args
 }
 
-/// `memorylake args...` with its CLI state confined to `home`.
-///
-/// Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
-/// at the directory holding config.toml / credentials.toml.
-///
-/// Redirecting the home directory is not enough, and on Windows does not work
-/// at all: `dirs::home_dir()` there calls
-/// `SHGetKnownFolderPath(FOLDERID_Profile)`, which ignores both `USERPROFILE`
-/// and `HOME`. Tests that relied on those variables silently read the real
-/// user's config, so they could never see the credentials they had just
-/// written. They are still set, so anything else resolving a home directory
-/// stays inside the sandbox.
-pub fn isolated_command(home: &Path, args: &[&str]) -> Command {
+pub fn run(home: &Path, args: &[&str]) -> Output {
+    isolated(home, args)
+        .output()
+        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
+}
+
+/// The `memorylake` command for `args`, sandboxed to `home`.
+fn isolated(home: &Path, args: &[&str]) -> Command {
+    // Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
+    // at the directory holding config.toml / credentials.toml.
+    //
+    // Redirecting the home directory is not enough, and on Windows does not work
+    // at all: `dirs::home_dir()` there calls
+    // `SHGetKnownFolderPath(FOLDERID_Profile)`, which ignores both `USERPROFILE`
+    // and `HOME`. Tests that relied on those variables silently read the real
+    // user's config, so they could never see the credentials they had just
+    // written. They are still set, so anything else resolving a home directory
+    // stays inside the sandbox.
     let mut command = bin();
     command
         .env("MEMORYLAKE_CONFIG_DIR", home.join(".memorylake"))
@@ -167,19 +172,14 @@ pub fn isolated_command(home: &Path, args: &[&str]) -> Command {
     command
 }
 
-pub fn run(home: &Path, args: &[&str]) -> Output {
-    isolated_command(home, args)
-        .output()
-        .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
-}
-
-/// [`run`] with `stdin` piped to the child and extra environment variables
-/// set, for commands that read secrets from either.
+/// [`run`] with `stdin` written to the child's standard input and extra
+/// environment variables set, for commands that read a document, a password,
+/// or other input from `-` or the environment.
 pub fn run_with_input(home: &Path, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Output {
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = isolated_command(home, args)
+    let mut child = isolated(home, args)
         .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -11,12 +11,14 @@
 //!   actor/{offline,live}.rs
 //!   library/{offline,live}.rs
 //!   agent/{offline,live}.rs
+//!   skill/{offline,wire,live}.rs
+//!   boundary/{offline,wire,live}.rs
 //!   auth/{offline,live}.rs
 //!   workspace/{offline,live}.rs
 //!   project/{offline,live}.rs
 //!   search/{offline,wire,live}.rs
 //!   document/{offline,live}.rs
-//!   fact/{offline,live}.rs
+//!   fact/{offline,wire,live}.rs
 //!   conversation/{offline,wire,live}.rs
 //!   db_connection/{offline,wire,live}.rs
 //!   datasource/{offline,wire,live}.rs
@@ -30,7 +32,9 @@
 mod actor;
 mod admin;
 mod agent;
+mod analysis_model;
 mod auth;
+mod boundary;
 mod common;
 mod conversation;
 mod database;
@@ -38,9 +42,11 @@ mod datasource;
 mod db_connection;
 mod document;
 mod fact;
+mod industry;
 mod library;
 
 mod meta;
 mod project;
 mod search;
+mod skill;
 mod workspace;
