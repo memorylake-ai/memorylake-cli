@@ -221,7 +221,7 @@ fn update_rejects_non_object_metadata() {
 fn list_requires_at_least_one_filter() {
     assert_rejected_locally(
         &["fact", "list", "--workspace", "ws-1"],
-        "at least one of --actors / --projects / --agents",
+        "at least one actor, project, or agent id",
     );
 }
 
@@ -273,19 +273,55 @@ fn list_page_size_must_be_within_range() {
 }
 
 #[test]
-fn list_rejects_an_empty_query() {
+fn list_rejects_a_blank_query() {
+    for query in ["", "  "] {
+        assert_rejected_locally(
+            &[
+                "fact",
+                "list",
+                "--workspace",
+                "ws-1",
+                "--actors",
+                "a",
+                "--query",
+                query,
+            ],
+            "must not be blank",
+        );
+    }
+}
+
+#[test]
+fn blank_ids_and_guidance_are_rejected_locally() {
     assert_rejected_locally(
-        &[
-            "fact",
-            "list",
-            "--workspace",
-            "ws-1",
-            "--actors",
-            "a",
-            "--query",
-            "",
-        ],
-        "must not be empty",
+        &scoped(
+            &["conflict", "resolve"],
+            &["--actor", "actor-1"],
+            &["cfl-1", "--strategy", "keep_fact", "--keep-fact-id", ""],
+        ),
+        "must not be blank",
+    );
+    assert_rejected_locally(
+        &scoped(
+            &["instruction", "draft"],
+            &["--project", "proj-1"],
+            &["--guidance", ""],
+        ),
+        "--guidance must not be blank",
+    );
+}
+
+#[test]
+fn instruction_set_from_an_empty_stdin_is_rejected() {
+    // `run` gives the child a closed, non-terminal stdin, so this reads zero
+    // bytes rather than waiting.
+    assert_rejected_locally(
+        &scoped(
+            &["instruction", "set"],
+            &["--agent", "agent-1"],
+            &["--file", "-"],
+        ),
+        "must not be blank",
     );
 }
 

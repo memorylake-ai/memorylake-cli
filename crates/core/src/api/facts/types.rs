@@ -59,10 +59,11 @@ pub struct Fact {
     /// scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<FactOwner>,
-    /// Whether the fact has expired. Absent means false. A forgotten fact
-    /// reads back through its trace as expired.
-    #[serde(default)]
-    pub expired: bool,
+    /// Whether the fact has expired; absent means it has not. Creation
+    /// responses omit it. A forgotten fact reads back through its trace as
+    /// expired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired: Option<bool>,
     /// When the fact expires or expired, if ever (ISO 8601).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiration_date: Option<String>,
@@ -96,7 +97,7 @@ mod tests {
         assert_eq!(fact.fact.as_deref(), Some("user's editor is vim"));
         let owner = fact.owner.expect("owner present");
         assert_eq!(owner.owner_type, "actor");
-        assert!(!fact.expired);
+        assert_eq!(fact.expired, None);
     }
 
     #[test]
@@ -150,7 +151,7 @@ mod tests {
         let fact: Fact = serde_json::from_str(r#"{"id": "fact-1", "fact": "t"}"#).expect("decode");
         assert_eq!(
             serde_json::to_value(&fact).expect("encode"),
-            serde_json::json!({"id": "fact-1", "fact": "t", "expired": false})
+            serde_json::json!({"id": "fact-1", "fact": "t"})
         );
     }
 

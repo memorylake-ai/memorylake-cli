@@ -73,7 +73,7 @@ pub enum ConflictCommand {
         #[arg(long, value_enum)]
         strategy: StrategyArg,
         /// The fact to keep. Required by, and only accepted with, keep_fact.
-        #[arg(long, value_name = "FACT_ID")]
+        #[arg(long, value_name = "FACT_ID", value_parser = parse_fact_id)]
         keep_fact_id: Option<String>,
         /// Replacement text for one of the conflict's facts, as
         /// `FACT_ID=TEXT`. Repeatable, one per fact; required by, and only
@@ -169,6 +169,16 @@ fn parse_edit(raw: &str) -> std::result::Result<ConflictFactEdit, String> {
         fact_id: fact_id.to_string(),
         new_fact_text: text.to_string(),
     })
+}
+
+/// Reject a blank `--keep-fact-id`, trimming the stray whitespace a shell
+/// quote can carry.
+fn parse_fact_id(raw: &str) -> std::result::Result<String, String> {
+    let fact_id = raw.trim();
+    if fact_id.is_empty() {
+        return Err("must not be blank".to_string());
+    }
+    Ok(fact_id.to_string())
 }
 
 /// Pair the strategy with exactly the inputs it takes.
@@ -303,6 +313,13 @@ mod tests {
         assert!(parse_edit("fact-1").is_err());
         assert!(parse_edit("=text").is_err());
         assert!(parse_edit("fact-1=  ").is_err());
+    }
+
+    #[test]
+    fn a_blank_keep_fact_id_is_rejected() {
+        assert!(parse_fact_id("").is_err());
+        assert!(parse_fact_id("  ").is_err());
+        assert_eq!(parse_fact_id(" fact-1 ").expect("valid"), "fact-1");
     }
 
     #[test]

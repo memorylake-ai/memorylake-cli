@@ -7,10 +7,12 @@
 //! and page-size range, covers any mix of the three scopes in one call, and
 //! additionally tags every fact with its owner.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 use super::path::workspace_facts_path;
 use super::types::Fact;
@@ -43,7 +45,8 @@ pub struct FactList {
 /// `agent_ids`, naming at most [`MAX_FACT_LIST_OWNERS`] distinct owners in
 /// total. With no owner it used to answer an empty page (measured
 /// 2026-08-07) and now answers `INVALID_ARGUMENT` (measured 2026-10-09).
-/// Callers enforce both limits before building a request.
+/// [`validate`](Self::validate) checks both limits locally, and
+/// [`list_facts`] runs it before sending anything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListFactsParams {
     /// Limit to facts owned by these actors.
@@ -65,6 +68,29 @@ pub struct ListFactsParams {
 }
 
 impl ListFactsParams {
+    /// Check the owner filters against the API's limits: at least one owner,
+    /// and at most [`MAX_FACT_LIST_OWNERS`] distinct ids across all three
+    /// kinds (a repeated id counts once).
+    pub fn validate(&self) -> Result<()> {
+        let distinct: BTreeSet<&str> = self
+            .actor_ids
+            .iter()
+            .chain(&self.project_ids)
+            .chain(&self.agent_ids)
+            .map(String::as_str)
+            .collect();
+        if distinct.is_empty() {
+            return Err(Error::FactListWithoutOwner);
+        }
+        if distinct.len() > MAX_FACT_LIST_OWNERS {
+            return Err(Error::TooManyFactOwners {
+                count: distinct.len(),
+                max: MAX_FACT_LIST_OWNERS,
+            });
+        }
+        Ok(())
+    }
+
     /// Render as client query pairs, omitting unset values.
     ///
     /// List filters repeat the key once per value (`actor_ids=a&actor_ids=b`),
@@ -97,18 +123,60 @@ impl ListFactsParams {
 ///
 /// Paging is not performed automatically: pass the returned
 /// [`continuation_token`](FactList::continuation_token) back to fetch the next
-/// page.
+/// page. Params that fail [`ListFactsParams::validate`] are rejected without
+/// a request.
 pub fn list_facts(
     client: &Client,
     workspace_id: &str,
     params: &ListFactsParams,
 ) -> Result<FactList> {
+    params.validate()?;
     client.get_data(&workspace_facts_path(workspace_id), &params.to_query())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ids(prefix: &str, count: usize) -> Vec<String> {
+        (0..count).map(|i| format!("{prefix}-{i}")).collect()
+    }
+
+    #[test]
+    fn a_listing_without_an_owner_is_invalid() {
+        assert!(matches!(
+            ListFactsParams::default().validate(),
+            Err(Error::FactListWithoutOwner)
+        ));
+    }
+
+    #[test]
+    fn owners_are_capped_across_all_three_kinds() {
+        let params = ListFactsParams {
+            actor_ids: ids("actor", 30),
+            agent_ids: ids("agent", 21),
+            ..ListFactsParams::default()
+        };
+        assert!(matches!(
+            params.validate(),
+            Err(Error::TooManyFactOwners { count: 51, max: 50 })
+        ));
+
+        let at_limit = ListFactsParams {
+            project_ids: ids("proj", 50),
+            ..ListFactsParams::default()
+        };
+        assert!(at_limit.validate().is_ok());
+    }
+
+    #[test]
+    fn a_repeated_owner_counts_once() {
+        let params = ListFactsParams {
+            actor_ids: vec!["actor-1".to_string(); 60],
+            ..ListFactsParams::default()
+        };
+        assert!(params.validate().is_ok());
+    }
 
     #[test]
     fn list_filters_repeat_the_key_per_value() {

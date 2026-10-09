@@ -5,7 +5,7 @@
 //! stored in the scope's memory settings, and an empty value means the
 //! built-in default is in effect.
 
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -87,7 +87,10 @@ fn server_len(text: &str) -> usize {
 fn check_len(what: &str, text: &str, max: usize) -> Result<()> {
     let len = server_len(text);
     if len > max {
-        bail!("{what} is {len} characters long; the API accepts at most {max}");
+        bail!(
+            "{what} is {len} UTF-16 code units long; the API accepts at most {max} \
+             (characters outside the Basic Multilingual Plane, such as most emoji, count as 2)"
+        );
     }
     Ok(())
 }
@@ -99,8 +102,15 @@ fn read_instruction(text: Option<String>, file: Option<&Path>) -> Result<String>
         (None, None) => bail!("the instruction is required: pass --text <TEXT> or --file <PATH>"),
         (Some(text), None) => text,
         (None, Some(path)) if path == Path::new("-") => {
+            let mut stdin = std::io::stdin();
+            if stdin.is_terminal() {
+                // Waiting on an interactive terminal would look like a hang.
+                bail!(
+                    "--file - reads the instruction from stdin, but stdin is a terminal; pipe or redirect the Markdown in"
+                );
+            }
             let mut buffer = String::new();
-            std::io::stdin()
+            stdin
                 .read_to_string(&mut buffer)
                 .context("read instruction from stdin")?;
             buffer
@@ -134,6 +144,9 @@ fn build_draft(
     use_documents: bool,
 ) -> Result<DraftFactInstructionRequest> {
     if let Some(guidance) = &guidance {
+        if guidance.trim().is_empty() {
+            bail!("--guidance must not be blank; omit it to draft from the defaults");
+        }
         check_len("--guidance", guidance, MAX_DRAFT_GUIDANCE_LEN)?;
     }
     if let Some(language) = &language {
@@ -252,5 +265,9 @@ mod tests {
         assert!(build_draft(Some("g".repeat(2001)), None, false, false).is_err());
         assert!(build_draft(None, Some("l".repeat(65)), false, false).is_err());
         assert!(build_draft(None, Some(" ".into()), false, false).is_err());
+        assert!(build_draft(Some(String::new()), None, false, false).is_err());
+        let err = build_draft(Some("\u{1F600}".repeat(1001)), None, false, false)
+            .expect_err("over the limit in UTF-16 units");
+        assert!(err.to_string().contains("UTF-16 code units"), "{err}");
     }
 }

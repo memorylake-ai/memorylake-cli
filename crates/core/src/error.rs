@@ -63,6 +63,21 @@ pub enum Error {
         method: String,
     },
 
+    /// A fact listing named no owner; the API rejects it.
+    #[error("listing facts needs at least one actor, project, or agent id")]
+    FactListWithoutOwner,
+
+    /// A fact listing named more distinct owners than the API accepts.
+    #[error(
+        "listing facts accepts at most {max} distinct actor, project, and agent ids; got {count}"
+    )]
+    TooManyFactOwners {
+        /// Distinct owner ids named.
+        count: usize,
+        /// The API's limit.
+        max: usize,
+    },
+
     /// Local file has no bytes to upload.
     #[error("cannot upload empty file {path}; the upload API requires at least 1 byte")]
     EmptyUpload {

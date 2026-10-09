@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::common::assert_success;
 use crate::common::stub::{
-    exchange, exchange_with_remembered_workspace, request_body, request_line,
+    exchange, exchange_with_remembered_workspace, exchange_with_stdin, request_body, request_line,
 };
 
 const FACT: &str = r#"{"success":true,"data":{"id":"fact-1","fact":"t","metadata":{"k":"v"},"expired":false,"created_at":"2026-10-09T07:40:45Z","updated_at":"2026-10-09T07:41:00Z"}}"#;
@@ -50,10 +50,7 @@ fn add_to_an_agent_posts_to_the_agent_facts_collection() {
     assert_eq!(body_of(&request), json!({"facts": ["one", "two"]}));
     // Fields the server did not send are not printed as null.
     let printed = stdout_json(&output, &args);
-    assert_eq!(
-        printed["facts"][0],
-        json!({"id": "fact-1", "fact": "one", "expired": false})
-    );
+    assert_eq!(printed["facts"][0], json!({"id": "fact-1", "fact": "one"}));
 }
 
 #[test]
@@ -419,6 +416,32 @@ fn instruction_set_reads_a_markdown_file() {
     assert_eq!(
         body_of(&request),
         json!({"fact_instruction": "# 记录\n\n截止日期\n"})
+    );
+}
+
+#[test]
+fn instruction_set_reads_markdown_from_stdin() {
+    let args = [
+        "fact",
+        "instruction",
+        "set",
+        "--workspace",
+        "ws-1",
+        "--project",
+        "proj-1",
+        "--file",
+        "-",
+    ];
+    let (request, output) =
+        exchange_with_stdin(SETTINGS, &args, "Records deadlines.\n\n## 包含\n- dates\n");
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "PATCH /api/v3/workspaces/ws-1/projects/proj-1/settings HTTP/1.1"
+    );
+    assert_eq!(
+        body_of(&request),
+        json!({"fact_instruction": "Records deadlines.\n\n## 包含\n- dates\n"})
     );
 }
 

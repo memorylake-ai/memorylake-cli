@@ -16,13 +16,11 @@ mod conflict;
 mod instruction;
 mod scope;
 
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::facts::{
-    AddFactsRequest, ListFactsParams, MAX_FACT_LIST_OWNERS, MAX_FACT_PAGE_SIZE, UpdateFactRequest,
-    add_facts, forget_fact, get_fact, list_facts, trace_fact, update_fact,
+    AddFactsRequest, ListFactsParams, MAX_FACT_PAGE_SIZE, UpdateFactRequest, add_facts,
+    forget_fact, get_fact, list_facts, trace_fact, update_fact,
 };
 use serde_json::{Map, Value};
 
@@ -144,10 +142,11 @@ pub enum FactCommand {
     },
 }
 
-/// Reject an empty `--query`, which would read as "no filter" server-side.
+/// Reject a blank `--query`: an empty one reads as "no filter" server-side,
+/// and an all-whitespace one is almost certainly a quoting mistake.
 fn parse_query(raw: &str) -> std::result::Result<String, String> {
-    if raw.is_empty() {
-        return Err("must not be empty".to_string());
+    if raw.trim().is_empty() {
+        return Err("must not be blank".to_string());
     }
     Ok(raw.to_string())
 }
@@ -173,28 +172,33 @@ fn build_update(
     })
 }
 
-/// Collect the `fact list` owner filters, enforcing the API's limits.
-fn build_list_owners(
+/// Owner filters for `fact list`, as given on the command line.
+struct ListOwners {
     actors: Option<IdList>,
     projects: Option<IdList>,
     agents: Option<IdList>,
-) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
-    let actors = actors.map(|list| list.0).unwrap_or_default();
-    let projects = projects.map(|list| list.0).unwrap_or_default();
-    let agents = agents.map(|list| list.0).unwrap_or_default();
-    if actors.is_empty() && projects.is_empty() && agents.is_empty() {
-        // The endpoint rejects an owner-less listing (and once answered it
-        // with an empty page), so fail before sending it.
-        bail!("at least one of --actors / --projects / --agents is required");
-    }
-    let distinct: BTreeSet<&String> = actors.iter().chain(&projects).chain(&agents).collect();
-    if distinct.len() > MAX_FACT_LIST_OWNERS {
-        bail!(
-            "--actors / --projects / --agents name {} distinct owners; the API accepts at most {MAX_FACT_LIST_OWNERS}",
-            distinct.len()
-        );
-    }
-    Ok((actors, projects, agents))
+}
+
+/// Build the `fact list` params and check them against the API's owner
+/// limits before any credentials are resolved.
+fn build_list_params(
+    owners: ListOwners,
+    query: Option<String>,
+    page_size: Option<u32>,
+    continuation_token: Option<String>,
+) -> Result<ListFactsParams> {
+    let params = ListFactsParams {
+        actor_ids: owners.actors.map(|list| list.0).unwrap_or_default(),
+        project_ids: owners.projects.map(|list| list.0).unwrap_or_default(),
+        agent_ids: owners.agents.map(|list| list.0).unwrap_or_default(),
+        fact_fuzzy: query,
+        page_size,
+        continuation_token,
+    };
+    params
+        .validate()
+        .context("check --actors / --projects / --agents")?;
+    Ok(params)
 }
 
 /// Execute a `fact` subcommand.
@@ -280,17 +284,14 @@ pub fn run(command: FactCommand, profile: Option<String>, base_url: Option<Strin
             page_size,
             continuation_token,
         } => {
-            let (actor_ids, project_ids, agent_ids) = build_list_owners(actors, projects, agents)?;
+            let owners = ListOwners {
+                actors,
+                projects,
+                agents,
+            };
+            let params = build_list_params(owners, query, page_size, continuation_token)?;
             let session = Session::open(profile, base_url)?;
             let workspace = session.workspace(workspace)?;
-            let params = ListFactsParams {
-                actor_ids,
-                project_ids,
-                agent_ids,
-                fact_fuzzy: query,
-                page_size,
-                continuation_token,
-            };
             let data = list_facts(&session.client, &workspace, &params).context("list facts")?;
             print_json(&data)?;
         }
@@ -328,30 +329,57 @@ mod tests {
         assert_eq!(request.metadata, Some(Map::new()));
     }
 
+    fn owners(
+        actors: Option<IdList>,
+        projects: Option<IdList>,
+        agents: Option<IdList>,
+    ) -> ListOwners {
+        ListOwners {
+            actors,
+            projects,
+            agents,
+        }
+    }
+
     #[test]
     fn a_listing_needs_an_owner() {
-        let err = build_list_owners(None, None, None).expect_err("no owner");
-        assert!(err.to_string().contains("--agents"), "{err}");
+        let err =
+            build_list_params(owners(None, None, None), None, None, None).expect_err("no owner");
+        let message = format!("{err:#}");
+        assert!(message.contains("--agents"), "{message}");
+        assert!(message.contains("at least one"), "{message}");
     }
 
     #[test]
-    fn owners_are_capped_by_distinct_count() {
+    fn the_core_owner_cap_is_applied() {
         let many: Vec<String> = (0..51).map(|i| format!("actor-{i}")).collect();
         let refs: Vec<&str> = many.iter().map(String::as_str).collect();
-        let err = build_list_owners(ids(&refs), None, None).expect_err("51 owners");
-        assert!(err.to_string().contains("at most 50"), "{err}");
-
-        // Repeats count once.
-        let repeated = vec!["actor-1"; 60];
-        build_list_owners(ids(&repeated), None, None).expect("one distinct owner");
+        let err = build_list_params(owners(ids(&refs), None, None), None, None, None)
+            .expect_err("51 owners");
+        assert!(format!("{err:#}").contains("at most 50"), "{err:#}");
     }
 
     #[test]
-    fn every_owner_kind_is_passed_through() {
-        let (actors, projects, agents) =
-            build_list_owners(ids(&["a"]), ids(&["p"]), ids(&["g"])).expect("valid");
-        assert_eq!(actors, vec!["a".to_string()]);
-        assert_eq!(projects, vec!["p".to_string()]);
-        assert_eq!(agents, vec!["g".to_string()]);
+    fn every_list_option_is_passed_through() {
+        let params = build_list_params(
+            owners(ids(&["a"]), ids(&["p"]), ids(&["g"])),
+            Some("q".into()),
+            Some(10),
+            Some("tok".into()),
+        )
+        .expect("valid");
+        assert_eq!(params.actor_ids, vec!["a".to_string()]);
+        assert_eq!(params.project_ids, vec!["p".to_string()]);
+        assert_eq!(params.agent_ids, vec!["g".to_string()]);
+        assert_eq!(params.fact_fuzzy.as_deref(), Some("q"));
+        assert_eq!(params.page_size, Some(10));
+        assert_eq!(params.continuation_token.as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn a_blank_query_is_rejected() {
+        assert!(parse_query("").is_err());
+        assert!(parse_query("  ").is_err());
+        assert_eq!(parse_query(" a ").expect("valid"), " a ");
     }
 }

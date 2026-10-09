@@ -183,11 +183,7 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path);
-        let request = apply_headers(self.http.post(&url), headers)
-            .headers(self.auth_headers()?)
-            .json(body)
-            .build()?;
+        let request = self.json_post(path, body, headers)?.build()?;
         self.send(request)
     }
 
@@ -203,15 +199,24 @@ impl Client {
         T: DeserializeOwned,
         B: Serialize,
     {
-        let url = self.url(path);
-        let request = self
-            .http
-            .post(&url)
-            .headers(self.auth_headers()?)
-            .json(body)
-            .timeout(timeout)
-            .build()?;
+        let request = self.json_post(path, body, &[])?.timeout(timeout).build()?;
         self.send(request)
+    }
+
+    /// An authenticated POST of `body` as JSON, with extra headers applied.
+    fn json_post<B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<reqwest::blocking::RequestBuilder>
+    where
+        B: Serialize,
+    {
+        let url = self.url(path);
+        Ok(apply_headers(self.http.post(&url), headers)
+            .headers(self.auth_headers()?)
+            .json(body))
     }
 
     /// Perform a PATCH with a JSON body and deserialize the API `data` payload.
@@ -1481,6 +1486,12 @@ mod tests {
             "unexpected request line: {request}"
         );
         assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sk_test_key_1234"),
+            "authorization not sent: {request}"
+        );
+        assert!(
             request.contains(r#"{"guidance":"g"}"#),
             "body not sent: {request}"
         );
@@ -1492,11 +1503,15 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent server");
         let base_url = format!("http://{}", listener.local_addr().expect("address"));
-        // Accept the connection and hold it open without answering.
+        // Accept the connection and hold it open, unanswered, until the
+        // client has given up.
+        let (release, released) = std::sync::mpsc::channel::<()>();
         let holder = std::thread::spawn(move || {
-            let accepted = listener.accept();
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            drop(accepted);
+            let (stream, _) = listener.accept().expect("accept the client");
+            // Released by the test body, or by its sender dropping if the
+            // body panicked; the connection closes either way.
+            let _ = released.recv_timeout(std::time::Duration::from_secs(10));
+            drop(stream);
         });
         let client = Client::new(&base_url, "sk_test_key_1234").unwrap();
 
@@ -1508,7 +1523,8 @@ mod tests {
             )
             .expect_err("a silent server must time out");
         assert!(err.to_string().contains("timed out"), "{err}");
-        let _ = holder.join();
+        release.send(()).expect("holder thread is waiting");
+        holder.join().expect("holder thread finished cleanly");
     }
 
     #[test]
