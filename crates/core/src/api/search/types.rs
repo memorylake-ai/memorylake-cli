@@ -3,12 +3,16 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// Wire value for [`MemoryType::Document`].
 pub const MEMORY_TYPE_DOCUMENT: &str = "document";
 
 /// Wire value for [`MemoryType::Fact`].
 pub const MEMORY_TYPE_FACT: &str = "fact";
+
+/// Wire value for [`MemoryType::Database`].
+pub const MEMORY_TYPE_DATABASE: &str = "database";
 
 /// A memory source type accepted by the `memory_types` search filter.
 ///
@@ -23,17 +27,20 @@ pub enum MemoryType {
     Document,
     /// Extracted facts.
     Fact,
+    /// Structured/tabular sources.
+    Database,
 }
 
 impl MemoryType {
     /// Every accepted value, in the order help text and errors should list them.
-    pub const ALL: [Self; 2] = [Self::Document, Self::Fact];
+    pub const ALL: [Self; 3] = [Self::Document, Self::Fact, Self::Database];
 
     /// Wire representation of this memory type.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Document => MEMORY_TYPE_DOCUMENT,
             Self::Fact => MEMORY_TYPE_FACT,
+            Self::Database => MEMORY_TYPE_DATABASE,
         }
     }
 
@@ -45,6 +52,7 @@ impl MemoryType {
         match raw {
             MEMORY_TYPE_DOCUMENT => Some(Self::Document),
             MEMORY_TYPE_FACT => Some(Self::Fact),
+            MEMORY_TYPE_DATABASE => Some(Self::Database),
             _ => None,
         }
     }
@@ -62,20 +70,84 @@ impl From<MemoryType> for String {
     }
 }
 
-/// One matched span inside a document.
+/// One matched block inside a document.
+///
+/// The API sends one of several block shapes, told apart by `type`. A figure
+/// carries its matched `text` and `range` at the top level; a paragraph, table
+/// or NL2SQL block carries them in `highlight.chunks` instead. Use
+/// [`Self::snippets`] to read the matched text without caring which.
+///
+/// Only the fields shared by the shapes are typed. Everything else (`caption`,
+/// `table_id`, `title`, ...) is kept in `extra`, so it still reaches the
+/// caller's output rather than being dropped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentItem {
-    /// Matched text.
+    /// Block kind, e.g. `paragraph`, `subtable`, `figure`, `nl2sql`. Kept as
+    /// sent so a kind this build does not know still decodes.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Matched text, for blocks that carry it at the top level (figures).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Location of the match, for blocks that carry it at the top level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    /// Matched chunks, for paragraph, table and NL2SQL blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<Highlight>,
+    /// Block-specific fields this build does not model.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl DocumentItem {
+    /// The matched text of this block: the top-level `text` when present,
+    /// otherwise each non-empty `highlight.chunks[].text` in order.
+    pub fn snippets(&self) -> Vec<&str> {
+        if let Some(text) = self.text.as_deref().filter(|text| !text.is_empty()) {
+            return vec![text];
+        }
+        self.highlight
+            .iter()
+            .flat_map(|highlight| &highlight.chunks)
+            .filter_map(|chunk| chunk.text.as_deref())
+            .filter(|text| !text.is_empty())
+            .collect()
+    }
+}
+
+/// The matched part of a paragraph, table or NL2SQL block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Highlight {
+    /// Matched text spans.
     #[serde(default)]
+    pub chunks: Vec<HighlightChunk>,
+    /// Shape-specific fields (`inner_tables`, `instruction`, ...).
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// One matched text span inside a [`Highlight`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HighlightChunk {
+    /// Chunk id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Matched text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// Location of the match within the source document.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<String>,
 }
 
 /// A document that matched the query, with its matching spans.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchDocument {
+    /// 1-based position in the one relevance order shared by `documents`,
+    /// `databases` and `facts`. See [`SearchResults`].
+    #[serde(default)]
+    pub rank: Option<u32>,
     /// Server-assigned document id.
     pub document_id: String,
     /// Display name.
@@ -93,7 +165,7 @@ pub struct SearchDocument {
     /// Sheet name for spreadsheet sources; documented as nullable.
     #[serde(default)]
     pub sheet_name: Option<String>,
-    /// Matching spans. Absent means none were returned.
+    /// Matching blocks. Absent means none were returned.
     #[serde(default)]
     pub items: Vec<DocumentItem>,
 }
@@ -104,12 +176,20 @@ pub struct SearchDocument {
 /// resource types in this crate, it cannot derive [`Eq`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchFact {
+    /// 1-based position in the one relevance order shared by `documents`,
+    /// `databases` and `facts`. See [`SearchResults`].
+    #[serde(default)]
+    pub rank: Option<u32>,
     /// Server-assigned fact id.
     pub id: String,
     /// The fact text.
     #[serde(default)]
     pub fact: Option<String>,
-    /// Relevance score. The API does not guarantee it is always present.
+    /// Ordering score, equal to `1/rank`.
+    ///
+    /// It encodes position only, not relevance magnitude, and is not
+    /// comparable across requests -- never use it as a threshold. Prefer
+    /// `rank`.
     #[serde(default)]
     pub score: Option<f64>,
     /// Caller-defined metadata stored with the fact.
@@ -125,9 +205,11 @@ pub struct SearchFact {
 
 /// The `data` payload of a memory search.
 ///
-/// The collections are independent result sets rather than one ranked list, and
-/// none is paginated. The server returns only the collections the request asked
-/// for — filtering on `memory_types` drops the others entirely — so a missing
+/// The three collections are views of ONE ranked list, split by memory type:
+/// every entry carries a `rank` unique across all of them, and merging by
+/// `rank` restores the order the search computed, best first. None is
+/// paginated. The server returns only the collections the request asked for —
+/// filtering on `memory_types` drops the others entirely — so a missing
 /// collection decodes as empty and "no matches" and "key absent" look the same
 /// to callers.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -140,10 +222,9 @@ pub struct SearchResults {
     pub facts: Vec<SearchFact>,
     /// Structured/tabular sources that matched.
     ///
-    /// The API returns this alongside `documents` and `facts` but does not
-    /// document it, and no sample payload has been observed with entries in it.
-    /// Rather than guess a schema — or drop server data on the floor — the
-    /// entries pass through untyped so they still reach the caller's output.
+    /// Documented with the same shape as `documents`, but no live payload has
+    /// been observed with entries in it, so the entries pass through untyped:
+    /// a mismatch with the documented shape must not fail the whole search.
     #[serde(default)]
     pub databases: Vec<serde_json::Value>,
 }
@@ -164,6 +245,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&MemoryType::Fact).expect("serialize"),
             r#""fact""#
+        );
+        assert_eq!(
+            serde_json::to_string(&MemoryType::Database).expect("serialize"),
+            r#""database""#
         );
     }
 
@@ -211,6 +296,52 @@ mod tests {
     }
 
     #[test]
+    fn typed_block_shapes_decode_and_expose_their_snippets() {
+        // The documented `items[]` union: a figure carries `text` at the top
+        // level, the other shapes put it in `highlight.chunks`.
+        let results: SearchResults = serde_json::from_str(
+            r#"{
+                "documents": [{
+                    "rank": 2,
+                    "document_id": "doc-1",
+                    "items": [
+                        {"type": "paragraph", "paragraph_id": "p-1",
+                         "highlight": {"chunks": [
+                             {"id": "c-1", "text": "first", "range": "p.1"},
+                             {"id": "c-2", "text": "second"}
+                         ]}},
+                        {"type": "subtable", "title": "Revenue", "table_id": "t-1",
+                         "highlight": {"chunks": [{"text": "row"}], "inner_tables": []}},
+                        {"type": "figure", "text": "a chart", "range": "p.3",
+                         "caption": "Figure 1"}
+                    ]
+                }],
+                "facts": [{"rank": 1, "id": "fact-1", "score": 1.0}]
+            }"#,
+        )
+        .expect("deserialize block shapes");
+
+        let doc = &results.documents[0];
+        assert_eq!(doc.rank, Some(2));
+        assert_eq!(results.facts[0].rank, Some(1));
+        assert_eq!(doc.items[0].kind.as_deref(), Some("paragraph"));
+        assert_eq!(doc.items[0].snippets(), vec!["first", "second"]);
+        assert_eq!(doc.items[1].snippets(), vec!["row"]);
+        assert_eq!(doc.items[2].snippets(), vec!["a chart"]);
+
+        // Fields this build does not model must survive into the output.
+        let rendered = serde_json::to_value(&results).expect("serialize");
+        let items = &rendered["documents"][0]["items"];
+        assert_eq!(items[0]["paragraph_id"], "p-1");
+        assert_eq!(items[0]["highlight"]["chunks"][0]["range"], "p.1");
+        assert_eq!(items[1]["table_id"], "t-1");
+        assert_eq!(items[1]["highlight"]["inner_tables"], serde_json::json!([]));
+        assert_eq!(items[2]["caption"], "Figure 1");
+        // A shape without top-level text must not print a stray `"text": null`.
+        assert!(items[0].get("text").is_none(), "{items}");
+    }
+
+    #[test]
     fn every_uncertain_field_may_be_absent() {
         // The docs do not promise these are populated, so none may be required.
         let cases = [
@@ -238,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn the_undocumented_databases_collection_is_preserved() {
+    fn the_databases_collection_is_preserved() {
         // Observed live: a query without `memory_types` answers with
         // `["databases", "documents", "facts"]`. Dropping it would silently
         // discard server data from the command's output.

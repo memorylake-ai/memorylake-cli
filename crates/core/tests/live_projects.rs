@@ -57,6 +57,7 @@ fn create_list_get_update_delete_round_trip() {
             name: name.clone(),
             custom_id: custom_id.clone(),
             description: Some(description.into()),
+            industry_ids: None,
         },
     )
     .expect("create project");
@@ -97,7 +98,7 @@ fn create_list_get_update_delete_round_trip() {
         &created.id,
         &UpdateProjectRequest {
             name: Some(renamed.clone()),
-            description: None,
+            ..UpdateProjectRequest::default()
         },
     )
     .expect("update project");

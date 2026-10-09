@@ -29,12 +29,14 @@
 mod actor;
 mod admin;
 mod agent;
+mod analysis_model;
 mod auth;
 mod boundary;
 mod common;
 mod conversation;
 mod document;
 mod fact;
+mod industry;
 mod library;
 
 mod meta;

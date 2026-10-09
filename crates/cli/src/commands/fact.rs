@@ -21,9 +21,9 @@ use super::search::{IdList, parse_id_list};
 pub enum FactCommand {
     /// Store facts in one scope.
     ///
-    /// Facts are stored verbatim and are searchable immediately. Facts are
-    /// immutable — to update one, simply add the new statement; the server
-    /// resolves semantic conflicts between facts itself.
+    /// Facts are stored verbatim and are searchable immediately. To change
+    /// one, add the new statement; the server resolves semantic conflicts
+    /// between facts itself.
     Add {
         /// Workspace id the scope belongs to.
         ///
@@ -76,7 +76,7 @@ pub enum FactCommand {
         /// Limit to facts owned by these projects (comma-separated).
         #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
         projects: Option<IdList>,
-        /// Page size. The server caps this at 50.
+        /// Page size, 1-200. The server defaults to 50.
         #[arg(long)]
         page_size: Option<u32>,
         /// Continuation token from a previous page.

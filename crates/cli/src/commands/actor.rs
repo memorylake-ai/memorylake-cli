@@ -3,38 +3,14 @@
 use super::require_workspace;
 use super::search::split_csv;
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use memorylake_core::api::actors::{
-    ActorType, CreateActorRequest, ListActorsParams, UpdateActorRequest, bind_actor, create_actor,
+    CreateActorRequest, ListActorsParams, UpdateActorRequest, bind_actor, create_actor,
     delete_actor, get_actor, get_actor_by_custom_id, get_my_actor, list_actors,
     list_workspace_actors, unbind_actor, update_actor,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 use serde_json::{Map, Value};
-
-/// Actor type accepted on the command line.
-///
-/// Deliberately closed and case-sensitive so a typo is rejected here instead of
-/// costing a round trip. Values returned by the API are handled leniently by
-/// [`ActorType`], which is a separate concern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ActorTypeArg {
-    /// An end user interacting with your application.
-    #[value(name = "HUMAN")]
-    Human,
-    /// An AI agent.
-    #[value(name = "ASSISTANT")]
-    Assistant,
-}
-
-impl From<ActorTypeArg> for ActorType {
-    fn from(value: ActorTypeArg) -> Self {
-        match value {
-            ActorTypeArg::Human => Self::Human,
-            ActorTypeArg::Assistant => Self::Assistant,
-        }
-    }
-}
 
 /// One `--tags` flag's worth of labels, already split and validated.
 ///
@@ -68,9 +44,6 @@ pub enum ActorCommand {
         /// Continuation token from a previous response.
         #[arg(long)]
         continuation_token: Option<String>,
-        /// Filter by actor type.
-        #[arg(long = "type", value_enum)]
-        actor_type: Option<ActorTypeArg>,
         /// Fuzzy filter by display name (partial match).
         #[arg(long = "name")]
         display_name_fuzzy: Option<String>,
@@ -95,9 +68,6 @@ pub enum ActorCommand {
         /// Human-readable name shown in the console.
         #[arg(long)]
         display_name: String,
-        /// Actor type. The server defaults to HUMAN.
-        #[arg(long = "type", value_enum)]
-        actor_type: Option<ActorTypeArg>,
         /// Optional description of the actor's role or purpose.
         #[arg(long)]
         description: Option<String>,
@@ -147,7 +117,9 @@ pub enum ActorCommand {
         #[arg(long, value_parser = parse_metadata_object)]
         metadata: Option<Map<String, Value>>,
     },
-    /// Delete an actor. Irreversible; workspace bindings are removed too.
+    /// Delete an actor. Irreversible.
+    ///
+    /// Its workspace bindings are kept and listed with `status: INACTIVE`.
     Delete {
         /// Actor id.
         id: String,
@@ -173,7 +145,6 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
         ActorCommand::List {
             page_size,
             continuation_token,
-            actor_type,
             display_name_fuzzy,
             tags,
             workspace,
@@ -181,7 +152,6 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
             let params = ListActorsParams {
                 page_size,
                 continuation_token,
-                actor_type: actor_type.map(ActorType::from),
                 display_name_fuzzy,
                 tags: tags.map(|list| list.0),
             };
@@ -200,7 +170,6 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
         ActorCommand::Create {
             custom_id,
             display_name,
-            actor_type,
             description,
             tags,
             metadata,
@@ -210,7 +179,6 @@ pub fn run(command: ActorCommand, profile: Option<String>, base_url: Option<Stri
                 &CreateActorRequest {
                     custom_id,
                     display_name,
-                    actor_type: actor_type.map(ActorType::from),
                     description,
                     tags: tags.map(|list| list.0),
                     metadata,
@@ -484,15 +452,6 @@ mod tests {
         assert_eq!(
             parse_tag_list("VIP").expect("valid"),
             TagList(vec!["VIP".to_string()])
-        );
-    }
-
-    #[test]
-    fn actor_type_arg_maps_to_wire_values() {
-        assert_eq!(ActorType::from(ActorTypeArg::Human).as_str(), "HUMAN");
-        assert_eq!(
-            ActorType::from(ActorTypeArg::Assistant).as_str(),
-            "ASSISTANT"
         );
     }
 }

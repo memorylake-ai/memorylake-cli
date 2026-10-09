@@ -462,7 +462,11 @@ impl Client {
     }
 
     /// Upload one part of a chunked upload to its pre-signed `upload_url` and
-    /// return the `ETag` the storage backend assigned to it.
+    /// return the `ETag` the storage backend assigned to it, quotes stripped.
+    ///
+    /// A missing `ETag` is `Ok(None)`, not an error: the API asks for the part
+    /// to be reported without one in that case and never for the upload to be
+    /// abandoned over it.
     ///
     /// No `Authorization` header is sent: `upload_url` carries its own
     /// signature over a fixed header set, and MemoryLake credentials have no
@@ -476,7 +480,7 @@ impl Client {
         &self,
         upload_url: &str,
         body: Body,
-    ) -> std::result::Result<String, PartUploadError> {
+    ) -> std::result::Result<Option<String>, PartUploadError> {
         // `self.http`'s default headers carry only `Content-Type`; auth is
         // applied per-request via `auth_headers`, which is deliberately not
         // called here. Override the JSON default so the part is not mislabeled.
@@ -506,12 +510,13 @@ impl Client {
             });
         }
 
-        response
+        Ok(response
             .headers()
             .get(ETAG)
             .and_then(|value| value.to_str().ok())
-            .map(str::to_string)
-            .ok_or(PartUploadError::MissingETag)
+            .map(|etag| etag.trim_matches('"'))
+            .filter(|etag| !etag.is_empty())
+            .map(str::to_string))
     }
 
     /// Upload a whole object to a single-shot pre-signed `upload_url`, sending
@@ -629,11 +634,6 @@ pub enum PartUploadError {
         /// Response body, with credential-bearing parameters redacted.
         body: String,
     },
-
-    /// The upload succeeded but no `ETag` came back, so the part cannot be
-    /// referenced when finalizing.
-    #[error("storage backend accepted the part but returned no ETag header")]
-    MissingETag,
 }
 
 impl PartUploadError {
@@ -649,7 +649,6 @@ impl PartUploadError {
             Self::Status { status, .. } => {
                 status.is_server_error() || *status == StatusCode::TOO_MANY_REQUESTS
             }
-            Self::MissingETag => false,
         }
     }
 
@@ -1014,10 +1013,8 @@ mod tests {
             )
             .expect("part upload succeeds");
 
-        // ETag is passed through verbatim, quotes included: the finalize
-        // endpoint accepts it either way, and echoing what storage returned is
-        // the form least likely to break.
-        assert_eq!(etag, "\"ef370f8d0a3551d387b27728c34c5906\"");
+        // The finalize endpoint documents the ETag with its quotes stripped.
+        assert_eq!(etag.as_deref(), Some("ef370f8d0a3551d387b27728c34c5906"));
 
         let request = server.join().expect("server thread");
         assert!(
@@ -1070,15 +1067,29 @@ mod tests {
     }
 
     #[test]
-    fn part_upload_rejects_response_without_etag() {
+    fn part_upload_accepts_response_without_etag() {
+        // The API says never to stop an upload because of a missing ETag; the
+        // part is reported without one instead.
         let (base, server) = one_shot_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
 
-        let err = client
+        let etag = client
             .put_presigned_part(&format!("{base}/p"), Body::from(vec![0u8]))
-            .expect_err("missing ETag is an error");
-        assert!(matches!(err, PartUploadError::MissingETag));
-        assert!(!err.is_retryable());
+            .expect("a missing ETag is not an error");
+        assert_eq!(etag, None);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn part_upload_treats_an_empty_etag_as_absent() {
+        let (base, server) =
+            one_shot_server("HTTP/1.1 200 OK\r\nETag: \"\"\r\nContent-Length: 0\r\n\r\n");
+        let client = Client::new("http://unused.invalid", "sk_test_key_abcdefghij").unwrap();
+
+        let etag = client
+            .put_presigned_part(&format!("{base}/p"), Body::from(vec![0u8]))
+            .expect("an empty ETag is not an error");
+        assert_eq!(etag, None);
         let _ = server.join();
     }
 

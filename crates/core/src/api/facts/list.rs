@@ -35,7 +35,7 @@ pub struct ListFactsParams {
     pub actor_ids: Vec<String>,
     /// Limit to facts owned by these projects.
     pub project_ids: Vec<String>,
-    /// Page size. The server caps this at 50.
+    /// Page size, 1-200. The server defaults to 50.
     pub page_size: Option<u32>,
     /// Continuation token from a previous page.
     pub continuation_token: Option<String>,

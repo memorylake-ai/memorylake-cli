@@ -139,10 +139,10 @@ bound to a workspace to participate there.
 
 ```bash
 memorylake actor create --custom-id user-001 --display-name "Alice Chen" \
-  [--type HUMAN|ASSISTANT] [--description TEXT] [--tags vip,cn] \
+  [--description TEXT] [--tags vip,cn] \
   [--metadata '{"tier":"premium"}']
 
-memorylake actor list [--type HUMAN|ASSISTANT] [--name FUZZY] [--tags vip,cn] [--page-size N]
+memorylake actor list [--name FUZZY] [--tags vip,cn] [--page-size N]
 memorylake actor me
 memorylake actor get <id> [--by-custom-id]
 memorylake actor update <id> [--display-name NAME] [--description D] \
@@ -187,13 +187,17 @@ A project holds documents, conversations and the facts extracted from them.
 
 ```bash
 memorylake proj list [--name FUZZY] [--page-size N] [--continuation-token TOKEN]
-memorylake proj create --name "My Project" --custom-id my-proj-001 [--description D]
+memorylake proj create --name "My Project" --custom-id my-proj-001 [--description D] \
+  [--industry-ids research/academic,financial/markets]
 memorylake proj get <id> [--by-custom-id]
-memorylake proj update <id> [--name NAME] [--description D]
+memorylake proj update <id> [--name NAME] [--description D] \
+  [--industry-ids IDS | --clear-industries]
 memorylake proj delete <id>
 ```
 
-`--custom-id` is unique within the workspace.
+`--custom-id` is unique within the workspace. `--industry-ids` attaches public
+industry opendata (see `industry list`); on update it **replaces** the attached
+set, `--clear-industries` detaches them all, and leaving both out keeps them.
 
 ### Library
 
@@ -255,8 +259,8 @@ memorylake fact list (--actors a,b | --projects a,b) [--page-size N]
 memorylake fact delete (--actor <id> | --project <id>) <fact-id>...
 ```
 
-Facts are stored verbatim and are searchable immediately. They are immutable — to
-change one, add the new statement and let the server resolve the conflict.
+Facts are stored verbatim and are searchable immediately. To change one, add the
+new statement and let the server resolve the conflict.
 `fact list` needs at least one of `--actors` / `--projects`.
 
 ### Conversations
@@ -455,13 +459,71 @@ each. `--projects` on `update` replaces the list rather than adding to it.
 memorylake search "what were the quarterly revenue figures"
 
 memorylake search "quarterly revenue" \
-  --projects proj-1,proj-2 --actors act-1 --types document,fact --top-k 10
+  --projects proj-1,proj-2 --actors act-1 --types document,fact,database --top-k 10
 ```
 
-Returns matched `documents` and `facts` as two separate sets rather than one
-ranked list. Filters take one comma-separated value each (`--projects a,b`), and
-omitting a filter searches everything in that dimension. `--top-k` caps results
-per type. There is no pagination.
+Returns one ranked list split into `documents`, `facts` and `databases`. Every
+entry carries a `rank` that is unique across the three, so sorting by it
+restores the overall order. Filters take one comma-separated value each
+(`--projects a,b`). Omitting `--projects` or `--types` searches all of them, but
+omitting `--actors` searches only your own actor's memories. `--top-k` (1-1000,
+default 10) caps the total across all types, not each type. There is no
+pagination.
+
+### Analysis models
+
+An analysis model is curated knowledge about one database datasource, used to
+answer questions about that data: business rules, worked question-to-SQL
+examples, metric definitions and background notes, each stored as an *entry*.
+A model follows a template (`--type`, e.g. `ASK_DATA`) that decides which entry
+kinds (`--entity-type`: `few_shot`, `biz_rule`, `general`, `drilldown_entity`,
+…) it accepts; `templates` lists them, though it currently answers 500 on
+production. Alias: `am`.
+
+```bash
+memorylake am templates [--type ASK_DATA]
+memorylake am list   [--datasource ID] [--type T] [--page-size N] [--continuation-token TOKEN]
+memorylake am create --name NAME --type ASK_DATA --datasource <db-datasource-id> \
+  [--description D] [--custom-id ID] [--fork-from <model-id>]
+memorylake am get    <id> [--by-custom-id]
+memorylake am update <id> [--name NAME] [--description D]
+memorylake am delete <id>
+
+memorylake am entry list   --model <id> --entity-type KIND [--keyword TEXT] \
+  [--from MANUAL|BUILD] [--ids a,b] [--page-size N] [--continuation-token TOKEN]
+memorylake am entry get    --model <id> <entry-id> [--entity-type KIND]
+memorylake am entry create --model <id> --entity-type KIND [--embedding TEXT] \
+  (--payload JSON | --payload-file PATH) [--extra JSON] [--disabled]
+memorylake am entry update --model <id> <entry-id> --entity-type KIND \
+  [--embedding TEXT] [--payload JSON | --payload-file PATH] [--extra JSON]
+memorylake am entry delete  --model <id> <entry-id> [--entity-type KIND]
+memorylake am entry disable --model <id> <entry-id> [--entity-type KIND]
+memorylake am entry enable  --model <id> <entry-id> [--entity-type KIND]
+```
+
+`--embedding` is the text a question is matched against; the payload is a JSON
+object shaped by the kind, e.g. a worked example:
+
+```bash
+memorylake am entry create --model <id> --entity-type few_shot \
+  --embedding "total order value per customer this month" \
+  --payload '{"artifact":{
+    "question":{"type":"TEXT","content":"total order value per customer this month"},
+    "few_shot":{"type":"SQL","content":"SELECT customer_id, SUM(amount) FROM orders GROUP BY 1"}}}'
+```
+
+Entries are listed one kind at a time. `--keyword` ranks by similarity rather
+than filtering, so it always returns the closest entries — read their `score`.
+On update, `--payload` and `--extra` **replace** the stored value. Some kinds
+cannot be found by id alone, so pass `--entity-type` to `get`, `delete`,
+`disable` and `enable` when you know it. `--fork-from` copies the source
+model's knowledge in the background; the new model starts empty.
+
+### Industries
+
+```bash
+memorylake industry list      # ids accepted by `proj create|update --industry-ids`
+```
 
 ### Team management
 
