@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::client::Client;
 use crate::error::Result;
 
-use super::types::{Actor, ActorType};
+use super::types::Actor;
 
 /// Request body for creating an actor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -15,9 +15,6 @@ pub struct CreateActorRequest {
     pub custom_id: String,
     /// Human-readable name shown in the console.
     pub display_name: String,
-    /// Actor type. The server defaults to `HUMAN` when omitted.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub actor_type: Option<ActorType>,
     /// Optional free-text role or purpose.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -52,7 +49,6 @@ mod tests {
         let request = CreateActorRequest {
             custom_id: "user-ext-001".to_string(),
             display_name: "Alice Chen".to_string(),
-            actor_type: None,
             description: None,
             tags: None,
             metadata: None,
@@ -64,29 +60,10 @@ mod tests {
     }
 
     #[test]
-    fn create_request_serializes_actor_type_as_wire_value() {
-        let request = CreateActorRequest {
-            custom_id: "bot-1".to_string(),
-            display_name: "Intake Bot".to_string(),
-            actor_type: Some(ActorType::Assistant),
-            description: Some("automated intake".to_string()),
-            tags: None,
-            metadata: None,
-        };
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains(r#""actor_type":"ASSISTANT""#), "{json}");
-        assert!(
-            json.contains(r#""description":"automated intake""#),
-            "{json}"
-        );
-    }
-
-    #[test]
     fn create_request_serializes_tags_as_an_array() {
         let request = CreateActorRequest {
             custom_id: "user-2".to_string(),
             display_name: "Bob".to_string(),
-            actor_type: None,
             description: None,
             tags: Some(vec!["vip".to_string(), "cn".to_string()]),
             metadata: None,
@@ -104,7 +81,6 @@ mod tests {
         let request = CreateActorRequest {
             custom_id: "user-3".to_string(),
             display_name: "Cleo".to_string(),
-            actor_type: None,
             description: None,
             tags: Some(Vec::new()),
             metadata: None,

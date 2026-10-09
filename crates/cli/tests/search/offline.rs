@@ -125,6 +125,16 @@ fn unknown_memory_type_is_rejected_before_any_request() {
 }
 
 #[test]
+fn top_k_outside_the_documented_range_is_rejected_before_any_request() {
+    for value in ["0", "1001"] {
+        assert_rejected_locally(
+            &["search", "--workspace", "ws-1", "--top-k", value, "q"],
+            "1..=1000",
+        );
+    }
+}
+
+#[test]
 fn the_memory_type_error_lists_the_accepted_values() {
     let home = logged_in_home(UNREACHABLE);
     let args = ["search", "--workspace", "ws-1", "--types", "memo", "q"];

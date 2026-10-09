@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::client::Client;
 use crate::error::Result;
 
-use super::types::{Actor, ActorType};
+use super::types::Actor;
 
 /// Paginated actor list payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,8 +26,6 @@ pub struct ListActorsParams {
     pub page_size: Option<u32>,
     /// Continuation token from a previous page.
     pub continuation_token: Option<String>,
-    /// Filter by actor type.
-    pub actor_type: Option<ActorType>,
     /// Fuzzy filter by display name (partial match). Sent as
     /// `display_name_fuzzy`.
     pub display_name_fuzzy: Option<String>,
@@ -45,9 +43,6 @@ impl ListActorsParams {
         }
         if let Some(token) = &self.continuation_token {
             query.push(("continuation_token", token.clone()));
-        }
-        if let Some(actor_type) = &self.actor_type {
-            query.push(("actor_type", actor_type.as_str().to_string()));
         }
         if let Some(display_name_fuzzy) = &self.display_name_fuzzy {
             query.push(("display_name_fuzzy", display_name_fuzzy.clone()));
@@ -83,7 +78,6 @@ mod tests {
         let params = ListActorsParams {
             page_size: Some(50),
             continuation_token: Some("token-abc".to_string()),
-            actor_type: Some(ActorType::Assistant),
             display_name_fuzzy: Some("Alice".to_string()),
             tags: Some(vec!["vip".to_string(), "cn".to_string()]),
         };
@@ -92,7 +86,6 @@ mod tests {
             vec![
                 ("page_size", "50".to_string()),
                 ("continuation_token", "token-abc".to_string()),
-                ("actor_type", "ASSISTANT".to_string()),
                 ("display_name_fuzzy", "Alice".to_string()),
                 ("tags", "vip".to_string()),
                 ("tags", "cn".to_string()),

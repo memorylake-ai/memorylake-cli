@@ -62,10 +62,11 @@ pub fn list_workspace_actors(
 
 /// Unbind an actor from a workspace.
 ///
-/// The actor itself is untouched and can be rebound later. The API answers with
-/// `{"success": true, "message": ...}` and no `data`.
+/// The actor itself is untouched and can be rebound later. Documented to answer
+/// with an empty `data` object, which [`Client::delete_empty`] accepts whether
+/// or not the field is present.
 pub fn unbind_actor(client: &Client, workspace_id: &str, actor_id: &str) -> Result<()> {
-    client.delete_data(&workspace_actor_path(workspace_id, actor_id))
+    client.delete_empty(&workspace_actor_path(workspace_id, actor_id))
 }
 
 #[cfg(test)]

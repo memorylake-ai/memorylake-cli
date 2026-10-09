@@ -68,7 +68,10 @@ mod tests {
             actor.custom_id.as_deref(),
             Some("user::e7f4fbd1149f44109589aece3310b0eb")
         );
-        assert_eq!(actor.actor_type, super::super::types::ActorType::Human);
+        assert_eq!(
+            actor.actor_type,
+            Some(super::super::types::ActorType::Human)
+        );
         assert_eq!(actor.display_name, "1594834522");
         assert!(actor.tags.is_empty());
 
@@ -90,7 +93,9 @@ mod tests {
 
         assert_eq!(
             actor.actor_type,
-            super::super::types::ActorType::Other("SUPERVISOR".to_string())
+            Some(super::super::types::ActorType::Other(
+                "SUPERVISOR".to_string()
+            ))
         );
         let _ = handle.join();
     }

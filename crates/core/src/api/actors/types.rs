@@ -73,7 +73,12 @@ pub struct Actor {
     #[serde(default)]
     pub custom_id: Option<String>,
     /// Whether this actor is a human or an assistant.
-    pub actor_type: ActorType,
+    ///
+    /// No longer part of the published API -- agents are their own resource
+    /// now -- but deployments still send it. Optional so a server that has
+    /// dropped it can still be decoded.
+    #[serde(default)]
+    pub actor_type: Option<ActorType>,
     /// Human-readable name shown in the console.
     pub display_name: String,
     /// Optional free-text role or purpose.
@@ -172,7 +177,10 @@ mod tests {
             "display_name": "Alice Chen"
         }"#;
         let actor: Actor = serde_json::from_str(raw).expect("decode actor with unknown type");
-        assert_eq!(actor.actor_type, ActorType::Other("SUPERVISOR".to_string()));
+        assert_eq!(
+            actor.actor_type,
+            Some(ActorType::Other("SUPERVISOR".to_string()))
+        );
         assert_eq!(actor.display_name, "Alice Chen");
         assert!(actor.description.is_none());
         assert!(actor.metadata.is_none());
@@ -180,6 +188,15 @@ mod tests {
             actor.tags.is_empty(),
             "a response without tags must decode as no tags, not fail"
         );
+    }
+
+    #[test]
+    fn actor_decodes_without_actor_type() {
+        // The published API no longer documents `actor_type`; a server that
+        // stops sending it must not break every actor command.
+        let raw = r#"{"id":"act-1","display_name":"Alice Chen","tags":[]}"#;
+        let actor: Actor = serde_json::from_str(raw).expect("decode actor without actor_type");
+        assert!(actor.actor_type.is_none());
     }
 
     #[test]
