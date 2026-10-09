@@ -126,3 +126,19 @@ fn network_commands_without_login_fail() {
     }
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn blank_ids_are_rejected_by_the_parser() {
+    let home = temp_home();
+    for args in [
+        vec!["boundary", "get", ""],
+        vec!["boundary", "get", " ", "--by-custom-id"],
+        vec!["boundary", "delete", ""],
+        vec!["boundary", "update", "", "--name", "n"],
+        vec!["boundary", "create", "--name", "n", "--custom-id", ""],
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains("invalid value"), "{args:?}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}

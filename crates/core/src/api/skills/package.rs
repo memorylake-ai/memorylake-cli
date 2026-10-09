@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
 use std::path::Path;
+use std::time::Duration;
 
 use reqwest::blocking::Body;
 use serde::Deserialize;
@@ -129,14 +130,27 @@ pub fn upload_package(client: &Client, path: &Path) -> Result<String> {
         source,
     })?;
 
+    let timeout = upload_timeout(bytes.len() as u64);
     let slot = create_package_upload(client)?;
     client.put_presigned_object(
         &slot.upload_url,
         &slot.upload_headers,
         PACKAGE_CONTENT_TYPE,
         Body::from(bytes),
+        timeout,
     )?;
     Ok(slot.s3_uri)
+}
+
+/// How long the package PUT may take.
+///
+/// The client's default timeout suits small JSON calls, not a 10 MiB body on a
+/// slow link. Allow a fixed minute plus one second per 32 KiB, i.e. assume no
+/// worse than ~32 KiB/s: a full-size package gets a little over six minutes.
+fn upload_timeout(bytes: u64) -> Duration {
+    const BASE: Duration = Duration::from_secs(60);
+    const BYTES_PER_SECOND: u64 = 32 * 1024;
+    BASE + Duration::from_secs(bytes.div_ceil(BYTES_PER_SECOND))
 }
 
 /// Fill `buf` from `reader`, stopping early only at end of input.
@@ -158,7 +172,19 @@ mod tests {
 
     use crate::test_support::{json_ok, one_shot_server};
 
-    fn temp_file(tag: &str, contents: &[u8]) -> PathBuf {
+    /// A scratch `skill.zip`, removed with its directory when dropped.
+    struct TempPackage {
+        dir: PathBuf,
+        path: PathBuf,
+    }
+
+    impl Drop for TempPackage {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn temp_file(tag: &str, contents: &[u8]) -> TempPackage {
         let dir = std::env::temp_dir().join(format!(
             "memorylake-skill-package-{tag}-{}",
             std::process::id()
@@ -166,7 +192,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("skill.zip");
         std::fs::write(&path, contents).unwrap();
-        path
+        TempPackage { dir, path }
     }
 
     fn reason(err: Error) -> String {
@@ -178,26 +204,26 @@ mod tests {
 
     #[test]
     fn accepts_a_zip_and_reports_its_size() {
-        let path = temp_file("ok", b"PK\x03\x04rest-of-archive");
-        assert_eq!(validate_package(&path).unwrap(), 19);
+        let package = temp_file("ok", b"PK\x03\x04rest-of-archive");
+        assert_eq!(validate_package(&package.path).unwrap(), 19);
     }
 
     #[test]
     fn rejects_a_file_that_is_not_a_zip() {
-        let path = temp_file("notzip", b"# SKILL.md\n");
-        assert!(reason(validate_package(&path).unwrap_err()).contains("not a ZIP"));
+        let package = temp_file("notzip", b"# SKILL.md\n");
+        assert!(reason(validate_package(&package.path).unwrap_err()).contains("not a ZIP"));
     }
 
     #[test]
     fn rejects_a_file_shorter_than_the_signature() {
-        let path = temp_file("short", b"PK");
-        assert!(reason(validate_package(&path).unwrap_err()).contains("not a ZIP"));
+        let package = temp_file("short", b"PK");
+        assert!(reason(validate_package(&package.path).unwrap_err()).contains("not a ZIP"));
     }
 
     #[test]
     fn rejects_an_empty_file() {
-        let path = temp_file("empty", b"");
-        assert!(reason(validate_package(&path).unwrap_err()).contains("empty"));
+        let package = temp_file("empty", b"");
+        assert!(reason(validate_package(&package.path).unwrap_err()).contains("empty"));
     }
 
     #[test]
@@ -210,10 +236,13 @@ mod tests {
 
     #[test]
     fn rejects_an_oversized_file() {
-        let path = temp_file("big", b"PK\x03\x04");
-        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let package = temp_file("big", b"PK\x03\x04");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&package.path)
+            .unwrap();
         file.set_len(MAX_PACKAGE_BYTES + 1).unwrap();
-        assert!(reason(validate_package(&path).unwrap_err()).contains("at most"));
+        assert!(reason(validate_package(&package.path).unwrap_err()).contains("at most"));
     }
 
     #[test]
@@ -223,6 +252,16 @@ mod tests {
             validate_package(&path).unwrap_err(),
             Error::Io { .. }
         ));
+    }
+
+    #[test]
+    fn upload_timeout_grows_with_the_package() {
+        assert_eq!(upload_timeout(0), Duration::from_secs(60));
+        assert_eq!(upload_timeout(1), Duration::from_secs(61));
+        assert_eq!(
+            upload_timeout(MAX_PACKAGE_BYTES),
+            Duration::from_secs(60 + 320)
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ use memorylake_core::api::boundaries::{
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 use super::search::{IdList, parse_id_list};
-use super::{print_json, require_workspace};
+use super::{parse_non_blank, print_json, require_workspace};
 
 /// Longest boundary name the API accepts.
 const MAX_NAME_CHARS: usize = 255;
@@ -53,7 +53,7 @@ pub enum BoundaryCommand {
         #[arg(long, value_parser = parse_name)]
         name: String,
         /// Caller-defined id, unique within the workspace.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         custom_id: Option<String>,
         /// Projects in scope (comma-separated ids).
         #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
@@ -68,6 +68,7 @@ pub enum BoundaryCommand {
     /// Get a single boundary by id.
     Get {
         /// Boundary id (or custom_id when `--by-custom-id` is set).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Treat the positional argument as a caller-defined custom_id.
         #[arg(long)]
@@ -76,6 +77,7 @@ pub enum BoundaryCommand {
     /// Update a boundary. Only the flags you pass are changed.
     Update {
         /// Boundary id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// New display name.
         #[arg(long, value_parser = parse_name)]
@@ -103,6 +105,7 @@ pub enum BoundaryCommand {
     /// Delete a boundary. There is no confirmation prompt.
     Delete {
         /// Boundary id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
 }

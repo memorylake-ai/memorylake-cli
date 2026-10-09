@@ -147,6 +147,21 @@ pub enum Error {
         body: String,
     },
 
+    /// A pre-signed upload never got a response from the storage backend
+    /// (connection refused or reset, timeout).
+    ///
+    /// Kept apart from [`Error::Http`], whose message is about the MemoryLake
+    /// API: the failing host here is storage. The source has had its URL
+    /// stripped, because that URL is a working credential.
+    #[error(
+        "could not reach storage to upload the file; check your network and re-run the command"
+    )]
+    StorageTransport {
+        /// Underlying transport error, without its URL.
+        #[source]
+        source: reqwest::Error,
+    },
+
     /// HTTP transport or protocol failure.
     #[error("{}", format_http_error(.0))]
     Http(#[from] reqwest::Error),

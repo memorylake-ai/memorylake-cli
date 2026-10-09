@@ -157,7 +157,19 @@ fn a_project_outside_the_workspace_is_refused() {
         "--projects",
         "proj-does-not-exist",
     ];
-    let err = assert_failure(&run(&home, &args), &args);
+    let output = run(&home, &args);
+    if output.status.success() {
+        // Refusal was expected; don't leave the boundary behind before failing.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(id) = serde_json::from_str::<Value>(&stdout)
+            .ok()
+            .and_then(|created| created["id"].as_str().map(str::to_string))
+        {
+            let _ = run(&home, &["boundary", "delete", id.as_str()]);
+        }
+        panic!("boundary create with an unknown project succeeded (removed again):\n{stdout}");
+    }
+    let err = assert_failure(&output, &args);
     assert!(err.contains("INVALID_ARGUMENT"), "{err}");
 
     let _ = fs::remove_dir_all(&home);

@@ -3,3 +3,4 @@
 mod live;
 mod offline;
 mod wire;
+mod zip;

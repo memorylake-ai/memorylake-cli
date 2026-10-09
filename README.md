@@ -400,7 +400,7 @@ the task; `task get` reads it back under `metadata."task-feedback/v1"`.
 ### Skills
 
 ```bash
-memorylake skill list [--name FUZZY] [--page-size N]
+memorylake skill list [--name FUZZY] [--page-size N] [--continuation-token T]
 memorylake skill create --name equity-research --title "Equity Research" \
   [--description D] (--package skill.zip | --package-uri URI)
 memorylake skill get <id>
@@ -417,8 +417,9 @@ A skill is a ZIP archive with a `SKILL.md` at its root or one directory down, at
 most 10 MiB. `--package` uploads the archive and publishes it in one step; the
 CLI takes a ready-made `.zip` rather than a directory, so zip it first
 (`cd my-skill && zip -r ../my-skill.zip .`). `skill upload` only uploads and
-prints the storage URI, which `--package-uri` accepts to retry without
-uploading again. Skill names must be unique in the team.
+prints the storage URI, which `--package-uri` accepts in place of `--package`.
+If a `--package` publish fails after the upload, the error names that URI so
+the retry can skip the upload. Skill names must be unique in the team.
 
 Every published version goes through a security review: it starts `pending`
 and settles on `safe`, `blocked` or `error` — `skill get` shows the latest
@@ -432,7 +433,7 @@ agents pinned to an older version are unaffected.
 ### Boundaries
 
 ```bash
-memorylake boundary list [--workspace <id>] [--name FUZZY] [--page-size N]
+memorylake boundary list [--workspace <id>] [--name FUZZY] [--page-size N] [--continuation-token T]
 memorylake boundary create --name NAME [--workspace <id>] [--custom-id ID] \
   [--projects ID,ID] [--human-actor ID] [--agent ID]
 memorylake boundary get <id> [--by-custom-id]

@@ -239,3 +239,48 @@ fn network_commands_without_login_fail() {
     }
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn blank_ids_and_uris_are_rejected_by_the_parser() {
+    let home = temp_home();
+    for args in [
+        vec!["skill", "get", ""],
+        vec!["skill", "delete", " "],
+        vec!["skill", "update", "", "--title", "t"],
+        vec!["skill", "version", "list", ""],
+        vec!["skill", "version", "get", "", "1"],
+        vec![
+            "skill",
+            "version",
+            "create",
+            "",
+            "--package-uri",
+            "s3://b/k.zip",
+        ],
+        vec!["skill", "version", "create", "skill-1", "--package-uri", ""],
+        vec![
+            "skill",
+            "create",
+            "--name",
+            "n",
+            "--title",
+            "t",
+            "--package-uri",
+            " ",
+        ],
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains("invalid value"), "{args:?}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn upload_help_does_not_promise_a_uri_lifetime() {
+    let home = temp_home();
+    let args = ["skill", "upload", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("--package-uri"), "{stdout}");
+    assert!(!stdout.contains("expires"), "{stdout}");
+    let _ = fs::remove_dir_all(&home);
+}

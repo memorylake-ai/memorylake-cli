@@ -60,3 +60,16 @@ pub fn require_workspace(paths: &Paths, profile: &str, flag: Option<String>) -> 
         ),
     }
 }
+
+/// Accept a non-blank flag or argument value, trimmed.
+///
+/// For ids and other values where an empty string is never meaningful: sent
+/// as-is it would address the collection instead of an item, or be read by
+/// the server as "clear".
+pub fn parse_non_blank(raw: &str) -> std::result::Result<String, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    Ok(value.to_string())
+}

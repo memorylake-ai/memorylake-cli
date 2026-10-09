@@ -282,3 +282,48 @@ fn a_name_conflict_surfaces_the_error_code() {
     let err = assert_failure(&output, &args);
     assert!(err.contains("SKILL_NAME_CONFLICT"), "{err}");
 }
+
+#[test]
+fn a_failed_create_after_upload_names_the_uri_to_retry_with() {
+    let (dir, package) = scratch_package();
+    let args = [
+        "skill",
+        "create",
+        "--name",
+        "equity",
+        "--title",
+        "Equity",
+        "--package",
+        package.as_str(),
+    ];
+    let conflict = r#"{"success":false,"message":"A skill named 'equity' already exists.","error_code":"SKILL_NAME_CONFLICT"}"#;
+    let (_, output) = exchange_sequence(&[SLOT, STORAGE_OK, conflict], &args);
+    let err = assert_failure(&output, &args);
+    assert!(err.contains("SKILL_NAME_CONFLICT"), "{err}");
+    assert!(
+        err.contains("--package-uri s3://bucket/tmp/k.zip"),
+        "the error must say how to retry without re-uploading: {err}"
+    );
+    assert!(!err.contains("X-Amz-Signature"), "{err}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_failed_create_from_a_uri_adds_no_retry_hint() {
+    let args = [
+        "skill",
+        "create",
+        "--name",
+        "equity",
+        "--title",
+        "Equity",
+        "--package-uri",
+        "s3://bucket/tmp/k.zip",
+    ];
+    let (_, output) = exchange(
+        r#"{"success":false,"message":"nope","error_code":"INVALID_ARGUMENT"}"#,
+        &args,
+    );
+    let err = assert_failure(&output, &args);
+    assert!(!err.contains("without uploading again"), "{err}");
+}

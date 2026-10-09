@@ -18,7 +18,7 @@ use memorylake_core::api::skills::{
     validate_package,
 };
 
-use super::{api_client, print_json};
+use super::{api_client, parse_non_blank, print_json};
 
 /// Longest skill name the API accepts.
 const MAX_NAME_CHARS: usize = 255;
@@ -66,6 +66,7 @@ pub enum SkillCommand {
     /// Get a skill, including the review state of its latest version.
     Get {
         /// Skill id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
     /// Change a skill's title or description.
@@ -74,6 +75,7 @@ pub enum SkillCommand {
     /// version with `skill version create`.
     Update {
         /// Skill id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// New title shown in the console.
         #[arg(long, value_parser = parse_title)]
@@ -88,13 +90,13 @@ pub enum SkillCommand {
     /// skills cannot be deleted. There is no confirmation prompt.
     Delete {
         /// Skill id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
     /// Upload a ZIP package without publishing it, and print its storage URI.
     ///
-    /// Pass the URI to `--package-uri` to retry a `create` or
-    /// `version create` without uploading again. The upload URL behind it
-    /// expires after about 30 minutes.
+    /// Pass the printed URI to `--package-uri` to create a skill or publish a
+    /// version from it without uploading again.
     Upload {
         /// ZIP archive to upload.
         #[arg(value_name = "ZIP")]
@@ -117,6 +119,7 @@ pub enum VersionCommand {
     /// older version number are unaffected.
     Create {
         /// Skill id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Release notes for this version.
         #[arg(long)]
@@ -127,6 +130,7 @@ pub enum VersionCommand {
     /// List a skill's versions, newest first.
     List {
         /// Skill id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Number of items per page (1-100).
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
@@ -138,6 +142,7 @@ pub enum VersionCommand {
     /// Get one version of a skill, including its review state.
     Get {
         /// Skill id.
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Version number.
         version: u64,
@@ -152,7 +157,7 @@ pub struct PackageArgs {
     #[arg(long, value_name = "ZIP")]
     package: Option<PathBuf>,
     /// Storage URI printed by an earlier `skill upload`.
-    #[arg(long, value_name = "URI")]
+    #[arg(long, value_name = "URI", value_parser = parse_non_blank)]
     package_uri: Option<String>,
 }
 
@@ -166,13 +171,40 @@ impl PackageArgs {
     }
 
     /// Upload the archive if one was given, and return the reference to it.
-    fn resolve(self, client: &Client) -> Result<PackageRef> {
-        let s3_uri = match (self.package, self.package_uri) {
-            (Some(path), _) => upload(client, &path)?,
-            (None, Some(uri)) => uri,
+    fn resolve(self, client: &Client) -> Result<ResolvedPackage> {
+        let (s3_uri, uploaded) = match (self.package, self.package_uri) {
+            (Some(path), _) => (upload(client, &path)?, true),
+            (None, Some(uri)) => (uri, false),
             (None, None) => bail!("pass --package <ZIP> or --package-uri <URI>"),
         };
-        Ok(PackageRef { s3_uri })
+        Ok(ResolvedPackage {
+            package_ref: PackageRef { s3_uri },
+            uploaded,
+        })
+    }
+}
+
+/// A package reference, and whether this run uploaded it.
+struct ResolvedPackage {
+    package_ref: PackageRef,
+    uploaded: bool,
+}
+
+impl ResolvedPackage {
+    /// Error context for the publish call that follows the upload.
+    ///
+    /// When this run uploaded the archive, a failure after that point (a name
+    /// conflict, a package the server rejects for a fixable reason elsewhere)
+    /// should not cost a second upload: name the URI and how to reuse it.
+    fn publish_context(&self, action: String) -> String {
+        if !self.uploaded {
+            return action;
+        }
+        let uri = &self.package_ref.s3_uri;
+        format!(
+            "{action}\nThe package was uploaded as {uri}; to retry without uploading again, \
+             replace --package with: --package-uri {uri}"
+        )
     }
 }
 
@@ -204,17 +236,17 @@ pub fn run(command: SkillCommand, profile: Option<String>, base_url: Option<Stri
             description,
             package,
         } => {
-            let package_ref = package.resolve(&client)?;
+            let package = package.resolve(&client)?;
             let data = create_skill(
                 &client,
                 &CreateSkillRequest {
                     name: name.clone(),
                     display_title: title,
                     description,
-                    package_ref,
+                    package_ref: package.package_ref.clone(),
                 },
             )
-            .with_context(|| format!("create skill `{name}`"))?;
+            .with_context(|| package.publish_context(format!("create skill `{name}`")))?;
             print_json(&data)?;
             hint_if_pending(&data.id, data.latest_security_status.as_deref());
         }
@@ -259,16 +291,18 @@ fn run_version(client: &Client, command: VersionCommand) -> Result<()> {
             changelog,
             package,
         } => {
-            let package_ref = package.resolve(client)?;
+            let package = package.resolve(client)?;
             let data = create_skill_version(
                 client,
                 &id,
                 &CreateSkillVersionRequest {
                     changelog,
-                    package_ref,
+                    package_ref: package.package_ref.clone(),
                 },
             )
-            .with_context(|| format!("publish a new version of skill `{id}`"))?;
+            .with_context(|| {
+                package.publish_context(format!("publish a new version of skill `{id}`"))
+            })?;
             print_json(&data)?;
             hint_if_pending(&id, data.security_status.as_deref());
         }

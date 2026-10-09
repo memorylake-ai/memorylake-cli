@@ -4,12 +4,17 @@
 //! when an intermediate assertion fails. It does not wait for the security
 //! review: the state it lands in is reported, not asserted, because how long
 //! the review takes is the server's business.
+//!
+//! Negative cases expect the server to refuse a create. If it unexpectedly
+//! accepts one, the skill it made is deleted before the test fails, so a
+//! behaviour change on the server does not leave skills behind.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use super::zip::stored_zip;
 use crate::common::{
     assert_failure, assert_success, live_base_url, login_args, require_api_key, run, temp_home,
     unique_name,
@@ -46,76 +51,27 @@ impl Drop for SkillCleanup {
     }
 }
 
-/// CRC-32 (IEEE), as ZIP requires. Bitwise: the inputs here are tiny.
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &byte in bytes {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            crc = if crc & 1 == 1 {
-                (crc >> 1) ^ 0xEDB8_8320
-            } else {
-                crc >> 1
-            };
-        }
-    }
-    !crc
-}
-
-/// A minimal ZIP archive storing `files` uncompressed.
+/// Run a `skill create` the server is expected to refuse, and return its
+/// error output.
 ///
-/// The CLI deliberately takes a ready-made archive rather than zipping a
-/// directory itself, and the test suite has no zip dependency, so the fixture
-/// is built by hand: local headers, a central directory, and its end record.
-fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
-    const DOS_DATE_1980_01_01: u16 = 0x21;
-    let mut out = Vec::new();
-    let mut central = Vec::new();
-
-    for (name, data) in files {
-        let offset = out.len() as u32;
-        let crc = crc32(data);
-        let size = data.len() as u32;
-        let name_len = name.len() as u16;
-
-        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
-        for field in [20u16, 0, 0, 0, DOS_DATE_1980_01_01] {
-            out.extend_from_slice(&field.to_le_bytes());
+/// Should the server accept it after all, the new skill is deleted before the
+/// test fails.
+fn expect_create_refused(home: &Path, args: &[&str]) -> String {
+    let output = run(home, args);
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(id) = serde_json::from_str::<Value>(&stdout)
+            .ok()
+            .and_then(|created| created["id"].as_str().map(str::to_string))
+        {
+            let _ = run(home, &["skill", "delete", id.as_str()]);
         }
-        for field in [crc, size, size] {
-            out.extend_from_slice(&field.to_le_bytes());
-        }
-        out.extend_from_slice(&name_len.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(name.as_bytes());
-        out.extend_from_slice(data);
-
-        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
-        for field in [20u16, 20, 0, 0, 0, DOS_DATE_1980_01_01] {
-            central.extend_from_slice(&field.to_le_bytes());
-        }
-        for field in [crc, size, size] {
-            central.extend_from_slice(&field.to_le_bytes());
-        }
-        for field in [name_len, 0, 0, 0, 0] {
-            central.extend_from_slice(&field.to_le_bytes());
-        }
-        central.extend_from_slice(&0u32.to_le_bytes());
-        central.extend_from_slice(&offset.to_le_bytes());
-        central.extend_from_slice(name.as_bytes());
+        panic!(
+            "memorylake {} unexpectedly succeeded (skill removed again):\n{stdout}",
+            args.join(" ")
+        );
     }
-
-    let central_offset = out.len() as u32;
-    let entries = files.len() as u16;
-    out.extend_from_slice(&central);
-    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
-    for field in [0u16, 0, entries, entries] {
-        out.extend_from_slice(&field.to_le_bytes());
-    }
-    out.extend_from_slice(&(central.len() as u32).to_le_bytes());
-    out.extend_from_slice(&central_offset.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out
+    assert_failure(&output, args)
 }
 
 /// Write a skill package for `name` into a fresh scratch directory.
@@ -171,6 +127,13 @@ fn skill_lifecycle_create_version_update_delete() {
         created["latest_security_status"]
     );
 
+    // Upload the next version's package separately; the printed URI serves
+    // both the duplicate-name check and the version publish below.
+    let (dir2, package2) = scratch_skill_package(&name, "When asked to greet, reply with hi.");
+    let args = ["skill", "upload", package2.as_str()];
+    let uploaded = parse_json(&assert_success(&run(&home, &args), &args), "upload");
+    let uri = uploaded["s3_uri"].as_str().expect("upload prints s3_uri");
+
     // A second skill with the same name is refused (the spec says names need
     // not be unique; production disagrees).
     let args = [
@@ -180,17 +143,12 @@ fn skill_lifecycle_create_version_update_delete() {
         name.as_str(),
         "--title",
         "duplicate",
-        "--package",
-        package.as_str(),
+        "--package-uri",
+        uri,
     ];
-    let err = assert_failure(&run(&home, &args), &args);
+    let err = expect_create_refused(&home, &args);
     assert!(err.contains("SKILL_NAME_CONFLICT"), "{err}");
 
-    // Upload separately, then publish a version from the printed URI.
-    let (dir2, package2) = scratch_skill_package(&name, "When asked to greet, reply with hi.");
-    let args = ["skill", "upload", package2.as_str()];
-    let uploaded = parse_json(&assert_success(&run(&home, &args), &args), "upload");
-    let uri = uploaded["s3_uri"].as_str().expect("upload prints s3_uri");
     let args = [
         "skill",
         "version",
@@ -269,16 +227,13 @@ fn an_archive_without_skill_md_is_refused_by_the_server() {
         "--package",
         path.as_str(),
     ];
-    let err = assert_failure(&run(&home, &args), &args);
+    let err = expect_create_refused(&home, &args);
     assert!(err.contains("SKILL.md"), "{err}");
     assert!(err.contains("INVALID_ARGUMENT"), "{err}");
+    // The upload went through before the refusal, so the error says how to
+    // retry without uploading again.
+    assert!(err.contains("--package-uri"), "{err}");
 
     let _ = fs::remove_dir_all(&dir);
     let _ = fs::remove_dir_all(&home);
-}
-
-#[test]
-fn crc32_matches_the_reference_value() {
-    // The standard check value for CRC-32/IEEE.
-    assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
 }
