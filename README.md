@@ -9,8 +9,11 @@
 </p>
 
 Command-line interface for [MemoryLake](https://app.memorylake.ai). Upload files,
-store and search memories, and manage the workspaces, projects, actors and agents
-they belong to.
+store and search memories, connect databases, publish skills, talk to agents, and
+manage the workspaces, projects, actors and teams they all belong to.
+
+New to MemoryLake? The [documentation overview](https://docs.memorylake.ai/overview)
+explains what the platform does and the concepts these commands operate on.
 
 Every command prints the API response as pretty JSON, so anything here pipes into
 `jq`.
@@ -100,8 +103,9 @@ after it. Pass it explicitly to override for a single command.
 ## Commands
 
 Aliases: `ws` = `workspace`, `proj` = `project`, `lib` = `library`,
-`doc` = `document`, `conv` = `conversation`, `msg` = `message`,
-`key` = `api-key`, `invite` = `invitation`.
+`doc` = `document`, `db` = `project database`, `conv` = `conversation`,
+`msg` = `message`, `dbconn` = `db-connection`, `ds` = `datasource`,
+`am` = `analysis-model`, `key` = `api-key`, `invite` = `invitation`.
 
 ### Auth
 
@@ -113,6 +117,9 @@ memorylake auth switch <profile>
 memorylake auth refresh
 memorylake auth logout
 ```
+
+Create an API key in the MemoryLake console first; see
+[Authentication and API keys](https://docs.memorylake.ai/authentication).
 
 Interactive login offers the **Global** (`app.memorylake.ai`) and **China**
 (`app.memorylake.cn`) endpoints, or a URL you type. They are separate
@@ -755,8 +762,21 @@ fails and says how to supply it.
   to fetch the next page.
 - **Exit codes are meaningful.** Commands that can partially fail — document
   import, fact delete — print the full result first and then exit non-zero, so
-  scripts can trust the status without parsing output.
+  scripts can trust the status without parsing output. `agent send` exits
+  non-zero when the task fails, is cancelled or rejected, or when a stream
+  closes before the task settles.
+- **Ids are checked before anything is sent.** An empty id, `.` or `..` is
+  refused locally, so a stray argument cannot address a parent resource.
 - `-v` / `-vv` raise log verbosity, and `RUST_LOG` is honoured.
+
+## Learn more
+
+- [Overview](https://docs.memorylake.ai/overview) — what MemoryLake is and what
+  it does with your data.
+- [Core concepts](https://docs.memorylake.ai/concepts) — workspaces, projects,
+  actors, how memories are extracted, and traces and conflicts.
+- [Quick start](https://docs.memorylake.ai/quickstart) — sign up, try memory in
+  the Playground, and create the API key `auth login` asks for.
 
 ## Contributing
 
