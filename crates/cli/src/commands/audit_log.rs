@@ -2,7 +2,10 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
-use memorylake_core::api::admin::{ListAuditLogsParams, MAX_AUDIT_WINDOW_SECS, list_audit_logs};
+use memorylake_core::api::admin::{
+    ListAuditLogsParams, MAX_AUDIT_ACTIONS, MAX_AUDIT_ACTORS, MAX_AUDIT_TARGET_ID,
+    MAX_AUDIT_TARGET_TYPE, MAX_AUDIT_WINDOW_SECS, list_audit_logs,
+};
 
 use super::{api_client, parse_non_blank, print_json};
 
@@ -21,29 +24,32 @@ pub enum AuditLogCommand {
         /// Only `management` or only `system` events.
         #[arg(long, value_parser = ["management", "system"])]
         category: Option<String>,
-        /// Only this action, e.g. member:change_role. Repeat, or separate
-        /// with commas, for several.
+        /// Only this action, e.g. member:change_role, api_key:create or
+        /// billing:set_balance_alert (the `action` of earlier events). Repeat,
+        /// or separate with commas, for several (at most 50).
         #[arg(long = "action", value_delimiter = ',', value_parser = parse_non_blank)]
         actions: Vec<String>,
-        /// Only events performed by this member (principal id). Repeat, or
-        /// separate with commas, for several.
-        #[arg(long = "actor", value_name = "PRINCIPAL_ID", value_delimiter = ',', value_parser = parse_non_blank)]
+        /// Only events performed by this member (principal id, from `member
+        /// list`). Repeat, or separate with commas, for several (at most
+        /// 100). Also accepted as --member, as in `usage records`.
+        #[arg(long = "actor", visible_alias = "member", value_name = "PRINCIPAL_ID", value_delimiter = ',', value_parser = parse_non_blank)]
         actor_ids: Vec<String>,
-        /// Only events on this kind of target, e.g. principal.
-        #[arg(long)]
+        /// Only events on this kind of target, e.g. principal (at most 32
+        /// characters).
+        #[arg(long, value_parser = parse_non_blank)]
         target_type: Option<String>,
-        /// Only events on this target id.
-        #[arg(long)]
+        /// Only events on this target id (at most 128 characters).
+        #[arg(long, value_parser = parse_non_blank)]
         target_id: Option<String>,
         /// Only events with this outcome.
         #[arg(long, value_parser = ["succeeded", "failed", "partial"])]
         result: Option<String>,
         /// Earliest event time, Unix seconds (inclusive). Defaults to 7 days
         /// before --end-time.
-        #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
         start_time: Option<i64>,
         /// Latest event time, Unix seconds (exclusive). Defaults to now.
-        #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
         end_time: Option<i64>,
         /// Number of items per page (1–100). Use 100 when reading many: the
         /// rate limit counts requests, not events.
@@ -75,10 +81,35 @@ pub fn run(
     } = command;
     if let (Some(start), Some(end)) = (start_time, end_time) {
         if start >= end {
-            bail!("--start-time must be before --end-time");
+            bail!("--start-time ({start}) must be before --end-time ({end})");
         }
         if end - start > MAX_AUDIT_WINDOW_SECS {
-            bail!("the window may span at most 92 days");
+            bail!(
+                "--start-time and --end-time are more than 92 days apart; \
+                 list the events in several windows"
+            );
+        }
+    }
+    if actions.len() > MAX_AUDIT_ACTIONS {
+        bail!(
+            "at most {MAX_AUDIT_ACTIONS} --action values, got {}",
+            actions.len()
+        );
+    }
+    if actor_ids.len() > MAX_AUDIT_ACTORS {
+        bail!(
+            "at most {MAX_AUDIT_ACTORS} --actor values, got {}",
+            actor_ids.len()
+        );
+    }
+    for (flag, value, max) in [
+        ("--target-type", &target_type, MAX_AUDIT_TARGET_TYPE),
+        ("--target-id", &target_id, MAX_AUDIT_TARGET_ID),
+    ] {
+        if let Some(value) = value
+            && value.chars().count() > max
+        {
+            bail!("{flag} is at most {max} characters");
         }
     }
 

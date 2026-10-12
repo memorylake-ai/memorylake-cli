@@ -273,7 +273,8 @@ fn audit_log_filters_repeat_and_ride_the_query_string() {
         "member:change_role,member:remove",
         "--actor",
         "p-1",
-        "--actor",
+        // The alias `usage records` users know.
+        "--member",
         "p-2",
         "--target-type",
         "principal",

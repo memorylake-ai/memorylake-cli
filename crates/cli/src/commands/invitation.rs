@@ -7,7 +7,7 @@ use memorylake_core::api::admin::{
     list_invitations, revoke_invitation,
 };
 
-use super::{api_client, print_json};
+use super::{api_client, parse_non_blank, print_json};
 
 /// Invitation subcommands.
 #[derive(Debug, Subcommand)]
@@ -16,21 +16,21 @@ pub enum InvitationCommand {
     /// re-inviting is revoke + create.
     Create {
         /// Invitee email address.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         email: String,
         /// Role on acceptance: tenant_admin, tenant_member, or a custom role
-        /// key.
-        #[arg(long)]
+        /// key from `role list`.
+        #[arg(long, value_parser = parse_non_blank)]
         role: String,
         /// Retrying with the same value replays the first result instead of
         /// sending a second email.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// List the team's invitations, newest first.
     List {
-        /// Number of items per page.
-        #[arg(long)]
+        /// Number of items per page (1-100).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         page_size: Option<u32>,
         /// Continuation token from a previous response.
         #[arg(long)]
@@ -46,15 +46,19 @@ pub enum InvitationCommand {
     /// Get one invitation. A pending invitation past its deadline reads as
     /// expired.
     Get {
-        /// Invitation id.
+        /// Invitation id (from `invitation list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
-    /// Revoke a pending invitation; its email link stops working.
+    /// Revoke a pending invitation; its email link stops working. There is
+    /// no confirmation prompt.
+    #[command(visible_alias = "delete")]
     Revoke {
-        /// Invitation id.
+        /// Invitation id (from `invitation list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
 }
@@ -100,7 +104,8 @@ pub fn run(
             print_json(&data)
         }
         InvitationCommand::Get { id } => {
-            let data = get_invitation(&client, &id).context("get invitation")?;
+            let data =
+                get_invitation(&client, &id).with_context(|| format!("get invitation `{id}`"))?;
             print_json(&data)
         }
         InvitationCommand::Revoke {
@@ -108,8 +113,8 @@ pub fn run(
             idempotency_key,
         } => {
             revoke_invitation(&client, &id, idempotency_key.as_deref())
-                .context("revoke invitation")?;
-            println!("invitation {id} revoked");
+                .with_context(|| format!("revoke invitation `{id}`"))?;
+            println!("Revoked invitation `{id}`");
             Ok(())
         }
     }

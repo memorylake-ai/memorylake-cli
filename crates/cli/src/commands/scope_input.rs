@@ -7,7 +7,27 @@ use clap::Args;
 use memorylake_core::api::admin::{ScopeEntryInput, SetScopesRequest, parse_scope_entries};
 
 use super::input::read_file_or_stdin;
-use super::parse_reason;
+use super::{parse_etag, parse_reason};
+
+/// The `--help` epilogue of every `scope set`: the entry format and the
+/// read-edit-write loop, which flattened arguments cannot show.
+pub const SCOPE_SET_HELP: &str = "\
+Entries: a JSON array of
+  {\"resource_type\": \"memorylake:<type>\", \"mode\": \"all\" | \"instances\",
+   \"instances\": [{\"id\": \"...\", \"workspace_id\": \"...\", \"actions\": [\"...\"]}]}
+or the whole JSON `scope get` printed, edited: read-only fields are dropped.
+Only the listed resource types change. Project instances need workspace_id;
+`actions` is optional (default: every action the role allows on it). An entry
+in mode `instances` must list at least one instance: leave a type out to keep
+it as it is.
+
+Read, edit, write back, refusing to overwrite a concurrent change:
+  memorylake member scope get <id> > scope.json 2> etag.txt
+  # edit scope.json
+  memorylake member scope set <id> --scopes-file scope.json --reason \"...\" \\
+      --if-match \"$(cat etag.txt)\"
+(The same for `role scope` and `access-group scope`.) Resource types: the
+`resource_type` values `scope get` prints, or `permission catalog`.";
 
 /// Where the replacement scope entries come from, and why they change.
 ///
@@ -23,8 +43,9 @@ pub struct ScopeSetArgs {
     #[arg(long, value_parser = parse_reason)]
     reason: String,
     /// Only write if nothing changed since the read that printed this ETag
-    /// (`scope get` prints it on standard error); otherwise fail with 412.
-    #[arg(long, value_name = "ETAG")]
+    /// (`scope get` prints `ETag: "..."` on standard error; the value, with
+    /// or without its quotes, or the whole line); otherwise fail with 412.
+    #[arg(long, value_name = "ETAG", value_parser = parse_etag)]
     if_match: Option<String>,
 }
 

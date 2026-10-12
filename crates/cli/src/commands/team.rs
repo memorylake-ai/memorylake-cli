@@ -8,6 +8,7 @@ use memorylake_core::api::admin::{
     transfer_team_ownership,
 };
 
+use super::api_key::warn_if_key_withheld;
 use super::{api_client, parse_non_blank, print_json};
 
 /// Team subcommands.
@@ -16,12 +17,13 @@ pub enum TeamCommand {
     /// Show the team this API key belongs to.
     Get,
     /// Rename the team. Only the team owner may do this.
+    #[command(visible_alias = "update")]
     Rename {
         /// New display name.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         name: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Create a new org team owned by you. It counts toward your team limit.
@@ -41,7 +43,7 @@ pub enum TeamCommand {
         api_key_name: Option<String>,
         /// Retrying with the same value replays the first result instead of
         /// creating a second team.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// PERMANENTLY delete this org team. Owner only; irreversible.
@@ -72,7 +74,7 @@ pub enum TeamCommand {
         #[arg(long, value_name = "TEAM_ID", value_parser = parse_non_blank)]
         confirm: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
 }
@@ -110,7 +112,14 @@ pub fn run(command: TeamCommand, profile: Option<String>, base_url: Option<Strin
                 idempotency_key.as_deref(),
             )
             .context("create a team")?;
-            print_json(&data)
+            print_json(&data)?;
+            if issue_api_key {
+                warn_if_key_withheld(
+                    data.api_key.as_ref().and_then(|key| key.key.as_deref()),
+                    "create a key for the new team in the MemoryLake console",
+                );
+            }
+            Ok(())
         }
         TeamCommand::Delete { confirm } => {
             check_confirmation(&client, &confirm, "delete")?;

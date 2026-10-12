@@ -124,6 +124,29 @@ pub fn require_workspace(paths: &Paths, profile: &str, flag: Option<String>) -> 
     }
 }
 
+/// Accept an ETag for `--if-match` the way `get` printed it on standard
+/// error, forgiving what a shell or a copy-paste does to it.
+///
+/// The server compares strong tags byte for byte, quotes included, so a
+/// shell that ate the quotes (`--if-match "abc"` sends `abc`) would get a
+/// 412 that wrongly says the resource changed. A bare value is quoted again,
+/// and a whole `ETag: "abc"` line is accepted too.
+pub fn parse_etag(raw: &str) -> std::result::Result<String, String> {
+    let mut value = raw.trim();
+    if let Some((name, rest)) = value.split_once(':')
+        && name.trim().eq_ignore_ascii_case("etag")
+    {
+        value = rest.trim();
+    }
+    if value.is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    if value == "*" || value.starts_with('"') || value.starts_with("W/") {
+        return Ok(value.to_string());
+    }
+    Ok(format!("\"{value}\""))
+}
+
 /// Accept a non-blank flag or argument value, trimmed.
 ///
 /// For ids and other values where an empty string is never meaningful: sent
@@ -140,6 +163,17 @@ pub fn parse_non_blank(raw: &str) -> std::result::Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn etags_survive_lost_quotes_and_whole_lines() {
+        assert_eq!(parse_etag(r#""v7""#).as_deref(), Ok(r#""v7""#));
+        assert_eq!(parse_etag("v7").as_deref(), Ok(r#""v7""#));
+        assert_eq!(parse_etag(r#"ETag: "v7""#).as_deref(), Ok(r#""v7""#));
+        assert_eq!(parse_etag("etag: v7").as_deref(), Ok(r#""v7""#));
+        assert_eq!(parse_etag(r#"W/"v7""#).as_deref(), Ok(r#"W/"v7""#));
+        assert_eq!(parse_etag("*").as_deref(), Ok("*"));
+        assert!(parse_etag(" ").is_err());
+    }
 
     #[test]
     fn string_maps_accept_objects_of_strings() {

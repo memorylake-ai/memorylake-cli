@@ -39,7 +39,12 @@ impl AccessGroupPermission {
                 "`{raw}` is not <resource_type>:<action>, e.g. memorylake:actor:actor:create"
             ));
         };
-        if prefix.is_empty() || kind.is_empty() || !action.contains(':') || action.ends_with(':') {
+        if prefix.is_empty()
+            || kind.is_empty()
+            || !action.contains(':')
+            || action.starts_with(':')
+            || action.ends_with(':')
+        {
             return Err(format!(
                 "`{raw}` is not <resource_type>:<action>, e.g. memorylake:actor:actor:create"
             ));

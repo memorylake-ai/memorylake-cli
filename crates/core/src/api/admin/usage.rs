@@ -24,6 +24,9 @@ pub struct GetUsageParams {
     pub group_by: Vec<String>,
 }
 
+/// Longest period a usage report or a usage-record listing may span.
+pub const MAX_USAGE_WINDOW_DAYS: i64 = 92;
+
 /// Query parameters for listing usage records.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListUsageRecordsParams {

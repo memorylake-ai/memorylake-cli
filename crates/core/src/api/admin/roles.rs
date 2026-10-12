@@ -38,7 +38,7 @@ pub struct Role {
     /// true for the three roles every team has.
     pub built_in: bool,
     /// Whether member and invitation writes accept this role. The owner role
-    /// never is — ownership transfer stays in the console.
+    /// never is — the owner changes only through an ownership transfer.
     pub assignable: bool,
     /// When true, only a caller whose own role is owner or admin may grant it.
     pub admin_grant_only: bool,

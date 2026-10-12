@@ -89,6 +89,61 @@ fn bad_input_is_rejected_locally_before_credentials_are_needed() {
             vec!["team", "transfer-ownership", "--to", "prin-2"],
             "--confirm",
         ),
+        // Pages are 1-100 on every management list.
+        (vec!["api-key", "list", "--page-size", "0"], "invalid value"),
+        (
+            vec!["member", "list", "--page-size", "101"],
+            "invalid value",
+        ),
+        (
+            vec!["invitation", "list", "--page-size", "0"],
+            "invalid value",
+        ),
+        (
+            vec!["usage", "records", "--page-size", "101"],
+            "invalid value",
+        ),
+        // An empty id would address the collection instead of an item.
+        (vec!["api-key", "revoke", ""], "must not be empty"),
+        (vec!["member", "remove", " "], "must not be empty"),
+        (vec!["invitation", "get", ""], "must not be empty"),
+        (
+            vec!["member", "set-role", "prin-1", "--role", ""],
+            "must not be empty",
+        ),
+        (
+            vec!["api-key", "rotate", "42", "--idempotency-key", ""],
+            "must not be empty",
+        ),
+        (vec!["team", "rename", "--name", ""], "must not be empty"),
+        // A create expiry of 0 would be a key that is already expired.
+        (
+            vec!["api-key", "create", "--name", "k", "--expires-at", "0"],
+            "invalid value",
+        ),
+        (vec!["usage", "--start-date", "2026-13-01"], "YYYY-MM-DD"),
+        (
+            vec![
+                "usage",
+                "records",
+                "--start-time",
+                "1000",
+                "--end-time",
+                "1000",
+            ],
+            "must be before",
+        ),
+        (
+            vec![
+                "usage",
+                "records",
+                "--start-time",
+                "1",
+                "--end-time",
+                "8000000",
+            ],
+            "92 days",
+        ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);
         assert!(err.contains(expected), "{args:?}: {err}");
@@ -108,10 +163,6 @@ fn bad_access_control_input_is_rejected_locally() {
         r#"[{"resource_type":"memorylake:project","mode":"instances","instances":[{"id":"p-1"}]}]"#;
     for (args, expected) in [
         // `access`: the --workspace rule and the subject.
-        (
-            vec!["access", "show", "workspace-actor", "act-1"],
-            "needs --workspace",
-        ),
         (
             vec!["access", "show", "skill", "sk-1", "--workspace", "ws-1"],
             "takes no --workspace",
@@ -272,7 +323,7 @@ fn bad_access_control_input_is_rejected_locally() {
                 "--reason",
                 "r",
             ],
-            "leave the entry out",
+            "Leave the entry out",
         ),
         (
             vec![
@@ -306,6 +357,45 @@ fn bad_access_control_input_is_rejected_locally() {
             ],
             "required",
         ),
+        // Empty ids would address the collection; pages are 1-100.
+        (vec!["ag", "delete", ""], "must not be empty"),
+        (vec!["role", "get", " "], "must not be empty"),
+        (vec!["member", "scope", "get", ""], "must not be empty"),
+        (vec!["perm", "rule", "delete", ""], "must not be empty"),
+        (vec!["ag", "list", "--page-size", "0"], "invalid value"),
+        (
+            vec!["ag", "member", "list", "g-1", "--page-size", "101"],
+            "invalid value",
+        ),
+        (
+            vec!["perm", "rule", "list", "--page-size", "0"],
+            "invalid value",
+        ),
+        (
+            vec![
+                "ag",
+                "permissions",
+                "set",
+                "g-1",
+                "--none",
+                "--reason",
+                "r",
+                "--if-match",
+                " ",
+            ],
+            "must not be empty",
+        ),
+        (
+            vec![
+                "ag",
+                "create",
+                "--name",
+                "Ops",
+                "--permission",
+                "memorylake:actor::create",
+            ],
+            "is not <resource_type>:<action>",
+        ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);
         assert!(err.contains(expected), "{args:?}: {err}");
@@ -316,6 +406,11 @@ fn bad_access_control_input_is_rejected_locally() {
 
 #[test]
 fn bad_billing_and_audit_input_is_rejected_locally() {
+    let too_many_actions = (0..51)
+        .map(|i| format!("a:{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let long_target_type = "t".repeat(33);
     let home = temp_home();
     let six_recipients = "a@x,b@x,c@x,d@x,e@x,f@x";
     let long_address = "a".repeat(501);
@@ -435,11 +530,44 @@ fn bad_billing_and_audit_input_is_rejected_locally() {
                 "audit",
                 "list",
                 "--start-time",
-                "0",
+                "1",
                 "--end-time",
-                "7948801",
+                "7948802",
             ],
-            "at most 92 days",
+            "more than 92 days apart",
+        ),
+        // The server reads 0 as "not given", so it is refused rather than
+        // silently becoming the default window.
+        (vec!["audit", "list", "--start-time", "0"], "invalid value"),
+        (
+            vec!["billing", "transactions", "--end-time", "0"],
+            "invalid value",
+        ),
+        (
+            vec!["audit", "list", "--action", too_many_actions.as_str()],
+            "at most 50 --action",
+        ),
+        (
+            vec!["audit", "list", "--target-type", long_target_type.as_str()],
+            "at most 32 characters",
+        ),
+        (vec!["billing", "invoice", "get", ""], "must not be empty"),
+        (vec!["billing", "order", "get", " "], "must not be empty"),
+        (
+            vec![
+                "billing",
+                "invoice",
+                "details",
+                "set",
+                "in_1",
+                "--type",
+                "individual",
+                "--address",
+                "1 Main St",
+                "--name",
+                "",
+            ],
+            "must not be empty",
         ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);

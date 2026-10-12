@@ -7,14 +7,17 @@ use memorylake_core::api::admin::{
     get_resource_access, remove_scope_grant, set_permission_level,
 };
 
-use super::{api_client, parse_non_blank, parse_reason, print_json};
+use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
+
+use super::{parse_non_blank, parse_reason, print_json, require_workspace};
 
 /// Access subcommands.
 ///
-/// Each takes the resource TYPE and ID. Workspace actors and agents also
-/// need `--workspace`; projects accept it so the project shows by name in
-/// access scopes. `--workspace` is never filled in from `workspace use`:
-/// here it changes which resource is meant, not merely where to look.
+/// Each takes the resource TYPE and ID. Workspace actors and agents live in
+/// one workspace: `--workspace`, else the one `workspace use` remembered,
+/// as for `actor bind`. Projects accept `--workspace` so the project shows
+/// by name in access scopes; it is never filled in for them, since a wrong
+/// guess would mislabel the project.
 #[derive(Debug, Subcommand)]
 pub enum AccessCommand {
     /// List every member and access group that can access the instance and
@@ -28,7 +31,7 @@ pub enum AccessCommand {
     Levels {
         #[command(flatten)]
         target: Target,
-        /// Member principal id.
+        /// Member principal id (from `member list`).
         #[arg(long, value_name = "PRINCIPAL_ID", value_parser = parse_non_blank)]
         member: String,
     },
@@ -39,7 +42,8 @@ pub enum AccessCommand {
     SetLevel {
         #[command(flatten)]
         target: Target,
-        /// Member principal id. Access groups cannot hold levels.
+        /// Member principal id (from `member list`). Access groups cannot hold
+        /// levels.
         #[arg(long, value_name = "PRINCIPAL_ID", value_parser = parse_non_blank)]
         member: String,
         /// The member's final level here.
@@ -49,7 +53,7 @@ pub enum AccessCommand {
         #[arg(long, value_parser = parse_reason)]
         reason: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Add the instance to a limited member's access scope, or to an access
@@ -63,7 +67,7 @@ pub enum AccessCommand {
         #[arg(long, value_parser = parse_reason)]
         reason: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Remove the instance from a member's access scope or an access group's
@@ -78,7 +82,7 @@ pub enum AccessCommand {
         #[arg(long, value_parser = parse_reason)]
         reason: Option<String>,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
 }
@@ -131,36 +135,35 @@ pub struct Target {
     /// Resource type.
     #[arg(value_enum)]
     kind: Kind,
-    /// Instance id, as the data API returns it.
+    /// Instance id, as the data API returns it: from `workspace list`,
+    /// `project list`, `actor list`, `agent list`, `boundary list`,
+    /// `dbconn list`, `ds list` or `skill list`. For workspace-actor and
+    /// workspace-agent, the actor or agent id.
     #[arg(value_parser = parse_non_blank)]
     id: String,
-    /// The workspace: required for workspace-actor and workspace-agent,
-    /// optional for project, refused otherwise.
+    /// The workspace. For workspace-actor and workspace-agent: the binding's
+    /// workspace, defaulting to the one `workspace use` remembered. For
+    /// project: optional, shows the project by name in access scopes.
+    /// Refused for the other types.
     #[arg(long, value_parser = parse_non_blank)]
     workspace: Option<String>,
 }
 
 impl Target {
-    /// Check the `--workspace` rule and build the core reference.
+    /// Check the `--workspace` rule and build the core reference. A
+    /// workspace binding without --workspace is completed later, from the
+    /// remembered workspace.
     fn resolve(&self) -> Result<ResourceRef> {
         let kind = ResourceKind::from(self.kind);
-        let name = self
-            .kind
-            .to_possible_value()
-            .map(|value| value.get_name().to_string())
-            .unwrap_or_default();
-        match (
-            &self.workspace,
-            kind.needs_workspace(),
-            kind.takes_workspace_hint(),
-        ) {
-            (None, true, _) => bail!("{name} needs --workspace <id>: the binding lives in one"),
-            (Some(_), false, false) => {
-                bail!(
-                    "{name} takes no --workspace; only project, workspace-actor and workspace-agent do"
-                )
-            }
-            _ => {}
+        if self.workspace.is_some() && !kind.needs_workspace() && !kind.takes_workspace_hint() {
+            let name = self
+                .kind
+                .to_possible_value()
+                .map(|value| value.get_name().to_string())
+                .unwrap_or_default();
+            bail!(
+                "{name} takes no --workspace; only project, workspace-actor and workspace-agent do"
+            );
         }
         Ok(ResourceRef {
             kind,
@@ -174,11 +177,11 @@ impl Target {
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 pub struct SubjectArgs {
-    /// A member, whose access scope must already be limited to listed
-    /// instances of this type.
+    /// A member (from `member list`), whose access scope must already be
+    /// limited to listed instances of this type (see `member scope get`).
     #[arg(long, value_name = "PRINCIPAL_ID", value_parser = parse_non_blank)]
     member: Option<String>,
-    /// An access group.
+    /// An access group (from `access-group list`).
     #[arg(long, value_name = "GROUP_ID", value_parser = parse_non_blank)]
     group: Option<String>,
 }
@@ -208,7 +211,14 @@ pub fn run(
         | AccessCommand::Revoke { target, .. } => target.resolve()?,
     };
 
-    let client = api_client(profile, base_url)?;
+    let paths = Paths::default_home().context("resolve MemoryLake config paths")?;
+    let runtime = resolve(&paths, &ResolveOverrides { profile, base_url })
+        .context("resolve API credentials")?;
+    let client = Client::new(&runtime.base_url, &runtime.api_key).context("build API client")?;
+    let mut resource = resource;
+    if resource.kind.needs_workspace() && resource.workspace_id.is_none() {
+        resource.workspace_id = Some(require_workspace(&paths, &runtime.profile, None)?);
+    }
 
     let data = match command {
         AccessCommand::Show { .. } => {

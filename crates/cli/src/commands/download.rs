@@ -73,16 +73,7 @@ pub fn save_download(
         .with_context(|| format!("create directory {}", directory.display()))?;
 
     // The tag is caller input; keep it from naming another directory.
-    let tag: String = tag
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let tag = file_safe(tag);
     let temporary = directory.join(format!(".{tag}.download.{}", std::process::id()));
     let downloaded = {
         let mut file = fs::File::create(&temporary)
@@ -141,4 +132,29 @@ fn refuse_existing(path: &Path, force: bool) -> Result<()> {
         "{} already exists; pass --force to overwrite it",
         path.display()
     )
+}
+
+/// `id` with anything that could leave the directory replaced, for use in
+/// a file name.
+pub fn file_safe(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_id_cannot_name_another_directory() {
+        assert_eq!(file_safe("in_1Abc-2"), "in_1Abc-2");
+        assert_eq!(file_safe("../../etc/x"), "______etc_x");
+    }
 }

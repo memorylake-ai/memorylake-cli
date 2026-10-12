@@ -494,14 +494,21 @@ pub struct CreatedTeam {
 }
 
 /// Outcome of deleting the team.
+///
+/// Every field is optional: the deletion has happened by the time this is
+/// read, so a field missing from the answer must not turn it into an error
+/// that invites a retry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeletedTeam {
     /// The deleted team's id.
-    pub tenant_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
     /// Deletion time, Unix seconds.
-    pub dissolved_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dissolved_at: Option<i64>,
     /// true when a paid subscription was cancelled first.
-    pub subscription_canceled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_canceled: Option<bool>,
     /// Fields the CLI does not model yet, kept so printing this never drops
     /// what the server sent.
     #[serde(flatten)]
@@ -509,14 +516,20 @@ pub struct DeletedTeam {
 }
 
 /// Outcome of handing the team to a new owner.
+///
+/// Every field is optional, for the same reason as [`DeletedTeam`]: the
+/// transfer cannot be undone by the caller once it has happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnershipTransfer {
     /// The team's id.
-    pub tenant_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
     /// The owner before the transfer, now an admin.
-    pub previous_owner_principal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_owner_principal_id: Option<String>,
     /// The new owner.
-    pub new_owner_principal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_owner_principal_id: Option<String>,
     /// Fields the CLI does not model yet, kept so printing this never drops
     /// what the server sent.
     #[serde(flatten)]
