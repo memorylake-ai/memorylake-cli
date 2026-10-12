@@ -21,10 +21,6 @@ pub struct CreateDatabaseMemoryRequest {
     /// be added later or drafted with [`super::generate_database_instruction`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
-    /// Analysis model to draw knowledge from. Must be built on the same
-    /// datasource.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analysis_model_id: Option<String>,
 }
 
 /// Register a datasource as a memory source in a project.
@@ -47,7 +43,6 @@ mod tests {
             name: "analytics_db".into(),
             db_datasource_id: "ds-1".into(),
             instruction: None,
-            analysis_model_id: None,
         })
         .unwrap();
         assert_eq!(
@@ -57,15 +52,13 @@ mod tests {
     }
 
     #[test]
-    fn optional_fields_serialize_when_set() {
+    fn the_instruction_serializes_when_set() {
         let body = serde_json::to_value(CreateDatabaseMemoryRequest {
             name: "analytics_db".into(),
             db_datasource_id: "ds-1".into(),
             instruction: Some("Revenue is in cents.".into()),
-            analysis_model_id: Some("am-1".into()),
         })
         .unwrap();
         assert_eq!(body["instruction"], "Revenue is in cents.");
-        assert_eq!(body["analysis_model_id"], "am-1");
     }
 }

@@ -72,7 +72,7 @@ fn create_help_exposes_no_metadata_flag() {
         "--name",
         "--custom-id",
         "--description",
-        "--industry-ids",
+        "--opendata-ids",
     ] {
         assert!(
             stdout.contains(flag),
@@ -87,15 +87,15 @@ fn create_help_exposes_no_metadata_flag() {
 }
 
 #[test]
-fn update_help_exposes_name_description_and_industries() {
+fn update_help_exposes_name_description_and_opendata() {
     let home = temp_home();
     let args = ["project", "update", "--help"];
     let stdout = assert_success(&run(&home, &args), &args);
     assert!(stdout.contains("--workspace"), "{stdout}");
     assert!(stdout.contains("--name"), "{stdout}");
     assert!(stdout.contains("--description"), "{stdout}");
-    assert!(stdout.contains("--industry-ids"), "{stdout}");
-    assert!(stdout.contains("--clear-industries"), "{stdout}");
+    assert!(stdout.contains("--opendata-ids"), "{stdout}");
+    assert!(stdout.contains("--clear-opendata"), "{stdout}");
     assert!(
         !stdout.contains("--by-custom-id"),
         "`project update` should not expose --by-custom-id: {stdout}"

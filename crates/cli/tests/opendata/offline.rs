@@ -1,4 +1,4 @@
-//! Offline `industry` and `project --industry-ids` tests.
+//! Offline `opendata` and `project --opendata-ids` tests.
 
 use std::fs;
 
@@ -7,7 +7,7 @@ use crate::common::{assert_failure, run, temp_home};
 #[test]
 fn list_without_login_fails() {
     let home = temp_home();
-    let args = ["industry", "list"];
+    let args = ["opendata", "list"];
     let err = assert_failure(&run(&home, &args), &args);
     assert!(
         err.contains("not logged in") || err.contains("resolve API credentials"),
@@ -17,26 +17,26 @@ fn list_without_login_fails() {
 }
 
 #[test]
-fn industry_ids_and_clear_industries_together_are_rejected() {
+fn opendata_ids_and_clear_opendata_together_are_rejected() {
     let home = temp_home();
     let args = [
         "project",
         "update",
         "proj-1",
-        "--industry-ids",
+        "--opendata-ids",
         "clinical/trials",
-        "--clear-industries",
+        "--clear-opendata",
     ];
     let err = assert_failure(&run(&home, &args), &args);
     assert!(
-        err.contains("--clear-industries") && err.contains("--industry-ids"),
+        err.contains("--clear-opendata") && err.contains("--opendata-ids"),
         "the error must name both conflicting flags: {err}"
     );
     let _ = fs::remove_dir_all(&home);
 }
 
 #[test]
-fn an_empty_industry_entry_is_rejected_before_credentials() {
+fn an_empty_opendata_entry_is_rejected_before_credentials() {
     let home = temp_home();
     let args = [
         "project",
@@ -45,7 +45,7 @@ fn an_empty_industry_entry_is_rejected_before_credentials() {
         "P",
         "--custom-id",
         "p-1",
-        "--industry-ids",
+        "--opendata-ids",
         "a,,b",
     ];
     let err = assert_failure(&run(&home, &args), &args);

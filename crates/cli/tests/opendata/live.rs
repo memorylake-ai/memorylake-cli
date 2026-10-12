@@ -1,4 +1,4 @@
-//! Live `industry` tests (require `MEMORYLAKE_API_KEY`). Read-only.
+//! Live `opendata` tests (require `MEMORYLAKE_API_KEY`). Read-only.
 
 use std::fs;
 
@@ -12,14 +12,14 @@ fn list_returns_the_catalogue() {
     let login = login_args(&api_key, "default", base_url.as_deref());
     assert_success(&run(&home, &login), &login);
 
-    let args = ["industry", "list"];
+    let args = ["opendata", "list"];
     let stdout = assert_success(&run(&home, &args), &args);
     let items: serde_json::Value = serde_json::from_str(&stdout).expect("parse list JSON");
-    let items = items.as_array().expect("industry list prints an array");
+    let items = items.as_array().expect("opendata list prints an array");
     assert!(!items.is_empty(), "the catalogue should not be empty");
     assert!(
         items.iter().all(|item| item["id"].is_string()),
-        "every industry needs an id: {stdout}"
+        "every opendata needs an id: {stdout}"
     );
 
     let _ = fs::remove_dir_all(&home);

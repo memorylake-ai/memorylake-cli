@@ -10,7 +10,6 @@ use tracing_subscriber::EnvFilter;
 
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
-use commands::analysis_model::{AnalysisModelCommand, run as run_analysis_model};
 use commands::api_key::{ApiKeyCommand, run as run_api_key};
 use commands::auth::{AuthCommand, run as run_auth};
 use commands::boundary::{BoundaryCommand, run as run_boundary};
@@ -18,10 +17,10 @@ use commands::conversation::{ConversationCommand, run as run_conversation};
 use commands::datasource::{DatasourceCommand, run as run_datasource};
 use commands::db_connection::{DbConnectionCommand, run as run_db_connection};
 use commands::fact::{FactCommand, run as run_fact};
-use commands::industry::{IndustryCommand, run as run_industry};
 use commands::invitation::{InvitationCommand, run as run_invitation};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::member::{MemberCommand, run as run_member};
+use commands::opendata::{OpendataCommand, run as run_opendata};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::role::{RoleCommand, run as run_role};
 use commands::search::{SearchArgs, run as run_search};
@@ -136,16 +135,10 @@ enum Commands {
     },
     /// Search memories in a workspace.
     Search(SearchArgs),
-    /// Manage analysis models and their knowledge entries.
-    #[command(visible_alias = "am")]
-    AnalysisModel {
+    /// List the opendata a project can draw on.
+    Opendata {
         #[command(subcommand)]
-        command: AnalysisModelCommand,
-    },
-    /// List the industry opendata a project can draw on.
-    Industry {
-        #[command(subcommand)]
-        command: IndustryCommand,
+        command: OpendataCommand,
     },
     /// Show and rename the team this API key belongs to.
     Team {
@@ -200,10 +193,7 @@ fn main() -> Result<()> {
         }
         Commands::Datasource { command } => run_datasource(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
-        Commands::AnalysisModel { command } => {
-            run_analysis_model(command, cli.profile, cli.base_url)?
-        }
-        Commands::Industry { command } => run_industry(command, cli.profile, cli.base_url)?,
+        Commands::Opendata { command } => run_opendata(command, cli.profile, cli.base_url)?,
         Commands::Team { command } => run_team(command, cli.profile, cli.base_url)?,
         Commands::ApiKey { command } => run_api_key(command, cli.profile, cli.base_url)?,
         Commands::Member { command } => run_member(command, cli.profile, cli.base_url)?,

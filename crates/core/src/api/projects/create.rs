@@ -21,10 +21,10 @@ pub struct CreateProjectRequest {
     /// Optional description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Industry opendata ids to attach (see `/api/v1/industry-opendata`).
-    /// An unknown id is rejected with `INVALID_ARGUMENT`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub industry_ids: Option<Vec<String>>,
+    /// Opendata ids to attach (see [`crate::api::opendata`]). An unknown id
+    /// is rejected with `INVALID_ARGUMENT`. Sent as `industry_ids`.
+    #[serde(rename = "industry_ids", skip_serializing_if = "Option::is_none")]
+    pub opendata_ids: Option<Vec<String>>,
 }
 
 /// Create a project inside `workspace_id`.

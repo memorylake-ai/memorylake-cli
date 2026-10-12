@@ -107,10 +107,6 @@ pub enum DatabaseCommand {
         name: String,
         #[command(flatten)]
         instruction: InstructionArgs,
-        /// Analysis model to draw knowledge from; must be built on the same
-        /// datasource.
-        #[arg(long, value_name = "ANALYSIS_MODEL_ID", value_parser = parse_non_empty)]
-        analysis_model: Option<String>,
     },
     /// Get a database memory, including its instruction.
     Get {
@@ -119,7 +115,7 @@ pub enum DatabaseCommand {
         /// Database memory id.
         database_id: String,
     },
-    /// Update a database memory's name, instruction, or analysis model.
+    /// Update a database memory's name or instruction.
     ///
     /// Only the flags you pass are sent. The datasource cannot be changed.
     Update {
@@ -135,17 +131,6 @@ pub enum DatabaseCommand {
         /// Remove the saved instruction (sends an empty one).
         #[arg(long, conflicts_with = "instruction_source")]
         clear_instruction: bool,
-        /// Bind this analysis model instead of the current one.
-        #[arg(
-            long,
-            value_name = "ANALYSIS_MODEL_ID",
-            value_parser = parse_non_empty,
-            conflicts_with = "clear_analysis_model"
-        )]
-        analysis_model: Option<String>,
-        /// Remove the analysis model binding.
-        #[arg(long)]
-        clear_analysis_model: bool,
     },
     /// Remove a database memory from a project.
     ///
@@ -254,14 +239,12 @@ fn prepare(command: DatabaseCommand) -> Result<Prepared> {
             datasource,
             name,
             instruction,
-            analysis_model,
         } => Prepared::Create {
             target,
             request: CreateDatabaseMemoryRequest {
                 name,
                 db_datasource_id: datasource,
                 instruction: instruction.read()?,
-                analysis_model_id: analysis_model,
             },
         },
         DatabaseCommand::Get {
@@ -277,8 +260,6 @@ fn prepare(command: DatabaseCommand) -> Result<Prepared> {
             name,
             instruction,
             clear_instruction,
-            analysis_model,
-            clear_analysis_model,
         } => {
             let request = UpdateDatabaseMemoryRequest {
                 name,
@@ -287,18 +268,11 @@ fn prepare(command: DatabaseCommand) -> Result<Prepared> {
                 } else {
                     instruction.read()?
                 },
-                // The API's own convention: an empty id removes the binding.
-                analysis_model_id: if clear_analysis_model {
-                    Some(String::new())
-                } else {
-                    analysis_model
-                },
             };
             if request.is_empty() {
                 bail!(
                     "nothing to update: pass at least one of --name, --instruction, \
-                     --instruction-file, --clear-instruction, --analysis-model, \
-                     --clear-analysis-model"
+                     --instruction-file, --clear-instruction"
                 );
             }
             Prepared::Update {

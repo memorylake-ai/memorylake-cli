@@ -477,9 +477,10 @@ fn an_explicit_workspace_flag_overrides_the_remembered_one() {
 
 #[test]
 fn an_a2a_error_is_reported_by_its_reason_not_as_escaped_json() {
-    // Production's answer to cancelling a finished task: a MemoryLake
-    // envelope carrying the A2A error document as a string. The stub answers
-    // 200, so this exercises the `success: false` path of the decoder.
+    // Production's answer to cancelling a finished task until 2026-10-10: a
+    // MemoryLake envelope carrying the A2A error document as a string. The
+    // stub answers 200, so this exercises the `success: false` path of the
+    // decoder.
     let body = r#"{"success":false,"message":"{\"error\":{\"code\":400,\"status\":\"FAILED_PRECONDITION\",\"message\":\"Task cannot be canceled - current state: 3\",\"details\":[{\"reason\":\"TASK_NOT_CANCELABLE\",\"domain\":\"a2a-protocol.org\"}]}}","error_code":"INVALID_ARGUMENT"}"#;
     let args = ["agent", "task", "cancel", AGENT, "run-1"];
     let (_, output) = exchange_with_remembered_workspace(body, WS, &args);
@@ -495,6 +496,20 @@ fn an_a2a_error_is_reported_by_its_reason_not_as_escaped_json() {
     assert!(
         !headline.contains("\\\"error\\\""),
         "the escaped document must not be the headline: {err}"
+    );
+}
+
+#[test]
+fn a_plain_cancel_refusal_is_reported_as_sent() {
+    // Production's answer since 2026-10-10: the message alone, no A2A
+    // document to unwrap.
+    let body = r#"{"success":false,"message":"Task cannot be canceled - current state: 3","error_code":"INVALID_ARGUMENT"}"#;
+    let args = ["agent", "task", "cancel", AGENT, "run-1"];
+    let (_, output) = exchange_with_remembered_workspace(body, WS, &args);
+    let err = assert_failure(&output, &args);
+    assert!(
+        err.contains("Task cannot be canceled - current state: 3 [INVALID_ARGUMENT]"),
+        "{err}"
     );
 }
 

@@ -33,8 +33,8 @@ pub fn strip_one_line_ending(text: &str) -> &str {
 /// Clap value parser for a value that must not be empty or blank.
 ///
 /// For names and ids: an empty one is never what was meant, and for some
-/// fields (an analysis model id on update) the API reads `""` as an
-/// instruction of its own.
+/// fields (a database memory's instruction on update) the API reads `""` as
+/// an instruction of its own.
 pub fn parse_non_empty(raw: &str) -> std::result::Result<String, String> {
     if raw.trim().is_empty() {
         return Err("must not be empty".into());

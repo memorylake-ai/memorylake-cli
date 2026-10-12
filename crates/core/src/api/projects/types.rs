@@ -2,12 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// An industry classification attached to a project.
+/// An opendata collection attached to a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Industry {
-    /// Industry identifier.
+pub struct AttachedOpendata {
+    /// Opendata identifier.
     pub id: String,
-    /// Display name. Not marked required by the API, and an industry without
+    /// Display name. Not marked required by the API, and an opendata without
     /// one must not fail decoding the project it is attached to.
     #[serde(default)]
     pub name: Option<String>,
@@ -26,10 +26,11 @@ pub struct Project {
     /// Optional description.
     #[serde(default)]
     pub description: Option<String>,
-    /// Industry classifications, returned expanded even though they are
-    /// supplied as bare `industry_ids` on create.
-    #[serde(default)]
-    pub industries: Vec<Industry>,
+    /// Attached opendata, returned expanded even though it is supplied as
+    /// bare ids on create. The server calls this field `industries`; it is
+    /// printed as `opendata`.
+    #[serde(default, rename = "opendata", alias = "industries")]
+    pub opendata: Vec<AttachedOpendata>,
     /// Optional caller-defined metadata.
     ///
     /// Accepted on create but absent from the documented response shape; kept
@@ -76,9 +77,9 @@ mod tests {
 
         assert_eq!(project.id, "proj-1");
         assert_eq!(project.custom_id.as_deref(), Some("demo-1"));
-        assert_eq!(project.industries.len(), 1);
-        assert_eq!(project.industries[0].id, "ind-1");
-        assert_eq!(project.industries[0].name.as_deref(), Some("Tech"));
+        assert_eq!(project.opendata.len(), 1);
+        assert_eq!(project.opendata[0].id, "ind-1");
+        assert_eq!(project.opendata[0].name.as_deref(), Some("Tech"));
     }
 
     #[test]
@@ -107,20 +108,20 @@ mod tests {
     #[test]
     fn optional_fields_may_be_absent() {
         // The response documentation omits `metadata` entirely, and a project
-        // need not carry industries or timestamps.
+        // need not carry opendata or timestamps.
         let project: Project =
             serde_json::from_str(r#"{"id":"proj-1","name":"Demo"}"#).expect("deserialize minimal");
 
-        assert!(project.industries.is_empty());
+        assert!(project.opendata.is_empty());
         assert!(project.metadata.is_none());
         assert!(project.description.is_none());
         assert!(project.created_at.is_none());
     }
 
     #[test]
-    fn industries_survive_a_serialize_round_trip() {
-        // `industries` is the only expanded sub-resource; it must reach the
-        // CLI's JSON output intact.
+    fn opendata_survives_a_serialize_round_trip() {
+        // Opendata is the only expanded sub-resource; it must reach the CLI's
+        // JSON output intact, under its own name.
         let original: Project = serde_json::from_str(
             r#"{"id":"p","name":"n","industries":[{"id":"i","name":"Tech"}]}"#,
         )
@@ -129,6 +130,9 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&original).expect("serialize"))
                 .expect("re-deserialize");
         assert_eq!(original, round_tripped);
-        assert_eq!(round_tripped.industries[0].name.as_deref(), Some("Tech"));
+        assert_eq!(round_tripped.opendata[0].name.as_deref(), Some("Tech"));
+        let printed = serde_json::to_value(&original).expect("serialize");
+        assert_eq!(printed["opendata"][0]["id"], "i");
+        assert!(printed.get("industries").is_none());
     }
 }

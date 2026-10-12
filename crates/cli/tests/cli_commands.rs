@@ -32,7 +32,6 @@
 mod actor;
 mod admin;
 mod agent;
-mod analysis_model;
 mod auth;
 mod boundary;
 mod common;
@@ -42,10 +41,10 @@ mod datasource;
 mod db_connection;
 mod document;
 mod fact;
-mod industry;
 mod library;
 
 mod meta;
+mod opendata;
 mod project;
 mod search;
 mod skill;

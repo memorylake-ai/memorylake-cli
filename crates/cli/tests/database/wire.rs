@@ -59,8 +59,6 @@ fn create_sends_the_documented_body() {
         "analytics_db",
         "--instruction",
         "Amounts are in cents.",
-        "--analysis-model",
-        "am-1",
     ];
     let (request, output) = exchange_with_remembered_workspace(MEMORY, WS, &args);
     let stdout = assert_success(&output, &args);
@@ -68,7 +66,7 @@ fn create_sends_the_documented_body() {
     assert_eq!(
         body_json(&request),
         json!({"name": "analytics_db", "db_datasource_id": "ds-1",
-               "instruction": "Amounts are in cents.", "analysis_model_id": "am-1"})
+               "instruction": "Amounts are in cents."})
     );
     // Unmodeled fields are printed, not dropped.
     assert!(stdout.contains("\"external_id\": \"legacy\""), "{stdout}");
@@ -87,7 +85,6 @@ fn update_reads_the_instruction_from_stdin() {
         "db-1",
         "--instruction-file",
         "-",
-        "--clear-analysis-model",
     ];
     let (request, output) = exchange_with_input(MEMORY, &args, "Line one.\nLine two.\n", &[]);
     assert_success(&output, &args);
@@ -95,11 +92,10 @@ fn update_reads_the_instruction_from_stdin() {
         request_line(&request),
         format!("PATCH {BASE}/db-1 HTTP/1.1")
     );
-    // One trailing newline is dropped, inner ones kept; clearing the model
-    // sends "".
+    // One trailing newline is dropped, inner ones kept.
     assert_eq!(
         body_json(&request),
-        json!({"instruction": "Line one.\nLine two.", "analysis_model_id": ""})
+        json!({"instruction": "Line one.\nLine two."})
     );
 }
 
@@ -290,16 +286,6 @@ fn blank_values_are_refused_by_the_parser() {
             "p",
             "db-1",
             "--instruction",
-            "",
-        ],
-        vec![
-            "project",
-            "database",
-            "update",
-            "--project",
-            "p",
-            "db-1",
-            "--analysis-model",
             "",
         ],
         vec![
