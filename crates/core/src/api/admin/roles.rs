@@ -1,6 +1,7 @@
 //! Roles of the team (`/admin/v1/roles`).
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::client::Client;
 use crate::error::Result;
@@ -14,6 +15,10 @@ pub struct RoleList {
     /// Every role of the team.
     #[serde(default = "Vec::new")]
     pub roles: Vec<Role>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One role. Its `key` is what the `--role` flags of `member` and
@@ -43,6 +48,10 @@ pub struct Role {
     /// Same value as `base_role_key`; the server keeps it for older clients.
     #[serde(default)]
     pub parent_role_key: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// List the team's roles. Any member may read this.

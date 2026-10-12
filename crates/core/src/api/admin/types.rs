@@ -1,6 +1,12 @@
 //! Shared team-management resource types.
+//!
+//! Response structs capture the documented fields and collect anything else
+//! the server sends into `extra` via `#[serde(flatten)]`: these endpoints keep
+//! gaining fields, and a decoder that silently dropped them once hid the
+//! key owner, IP restriction and charged tokens from every listing.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// Cursor-paged list envelope shared by every management list endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +79,10 @@ pub struct Team {
     /// The calling key's role in this team.
     #[serde(default)]
     pub caller_role: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// An API key of the team. Never carries the key itself — only
@@ -118,6 +128,10 @@ pub struct ApiKey {
     /// updates, so it can lag real usage by up to an hour.
     #[serde(default)]
     pub last_used_at: Option<i64>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// The member an API key acts as.
@@ -129,6 +143,10 @@ pub struct ApiKeyOwner {
     pub display_name: String,
     /// `human` or `virtual`, as on [`Member::member_type`].
     pub member_type: String,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// The one response shape that carries a full API key. Shown exactly once by
@@ -148,6 +166,10 @@ pub struct ApiKeyCreated {
     /// omits it — the secret is only ever sent on the live first response.
     #[serde(default)]
     pub key: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A team member.
@@ -178,6 +200,10 @@ pub struct Member {
     /// Per-member cap in tokens. Absent when uncapped.
     #[serde(default)]
     pub max_tokens: Option<i64>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A team invitation. Never carries the invite token — that token is the
@@ -206,6 +232,10 @@ pub struct Invitation {
     /// when accepted.
     #[serde(default)]
     pub accepted_principal_id: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Quota snapshot plus consumption over a period.
@@ -235,6 +265,10 @@ pub struct Usage {
     /// when a daily series was asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub buckets: Option<Vec<UsageBucket>>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// First and last day a usage report covers.
@@ -246,6 +280,10 @@ pub struct UsagePeriod {
     pub end_date: String,
     /// IANA timezone the days are cut in.
     pub timezone: String,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Account-level quota snapshot.
@@ -255,6 +293,10 @@ pub struct UsageQuota {
     pub available_tokens: i64,
     /// When true, `available_tokens` is not meaningful.
     pub unlimited: bool,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Aggregate consumption over a period.
@@ -270,6 +312,10 @@ pub struct UsageTotals {
     /// `quota.available_tokens`. Covers platform operations too, which carry
     /// no prompt or completion tokens.
     pub used_tokens: i64,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One model's (or platform metering operation's) consumption over a period.
@@ -286,6 +332,10 @@ pub struct UsageByModel {
     pub completion_tokens: i64,
     /// Consumption charged against the balance, in tokens.
     pub used_tokens: i64,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One member's consumption over a period.
@@ -304,6 +354,10 @@ pub struct UsageByMember {
     pub completion_tokens: i64,
     /// Consumption charged against the balance, in tokens.
     pub used_tokens: i64,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One day of a usage report's daily series.
@@ -329,6 +383,10 @@ pub struct UsageBucket {
     /// This day's per-member breakdown, when grouped by member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_member: Option<Vec<UsageByMember>>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Consumption today, over the trailing 7 days, and month to date.
@@ -344,6 +402,10 @@ pub struct UsageSummary {
     pub last_7_days: UsageSummaryWindow,
     /// From the first of the current month through today.
     pub month_to_date: UsageSummaryWindow,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One window of a [`UsageSummary`].
@@ -361,6 +423,10 @@ pub struct UsageSummaryWindow {
     pub completion_tokens: i64,
     /// Consumption charged against the balance, in tokens.
     pub used_tokens: i64,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One billed model request or platform operation.
@@ -390,6 +456,10 @@ pub struct UsageRecord {
     /// Trace id, when one was recorded.
     #[serde(default)]
     pub trace_id: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// The member a [`UsageRecord`] is attributed to.
@@ -400,6 +470,10 @@ pub struct UsageRecordMember {
     /// The member's display name.
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A team just created, with its owner key when one was asked for.
@@ -411,6 +485,10 @@ pub struct CreatedTeam {
     /// one was asked for; an idempotent replay omits its secret.
     #[serde(default)]
     pub api_key: Option<ApiKeyCreated>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Outcome of deleting the team.
@@ -422,6 +500,10 @@ pub struct DeletedTeam {
     pub dissolved_at: i64,
     /// true when a paid subscription was cancelled first.
     pub subscription_canceled: bool,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Outcome of handing the team to a new owner.
@@ -433,4 +515,8 @@ pub struct OwnershipTransfer {
     pub previous_owner_principal_id: String,
     /// The new owner.
     pub new_owner_principal_id: String,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }

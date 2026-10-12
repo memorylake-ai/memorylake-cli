@@ -186,6 +186,7 @@ mod tests {
             owner_principal_id: "prin-1".into(),
             created_at: 0,
             caller_role: None,
+            extra: Default::default(),
         }
     }
 

@@ -696,3 +696,14 @@ fn team_transfer_ownership_confirms_then_posts_the_new_owner() {
         "{stdout}"
     );
 }
+
+#[test]
+fn fields_the_cli_does_not_model_are_printed_as_sent() {
+    let team = r#"{"success":true,"data":{"id":"t-1","name":"Acme","type":"org","owner_principal_id":"prin-1","created_at":1756000000,"region":"us-east","limits":{"seats":5}}}"#;
+    let args = ["team", "get"];
+    let (_, output) = exchange(team, &args);
+    let stdout = assert_success(&output, &args);
+
+    assert!(stdout.contains(r#""region": "us-east""#), "{stdout}");
+    assert!(stdout.contains(r#""seats": 5"#), "{stdout}");
+}
