@@ -21,6 +21,18 @@ pub(super) const ACCESS: &str = "/admin/v1/access";
 pub(super) const MY_PERMISSIONS: &str = "/admin/v1/me/permissions";
 pub(super) const PERMISSION_CATALOG: &str = "/admin/v1/permission-catalog";
 pub(super) const PERMISSION_RULES: &str = "/admin/v1/permission-rules";
+pub(super) const AUDIT_LOGS: &str = "/admin/v1/audit-logs";
+pub(super) const CREDIT_BALANCE: &str = "/admin/v1/billing/credit-balance";
+pub(super) const BALANCE_ALERT: &str = "/admin/v1/billing/credit-balance/alert";
+pub(super) const BALANCE_ALERT_EVENTS: &str = "/admin/v1/billing/credit-balance/alert/events";
+pub(super) const AUTO_TOPUP: &str = "/admin/v1/billing/auto-topup";
+pub(super) const AUTO_TOPUP_ATTEMPTS: &str = "/admin/v1/billing/auto-topup/attempts";
+pub(super) const CREDIT_TRANSACTIONS: &str = "/admin/v1/billing/credit-transactions";
+pub(super) const INVOICES: &str = "/admin/v1/billing/invoices";
+pub(super) const ORDERS: &str = "/admin/v1/billing/orders";
+pub(super) const PAYMENT_METHODS: &str = "/admin/v1/billing/payment-methods";
+pub(super) const SUBSCRIPTION: &str = "/admin/v1/billing/subscription";
+pub(super) const PLAN_CHANGE_PREVIEW: &str = "/admin/v1/billing/subscription/plan-change-preview";
 
 pub(super) fn api_key(id: &str) -> String {
     format!("{API_KEYS}/{}", encode_segment(id))
@@ -84,6 +96,22 @@ pub(super) fn access_group_effective(id: &str) -> String {
 
 pub(super) fn permission_rule(id: &str) -> String {
     format!("{PERMISSION_RULES}/{}", encode_segment(id))
+}
+
+pub(super) fn invoice(id: &str) -> String {
+    format!("{INVOICES}/{}", encode_segment(id))
+}
+
+pub(super) fn invoice_pdf(id: &str) -> String {
+    format!("{}/pdf", invoice(id))
+}
+
+pub(super) fn invoice_billing_details(id: &str) -> String {
+    format!("{}/billing-details", invoice(id))
+}
+
+pub(super) fn order(id: &str) -> String {
+    format!("{ORDERS}/{}", encode_segment(id))
 }
 
 #[cfg(test)]

@@ -784,6 +784,45 @@ Pass that value as `--if-match` and the write is refused with `412` if someone
 changed the same thing in between. Scope, rule, level and grant changes take a
 `--reason` (at most 255 bytes), which is recorded in the audit log.
 
+### Billing and audit log
+
+Reads of the team's credit, invoices, orders, cards and subscription. Buying
+credit, changing the plan and managing cards happen in the console; the two
+settings a key can change are the low-balance alert and the buyer details
+printed on an invoice.
+
+```bash
+memorylake billing balance                      # tokens, by source, and the billing mode
+memorylake billing alert get
+memorylake billing alert set (--percent-used 80,95 | --tokens-remaining N,...) [--recipient EMAIL]... [--disabled]
+memorylake billing alert enable|disable         # keeps the levels and recipients
+memorylake billing alert reset                  # back to the (enabled) defaults
+memorylake billing alert events [--page-size N]
+memorylake billing auto-topup get|attempts
+memorylake billing transactions [--start-time UNIX] [--end-time UNIX] [--page-size N]
+memorylake billing invoice list [--status paid,open,...] | get <id>
+memorylake billing invoice pdf <id> [-o PATH|DIR|-] [--force]
+memorylake billing invoice details get|set <id> --type individual|business --address A [--name N] [--company C] [--tax-id T] [--contact-email E]
+memorylake billing order list [--type onetime|auto_topup|subscription] [--status S] | get <id>
+memorylake billing payment-methods
+memorylake billing subscription get | preview-change --plan <id>
+
+memorylake audit list [--category management|system] [--action A]... [--actor <principal-id>]...
+                      [--target-type T] [--target-id ID] [--result succeeded|failed|partial]
+                      [--start-time UNIX] [--end-time UNIX] [--page-size N]
+```
+
+Alert levels are all `--percent-used` (1–99 of the cycle's tokens) or all
+`--tokens-remaining` (1–1,000,000,000), up to five. Recipients are added to the
+team owner, who is always notified. `details set` replaces every field: ones
+left out are cleared.
+
+`audit list` covers the last 7 days unless `--start-time`/`--end-time` say
+otherwise, and at most 92 days. Pages carry no total — follow the
+continuation token, with the same filters, until it is gone. Without permission
+to read the whole team's log you see your own events only. The endpoint has its
+own rate limit (20 requests a minute per key), so page with `--page-size 100`.
+
 ## Configuration
 
 Credentials and settings live in `~/.memorylake/` (`credentials.toml`,

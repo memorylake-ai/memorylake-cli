@@ -13,7 +13,9 @@ use commands::access_group::{AccessGroupCommand, run as run_access_group};
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
 use commands::api_key::{ApiKeyCommand, run as run_api_key};
+use commands::audit_log::{AuditLogCommand, run as run_audit_log};
 use commands::auth::{AuthCommand, run as run_auth};
+use commands::billing::{BillingCommand, run as run_billing};
 use commands::boundary::{BoundaryCommand, run as run_boundary};
 use commands::conversation::{ConversationCommand, run as run_conversation};
 use commands::datasource::{DatasourceCommand, run as run_datasource};
@@ -190,6 +192,18 @@ enum Commands {
     },
     /// Show the team's quota, usage, and individual usage records.
     Usage(UsageArgs),
+    /// Show the team's credit, invoices, orders, and subscription; set the
+    /// low-balance alert and invoice buyer details.
+    Billing {
+        #[command(subcommand)]
+        command: BillingCommand,
+    },
+    /// List the team's audit events.
+    #[command(visible_alias = "audit")]
+    AuditLog {
+        #[command(subcommand)]
+        command: AuditLogCommand,
+    },
     /// Print the CLI version.
     Version,
 }
@@ -224,6 +238,8 @@ fn main() -> Result<()> {
         Commands::Access { command } => run_access(command, cli.profile, cli.base_url)?,
         Commands::Invitation { command } => run_invitation(command, cli.profile, cli.base_url)?,
         Commands::Usage(args) => run_usage(args, cli.profile, cli.base_url)?,
+        Commands::Billing { command } => run_billing(command, cli.profile, cli.base_url)?,
+        Commands::AuditLog { command } => run_audit_log(command, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{VERSION}");
         }
