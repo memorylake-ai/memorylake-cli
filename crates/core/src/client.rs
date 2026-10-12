@@ -2061,7 +2061,7 @@ mod tests {
             "/api/v3/workspaces/../projects/p-1",
             "/api/v3/actors/",
             "/api/v3/workspaces//projects",
-            "/api/v3/workspaces/ws-1/analysis-models/m/entries/..?entity_type=x",
+            "/api/v3/workspaces/ws-1/projects/p-1/memories/databases/..?page_size=1",
         ] {
             assert!(has_unsafe_segment(path), "{path} must be refused");
         }

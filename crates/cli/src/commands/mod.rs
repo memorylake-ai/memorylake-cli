@@ -2,7 +2,6 @@
 
 pub mod actor;
 pub mod agent;
-pub mod analysis_model;
 pub mod api_key;
 pub mod auth;
 pub mod boundary;
@@ -10,11 +9,11 @@ pub mod conversation;
 pub mod datasource;
 pub mod db_connection;
 pub mod fact;
-pub mod industry;
 mod input;
 pub mod invitation;
 pub mod library;
 pub mod member;
+pub mod opendata;
 
 pub mod project;
 pub mod role;

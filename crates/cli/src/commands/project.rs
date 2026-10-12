@@ -55,10 +55,10 @@ pub enum ProjectCommand {
         /// Optional description.
         #[arg(long)]
         description: Option<String>,
-        /// Industry opendata ids to attach, comma-separated, e.g.
-        /// `research/academic,financial/markets`. See `industry list`.
+        /// Opendata ids to attach, comma-separated, e.g.
+        /// `research/academic,financial/markets`. See `opendata list`.
         #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
-        industry_ids: Option<IdList>,
+        opendata_ids: Option<IdList>,
     },
     /// Get a single project by id.
     Get {
@@ -73,7 +73,7 @@ pub enum ProjectCommand {
         #[arg(long)]
         by_custom_id: bool,
     },
-    /// Update a project's name, description, or industries.
+    /// Update a project's name, description, or opendata.
     ///
     /// Only the flags you pass are sent; omitted fields are left unchanged.
     Update {
@@ -90,13 +90,13 @@ pub enum ProjectCommand {
         /// New description.
         #[arg(long)]
         description: Option<String>,
-        /// New industry opendata ids, comma-separated. REPLACES the attached
-        /// set — list every industry you want to keep.
-        #[arg(long, value_name = "IDS", value_parser = parse_id_list, conflicts_with = "clear_industries")]
-        industry_ids: Option<IdList>,
-        /// Detach every industry from the project.
+        /// New opendata ids, comma-separated. REPLACES the attached set — list
+        /// every opendata you want to keep.
+        #[arg(long, value_name = "IDS", value_parser = parse_id_list, conflicts_with = "clear_opendata")]
+        opendata_ids: Option<IdList>,
+        /// Detach every opendata from the project.
         #[arg(long)]
-        clear_industries: bool,
+        clear_opendata: bool,
     },
     /// Permanently delete a project.
     ///
@@ -180,7 +180,7 @@ pub fn run(
             name,
             custom_id,
             description,
-            industry_ids,
+            opendata_ids,
         } => {
             let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = create_project(
@@ -190,7 +190,7 @@ pub fn run(
                     name,
                     custom_id,
                     description,
-                    industry_ids: industry_ids.map(|list| list.0),
+                    opendata_ids: opendata_ids.map(|list| list.0),
                 },
             )
             .context("create project")?;
@@ -215,15 +215,15 @@ pub fn run(
             id,
             name,
             description,
-            industry_ids,
-            clear_industries,
+            opendata_ids,
+            clear_opendata,
         } => {
             let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
-            // `--clear-industries` sends an empty list, which the API reads as
+            // `--clear-opendata` sends an empty list, which the API reads as
             // "detach all"; leaving both flags out sends nothing and keeps them.
-            let industry_ids = match industry_ids {
+            let opendata_ids = match opendata_ids {
                 Some(list) => Some(list.0),
-                None => clear_industries.then(Vec::new),
+                None => clear_opendata.then(Vec::new),
             };
             let data = update_project(
                 &client,
@@ -232,7 +232,7 @@ pub fn run(
                 &UpdateProjectRequest {
                     name,
                     description,
-                    industry_ids,
+                    opendata_ids,
                 },
             )
             .context("update project")?;

@@ -22,11 +22,12 @@ pub struct UpdateProjectRequest {
     /// New description, when changing it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Replacement industry opendata ids. **Replaces** the attached set rather
-    /// than merging into it; `Some(vec![])` detaches every industry, and `None`
+    /// Replacement opendata ids. **Replaces** the attached set rather than
+    /// merging into it; `Some(vec![])` detaches every opendata, and `None`
     /// leaves them as they are (measured against production 2026-10-09).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub industry_ids: Option<Vec<String>>,
+    /// Sent as `industry_ids`.
+    #[serde(rename = "industry_ids", skip_serializing_if = "Option::is_none")]
+    pub opendata_ids: Option<Vec<String>>,
 }
 
 /// Update the mutable fields of a project.
@@ -75,9 +76,9 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_industry_list_is_sent_because_it_detaches_every_industry() {
+    fn an_empty_opendata_list_is_sent_because_it_detaches_every_opendata() {
         let body = serde_json::to_string(&UpdateProjectRequest {
-            industry_ids: Some(Vec::new()),
+            opendata_ids: Some(Vec::new()),
             ..UpdateProjectRequest::default()
         })
         .expect("serialize");

@@ -39,7 +39,6 @@ fn db_alias_resolves() {
         "--name",
         "--instruction",
         "--instruction-file",
-        "--analysis-model",
     ] {
         assert!(stdout.contains(flag), "missing {flag}: {stdout}");
     }
@@ -53,20 +52,6 @@ fn local_mistakes_are_reported_before_credentials() {
         (
             vec!["project", "database", "update", "--project", "p", "db-1"],
             "nothing to update",
-        ),
-        (
-            vec![
-                "project",
-                "database",
-                "update",
-                "--project",
-                "p",
-                "db-1",
-                "--analysis-model",
-                "am-1",
-                "--clear-analysis-model",
-            ],
-            "cannot be used with",
         ),
         (
             vec![

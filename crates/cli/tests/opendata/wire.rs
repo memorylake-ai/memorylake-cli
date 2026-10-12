@@ -1,9 +1,9 @@
-//! Wire-level `industry` and `project --industry-ids` tests against a stub.
+//! Wire-level `opendata` and `project --opendata-ids` tests against a stub.
 
 use crate::common::assert_success;
 use crate::common::stub::{exchange, request_body, request_line};
 
-const INDUSTRIES: &str = r#"{"success":true,"data":[{"id":"financial/markets","name":"Financial Data","description":"Prices"}]}"#;
+const OPENDATA: &str = r#"{"success":true,"data":[{"id":"financial/markets","name":"Financial Data","description":"Prices"}]}"#;
 const ONE_PROJECT: &str = r#"{"success":true,"data":{"id":"proj-1","name":"P","industries":[]}}"#;
 
 fn body_json(request: &str) -> serde_json::Value {
@@ -13,8 +13,8 @@ fn body_json(request: &str) -> serde_json::Value {
 
 #[test]
 fn list_calls_the_v1_endpoint_and_prints_the_array() {
-    let (request, output) = exchange(INDUSTRIES, &["industry", "list"]);
-    let stdout = assert_success(&output, &["industry", "list"]);
+    let (request, output) = exchange(OPENDATA, &["opendata", "list"]);
+    let stdout = assert_success(&output, &["opendata", "list"]);
     assert_eq!(
         request_line(&request),
         "GET /api/v1/industry-opendata HTTP/1.1"
@@ -24,7 +24,7 @@ fn list_calls_the_v1_endpoint_and_prints_the_array() {
 }
 
 #[test]
-fn project_create_sends_industry_ids_as_an_array() {
+fn project_create_sends_opendata_ids_as_an_array() {
     let (request, output) = exchange(
         ONE_PROJECT,
         &[
@@ -36,11 +36,11 @@ fn project_create_sends_industry_ids_as_an_array() {
             "P",
             "--custom-id",
             "p-1",
-            "--industry-ids",
+            "--opendata-ids",
             "research/academic, financial/markets",
         ],
     );
-    assert_success(&output, &["project", "create", "--industry-ids"]);
+    let stdout = assert_success(&output, &["project", "create", "--opendata-ids"]);
     assert_eq!(
         body_json(&request),
         serde_json::json!({
@@ -49,10 +49,14 @@ fn project_create_sends_industry_ids_as_an_array() {
             "industry_ids": ["research/academic", "financial/markets"]
         })
     );
+    // The server's `industries` is printed under the CLI's name for it.
+    let printed: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert!(printed["opendata"].is_array(), "{stdout}");
+    assert!(printed.get("industries").is_none(), "{stdout}");
 }
 
 #[test]
-fn project_create_omits_industry_ids_when_not_given() {
+fn project_create_omits_opendata_ids_when_not_given() {
     let (request, _) = exchange(
         ONE_PROJECT,
         &[
@@ -73,7 +77,7 @@ fn project_create_omits_industry_ids_when_not_given() {
 }
 
 #[test]
-fn project_update_replaces_industry_ids() {
+fn project_update_replaces_opendata_ids() {
     let (request, output) = exchange(
         ONE_PROJECT,
         &[
@@ -82,11 +86,11 @@ fn project_update_replaces_industry_ids() {
             "--workspace",
             "ws-1",
             "proj-1",
-            "--industry-ids",
+            "--opendata-ids",
             "clinical/trials",
         ],
     );
-    assert_success(&output, &["project", "update", "--industry-ids"]);
+    assert_success(&output, &["project", "update", "--opendata-ids"]);
     assert_eq!(
         request_line(&request),
         "PATCH /api/v3/workspaces/ws-1/projects/proj-1 HTTP/1.1"
@@ -98,7 +102,7 @@ fn project_update_replaces_industry_ids() {
 }
 
 #[test]
-fn project_update_clear_industries_sends_an_empty_list() {
+fn project_update_clear_opendata_sends_an_empty_list() {
     let (request, output) = exchange(
         ONE_PROJECT,
         &[
@@ -107,15 +111,15 @@ fn project_update_clear_industries_sends_an_empty_list() {
             "--workspace",
             "ws-1",
             "proj-1",
-            "--clear-industries",
+            "--clear-opendata",
         ],
     );
-    assert_success(&output, &["project", "update", "--clear-industries"]);
+    assert_success(&output, &["project", "update", "--clear-opendata"]);
     assert_eq!(body_json(&request), serde_json::json!({"industry_ids": []}));
 }
 
 #[test]
-fn project_update_without_industry_flags_leaves_them_alone() {
+fn project_update_without_opendata_flags_leaves_them_alone() {
     let (request, _) = exchange(
         ONE_PROJECT,
         &[

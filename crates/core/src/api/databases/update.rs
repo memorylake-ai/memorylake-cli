@@ -21,20 +21,16 @@ pub struct UpdateDatabaseMemoryRequest {
     /// New instruction, replacing the stored one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
-    /// Analysis model binding: `Some(id)` binds one, `Some("")` removes the
-    /// binding, `None` leaves it as it is.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analysis_model_id: Option<String>,
 }
 
 impl UpdateDatabaseMemoryRequest {
     /// Whether the request would change nothing at all.
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.instruction.is_none() && self.analysis_model_id.is_none()
+        self.name.is_none() && self.instruction.is_none()
     }
 }
 
-/// Update a database memory's name, instruction, or analysis model binding.
+/// Update a database memory's name or instruction.
 pub fn update_database_memory(
     client: &Client,
     workspace_id: &str,
@@ -63,23 +59,11 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_analysis_model_id_removes_the_binding() {
-        // The API's documented way to unbind; it must reach the wire as "",
-        // not be dropped as though it were unset.
-        let body = serde_json::to_string(&UpdateDatabaseMemoryRequest {
-            analysis_model_id: Some(String::new()),
-            ..Default::default()
-        })
-        .unwrap();
-        assert_eq!(body, r#"{"analysis_model_id":""}"#);
-    }
-
-    #[test]
     fn only_the_default_request_is_empty() {
         assert!(UpdateDatabaseMemoryRequest::default().is_empty());
         assert!(
             !UpdateDatabaseMemoryRequest {
-                analysis_model_id: Some(String::new()),
+                instruction: Some(String::new()),
                 ..Default::default()
             }
             .is_empty()

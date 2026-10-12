@@ -33,9 +33,6 @@ pub struct DatabaseMemory {
     /// Datasource this memory reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_datasource_id: Option<String>,
-    /// Analysis model bound to this memory; absent when none is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub analysis_model_id: Option<String>,
     /// Creation timestamp (ISO 8601).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
@@ -63,7 +60,6 @@ mod tests {
                 "external_id": "legacy-1",
                 "project_id": "proj-a1b2c3d4",
                 "db_datasource_id": "ds-1",
-                "analysis_model_id": "am-1",
                 "created_at": "2026-04-01T00:00:00Z",
                 "created_by": "user::1"
             }"#,
