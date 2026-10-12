@@ -528,3 +528,142 @@ fn a_stale_etag_surfaces_the_servers_412() {
     let err = assert_failure(&output, &args);
     assert!(err.contains("read it again"), "{err}");
 }
+
+#[test]
+fn role_get_reads_one_role() {
+    let args = ["role", "get", "tenant_custom_1"];
+    let (request, output) = exchange(ROLE, &args);
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "GET /admin/v1/roles/tenant_custom_1 HTTP/1.1"
+    );
+}
+
+#[test]
+fn role_scope_set_puts_the_entries_with_the_reason() {
+    let scope = r#"{"success":true,"data":{"role_key":"tenant_custom_1","scopes":[]}}"#;
+    let args = [
+        "role",
+        "scope",
+        "set",
+        "tenant_custom_1",
+        "--scopes",
+        WORKSPACE_SCOPE,
+        "--reason",
+        "contractors",
+        "--if-match",
+        "\"v3\"",
+    ];
+    let (request, output) = exchange(scope, &args);
+    assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "PUT /admin/v1/roles/tenant_custom_1/access-scope HTTP/1.1"
+    );
+    assert_eq!(
+        request_body(&request),
+        r#"{"reason":"contractors","scopes":[{"resource_type":"memorylake:workspace","mode":"instances","instances":[{"id":"ws-1"}]}]}"#
+    );
+    assert_eq!(request_header(&request, "if-match"), Some("\"v3\""));
+}
+
+#[test]
+fn member_scope_get_prints_the_etag() {
+    let args = ["member", "scope", "get", "prin-1"];
+    let (request, output) =
+        exchange_with_response_headers(MEMBER_SCOPE, &[("ETag", "\"m1\"")], &args);
+    assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "GET /admin/v1/members/prin-1/access-scope HTTP/1.1"
+    );
+    assert!(
+        stderr(&output).contains(r#"ETag: "m1""#),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn access_group_list_pages_through_the_groups() {
+    let args = [
+        "access-group",
+        "list",
+        "--page-size",
+        "10",
+        "--continuation-token",
+        "tok",
+    ];
+    let (request, output) = exchange(EMPTY_PAGE, &args);
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "GET /admin/v1/access-groups?page_size=10&continuation_token=tok HTTP/1.1"
+    );
+}
+
+#[test]
+fn access_group_update_patches_only_the_given_fields() {
+    let args = [
+        "ag",
+        "update",
+        "g-1",
+        "--description",
+        "",
+        "--idempotency-key",
+        "idem-ag-1",
+    ];
+    let (request, output) = exchange(GROUP, &args);
+    assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "PATCH /admin/v1/access-groups/g-1 HTTP/1.1"
+    );
+    assert_eq!(request_body(&request), r#"{"description":""}"#);
+    assert_eq!(
+        request_header(&request, "idempotency-key"),
+        Some("idem-ag-1")
+    );
+}
+
+#[test]
+fn access_group_delete_deletes_and_confirms() {
+    let args = ["ag", "delete", "g-1"];
+    let (request, output) = exchange(EMPTY_DATA, &args);
+    let stdout = assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&request),
+        "DELETE /admin/v1/access-groups/g-1 HTTP/1.1"
+    );
+    assert!(stdout.contains("deleted"), "{stdout}");
+}
+
+#[test]
+fn access_group_member_list_and_scope_get_read_their_endpoints() {
+    let args = ["ag", "member", "list", "g-1", "--page-size", "5"];
+    let (request, output) = exchange(EMPTY_PAGE, &args);
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "GET /admin/v1/access-groups/g-1/members?page_size=5 HTTP/1.1"
+    );
+
+    let args = ["ag", "scope", "get", "g-1"];
+    let (request, output) =
+        exchange_with_response_headers(GROUP_SCOPE, &[("ETag", "\"s1\"")], &args);
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "GET /admin/v1/access-groups/g-1/access-scope HTTP/1.1"
+    );
+    assert!(
+        stderr(&output).contains(r#"ETag: "s1""#),
+        "{}",
+        stderr(&output)
+    );
+}
