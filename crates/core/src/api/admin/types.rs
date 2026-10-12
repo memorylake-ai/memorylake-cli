@@ -18,33 +18,6 @@ pub struct Page<T> {
     pub continuation_token: Option<String>,
 }
 
-/// Query parameters shared by the API-key and member list endpoints.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ListParams {
-    /// Page size (server default 20, maximum 100).
-    pub page_size: Option<u32>,
-    /// Continuation token from a previous page.
-    pub continuation_token: Option<String>,
-    /// Case-insensitive substring filter on the name. Sent as `name_fuzzy`.
-    pub name_fuzzy: Option<String>,
-}
-
-impl ListParams {
-    /// Render these parameters as a query string, `name_fuzzy` included.
-    pub(super) fn to_query(&self) -> Vec<(&'static str, String)> {
-        let mut query = Vec::new();
-        push_page_query(
-            &mut query,
-            self.page_size,
-            self.continuation_token.as_deref(),
-        );
-        if let Some(name_fuzzy) = &self.name_fuzzy {
-            query.push(("name_fuzzy", name_fuzzy.clone()));
-        }
-        query
-    }
-}
-
 /// Append the pagination parameters every list endpoint shares.
 pub(super) fn push_page_query(
     query: &mut Vec<(&'static str, String)>,
@@ -56,6 +29,30 @@ pub(super) fn push_page_query(
     }
     if let Some(token) = continuation_token {
         query.push(("continuation_token", token.to_string()));
+    }
+}
+
+/// Append `name=value` when a value is given.
+pub(super) fn push_opt<T: ToString>(
+    query: &mut Vec<(&'static str, String)>,
+    name: &'static str,
+    value: Option<&T>,
+) {
+    if let Some(value) = value {
+        query.push((name, value.to_string()));
+    }
+}
+
+/// Append `name=value` once per value: the management API's repeatable
+/// filters (`email=a&email=b`) take several values this way, not as a
+/// comma-separated list.
+pub(super) fn push_each(
+    query: &mut Vec<(&'static str, String)>,
+    name: &'static str,
+    values: &[String],
+) {
+    for value in values {
+        query.push((name, value.clone()));
     }
 }
 
@@ -88,8 +85,30 @@ pub struct ApiKey {
     pub name: String,
     /// First 8 characters of the key body.
     pub key_prefix: String,
+    /// Last 4 characters of the key, to match a key someone holds. Absent for
+    /// keys whose plaintext is not retained.
+    #[serde(default)]
+    pub key_suffix: Option<String>,
     /// `enabled`, `disabled`, or `expired`.
     pub status: String,
+    /// The member this key acts as: its requests carry that member's
+    /// permissions and usage is attributed to them.
+    #[serde(default)]
+    pub owner: Option<ApiKeyOwner>,
+    /// Client IPs or CIDR ranges the key may be used from. Empty means no
+    /// restriction.
+    #[serde(default)]
+    pub allowed_ips: Vec<String>,
+    /// Model-routing group. Absent means the owner's own group.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Fallback model-routing group. Absent means none.
+    #[serde(default)]
+    pub backup_group: Option<String>,
+    /// true for keys the platform created for its own use (the console
+    /// playground, for example).
+    #[serde(default)]
+    pub is_system: bool,
     /// Creation time, Unix seconds.
     pub created_at: i64,
     /// Expiry time, Unix seconds. Absent when the key never expires.
@@ -99,6 +118,17 @@ pub struct ApiKey {
     /// updates, so it can lag real usage by up to an hour.
     #[serde(default)]
     pub last_used_at: Option<i64>,
+}
+
+/// The member an API key acts as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKeyOwner {
+    /// The member's `principal_id`.
+    pub principal_id: String,
+    /// The member's display name.
+    pub display_name: String,
+    /// `human` or `virtual`, as on [`Member::member_type`].
+    pub member_type: String,
 }
 
 /// The one response shape that carries a full API key. Shown exactly once by
@@ -111,6 +141,9 @@ pub struct ApiKeyCreated {
     pub name: String,
     /// First 8 characters of the key body.
     pub key_prefix: String,
+    /// Last 4 characters of the key.
+    #[serde(default)]
+    pub key_suffix: Option<String>,
     /// The full API key, including the `sk-` prefix. An idempotent replay
     /// omits it — the secret is only ever sent on the live first response.
     #[serde(default)]
@@ -181,6 +214,10 @@ pub struct Invitation {
 /// aggregate over the requested period. They answer different questions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    /// Whose consumption the figures cover: `team` (the caller may view the
+    /// whole team's usage) or `self` (only the caller's own, API keys
+    /// included).
+    pub scope: String,
     /// The period the totals cover.
     pub period: UsagePeriod,
     /// Account-level quota snapshot — not scoped to the period.
@@ -190,6 +227,14 @@ pub struct Usage {
     /// Per-model breakdown over the period.
     #[serde(default)]
     pub by_model: Vec<UsageByModel>,
+    /// Per-member breakdown, largest consumer first. Only when grouped by
+    /// member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_member: Option<Vec<UsageByMember>>,
+    /// One entry per day, oldest first, idle days included as zeros. Only
+    /// when a daily series was asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buckets: Option<Vec<UsageBucket>>,
 }
 
 /// First and last day a usage report covers.
@@ -199,6 +244,8 @@ pub struct UsagePeriod {
     pub start_date: String,
     /// Last day included, `YYYY-MM-DD`.
     pub end_date: String,
+    /// IANA timezone the days are cut in.
+    pub timezone: String,
 }
 
 /// Account-level quota snapshot.
@@ -219,6 +266,10 @@ pub struct UsageTotals {
     pub prompt_tokens: i64,
     /// Completion tokens produced.
     pub completion_tokens: i64,
+    /// Consumption charged against the balance, in tokens — the unit of
+    /// `quota.available_tokens`. Covers platform operations too, which carry
+    /// no prompt or completion tokens.
+    pub used_tokens: i64,
 }
 
 /// One model's (or platform metering operation's) consumption over a period.
@@ -233,4 +284,153 @@ pub struct UsageByModel {
     pub prompt_tokens: i64,
     /// Completion tokens produced.
     pub completion_tokens: i64,
+    /// Consumption charged against the balance, in tokens.
+    pub used_tokens: i64,
+}
+
+/// One member's consumption over a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageByMember {
+    /// The member's `principal_id`. Includes people who have since left.
+    pub principal_id: String,
+    /// The member's display name; may be empty for callers who are not
+    /// owners or admins.
+    pub display_name: String,
+    /// Number of requests.
+    pub requests: i64,
+    /// Prompt tokens consumed.
+    pub prompt_tokens: i64,
+    /// Completion tokens produced.
+    pub completion_tokens: i64,
+    /// Consumption charged against the balance, in tokens.
+    pub used_tokens: i64,
+}
+
+/// One day of a usage report's daily series.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageBucket {
+    /// The day, `YYYY-MM-DD`, in the period's timezone.
+    pub date: String,
+    /// Bucket start, Unix seconds (inclusive).
+    pub start_time: i64,
+    /// Bucket end, Unix seconds (exclusive).
+    pub end_time: i64,
+    /// Number of requests.
+    pub requests: i64,
+    /// Prompt tokens consumed.
+    pub prompt_tokens: i64,
+    /// Completion tokens produced.
+    pub completion_tokens: i64,
+    /// Consumption charged against the balance, in tokens.
+    pub used_tokens: i64,
+    /// This day's per-model breakdown, when grouped by model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_model: Option<Vec<UsageByModel>>,
+    /// This day's per-member breakdown, when grouped by member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_member: Option<Vec<UsageByMember>>,
+}
+
+/// Consumption today, over the trailing 7 days, and month to date.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageSummary {
+    /// `team` or `self`, as on [`Usage::scope`].
+    pub scope: String,
+    /// IANA timezone the days are cut in.
+    pub timezone: String,
+    /// Today.
+    pub today: UsageSummaryWindow,
+    /// The trailing 7 days, today included.
+    pub last_7_days: UsageSummaryWindow,
+    /// From the first of the current month through today.
+    pub month_to_date: UsageSummaryWindow,
+}
+
+/// One window of a [`UsageSummary`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageSummaryWindow {
+    /// First day included, `YYYY-MM-DD`.
+    pub start_date: String,
+    /// Last day included, `YYYY-MM-DD`.
+    pub end_date: String,
+    /// Number of requests.
+    pub requests: i64,
+    /// Prompt tokens consumed.
+    pub prompt_tokens: i64,
+    /// Completion tokens produced.
+    pub completion_tokens: i64,
+    /// Consumption charged against the balance, in tokens.
+    pub used_tokens: i64,
+}
+
+/// One billed model request or platform operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageRecord {
+    /// Record id.
+    pub id: String,
+    /// When the consumption was recorded, Unix seconds.
+    pub created_at: i64,
+    /// `model_call` or `platform_task`.
+    pub kind: String,
+    /// Model name, or the platform operation.
+    pub model: String,
+    /// The member the consumption is attributed to, when the record names
+    /// one.
+    #[serde(default)]
+    pub member: Option<UsageRecordMember>,
+    /// Prompt (input) tokens.
+    pub prompt_tokens: i64,
+    /// Completion (output) tokens.
+    pub completion_tokens: i64,
+    /// Consumption charged against the balance, in tokens.
+    pub used_tokens: i64,
+    /// Request id, when one was recorded.
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// Trace id, when one was recorded.
+    #[serde(default)]
+    pub trace_id: Option<String>,
+}
+
+/// The member a [`UsageRecord`] is attributed to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageRecordMember {
+    /// The member's `principal_id`.
+    pub principal_id: String,
+    /// The member's display name.
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+/// A team just created, with its owner key when one was asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedTeam {
+    /// The new team.
+    pub team: Team,
+    /// Owner API key for the new team, shown exactly once. Present only when
+    /// one was asked for; an idempotent replay omits its secret.
+    #[serde(default)]
+    pub api_key: Option<ApiKeyCreated>,
+}
+
+/// Outcome of deleting the team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletedTeam {
+    /// The deleted team's id.
+    pub tenant_id: String,
+    /// Deletion time, Unix seconds.
+    pub dissolved_at: i64,
+    /// true when a paid subscription was cancelled first.
+    pub subscription_canceled: bool,
+}
+
+/// Outcome of handing the team to a new owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnershipTransfer {
+    /// The team's id.
+    pub tenant_id: String,
+    /// The owner before the transfer, now an admin.
+    pub previous_owner_principal_id: String,
+    /// The new owner.
+    pub new_owner_principal_id: String,
 }

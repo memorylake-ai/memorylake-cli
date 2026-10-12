@@ -3,8 +3,8 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use memorylake_core::api::admin::{
-    CreateInvitationRequest, ListInvitationsParams, create_invitation, list_invitations,
-    revoke_invitation,
+    CreateInvitationRequest, ListInvitationsParams, create_invitation, get_invitation,
+    list_invitations, revoke_invitation,
 };
 
 use super::{api_client, print_json};
@@ -35,9 +35,19 @@ pub enum InvitationCommand {
         /// Continuation token from a previous response.
         #[arg(long)]
         continuation_token: Option<String>,
-        /// Only this state: pending, accepted, rejected, expired, revoked.
-        #[arg(long)]
+        /// Only this state.
+        #[arg(long, value_parser = ["pending", "accepted", "rejected", "expired", "revoked"])]
         status: Option<String>,
+        /// Only invitations for this address (case-insensitive). Repeat, or
+        /// separate with commas, to check several at once.
+        #[arg(long = "email", value_delimiter = ',')]
+        emails: Vec<String>,
+    },
+    /// Get one invitation. A pending invitation past its deadline reads as
+    /// expired.
+    Get {
+        /// Invitation id.
+        id: String,
     },
     /// Revoke a pending invitation; its email link stops working.
     Revoke {
@@ -75,6 +85,7 @@ pub fn run(
             page_size,
             continuation_token,
             status,
+            emails,
         } => {
             let data = list_invitations(
                 &client,
@@ -82,9 +93,14 @@ pub fn run(
                     page_size,
                     continuation_token,
                     status,
+                    emails,
                 },
             )
             .context("list invitations")?;
+            print_json(&data)
+        }
+        InvitationCommand::Get { id } => {
+            let data = get_invitation(&client, &id).context("get invitation")?;
             print_json(&data)
         }
         InvitationCommand::Revoke {

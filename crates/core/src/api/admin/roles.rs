@@ -35,7 +35,12 @@ pub struct Role {
     pub assignable: bool,
     /// When true, only a caller whose own role is owner or admin may grant it.
     pub admin_grant_only: bool,
-    /// For custom roles: the role its policies were copied from at creation.
+    /// For custom roles: the role whose permission rules were copied into
+    /// this one at creation. Absent on built-ins and on custom roles created
+    /// without a base.
+    #[serde(default)]
+    pub base_role_key: Option<String>,
+    /// Same value as `base_role_key`; the server keeps it for older clients.
     #[serde(default)]
     pub parent_role_key: Option<String>,
 }

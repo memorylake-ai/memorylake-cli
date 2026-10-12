@@ -2,16 +2,20 @@
 //!
 //! All of them are fixed except for one trailing id segment, which is
 //! percent-encoded because key ids, principal ids, and invitation ids are
-//! caller-supplied strings on revoke/update calls.
+//! caller-supplied strings on get/revoke/update calls.
 
 use crate::api::path::encode_segment;
 
 pub(super) const TEAM: &str = "/admin/v1/team";
+pub(super) const TEAM_TRANSFER_OWNERSHIP: &str = "/admin/v1/team/transfer-ownership";
+pub(super) const TEAMS: &str = "/admin/v1/teams";
 pub(super) const API_KEYS: &str = "/admin/v1/api-keys";
 pub(super) const MEMBERS: &str = "/admin/v1/members";
 pub(super) const INVITATIONS: &str = "/admin/v1/invitations";
 pub(super) const ROLES: &str = "/admin/v1/roles";
 pub(super) const USAGE: &str = "/admin/v1/usage";
+pub(super) const USAGE_SUMMARY: &str = "/admin/v1/usage/summary";
+pub(super) const USAGE_RECORDS: &str = "/admin/v1/usage/records";
 
 pub(super) fn api_key(id: &str) -> String {
     format!("{API_KEYS}/{}", encode_segment(id))
