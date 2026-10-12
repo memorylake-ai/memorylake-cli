@@ -285,7 +285,7 @@ fn a_key_works_until_rotated_away_and_dies_on_revoke() {
     // Revoke: the id is gone and the material no longer authenticates.
     let revoke_args = ["api-key", "revoke", id.as_str()];
     let stdout = assert_success(&run(&home, &revoke_args), &revoke_args);
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
     assert_failure(&run(&home, &get_args), &get_args);
     assert_key_rejected(&second_key);
 
@@ -451,7 +451,7 @@ fn a_virtual_members_key_acts_as_that_member() {
     // what's tested.
     let remove_args = ["member", "remove", principal_id.as_str()];
     let stdout = assert_success(&run(&home, &remove_args), &remove_args);
-    assert!(stdout.contains("removed"), "{stdout}");
+    assert!(stdout.contains("Removed"), "{stdout}");
     assert_key_rejected(&vm_key);
 
     let stdout = assert_success(&run(&home, &list_args), &list_args);
@@ -670,7 +670,7 @@ fn an_invitation_is_created_pending_and_dies_on_revoke() {
     // …revoke kills it, and the state filters agree.
     let revoke_args = ["invitation", "revoke", id.as_str()];
     let stdout = assert_success(&run(&home, &revoke_args), &revoke_args);
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
     let stdout = assert_success(&run(&home, &list_args), &list_args);
     assert!(
         !stdout.contains(&id),
@@ -886,6 +886,41 @@ fn a_created_team_dies_by_its_own_key() {
     // the creating key's own team is untouched.
     let team_home = temp_home();
     assert_success(&login(&team_home, &team_key, "lab"), &["login lab"]);
+
+    // Ownership can only go to another human member, which a test team
+    // never has; what can be proven is that the endpoint is reached and
+    // refuses a virtual member, after the local --confirm check passed.
+    let wrong = [
+        "team",
+        "transfer-ownership",
+        "--to",
+        "prin-mlcli-none",
+        "--confirm",
+        own_team.as_str(),
+    ];
+    let err = assert_failure(&run(&team_home, &wrong), &wrong);
+    assert!(err.contains("does not match"), "{err}");
+    let args = [
+        "member",
+        "create",
+        "--name",
+        "mlcli bot",
+        "--role",
+        "tenant_member",
+    ];
+    let bot = parse(&assert_success(&run(&team_home, &args), &args), "member");
+    let bot_id = str_field(&bot, "principal_id");
+    let args = [
+        "team",
+        "transfer-ownership",
+        "--to",
+        bot_id.as_str(),
+        "--confirm",
+        team_id.as_str(),
+    ];
+    let err = assert_failure(&run(&team_home, &args), &args);
+    assert!(err.contains("human member"), "{err}");
+
     let wrong = ["team", "delete", "--confirm", own_team.as_str()];
     let err = assert_failure(&run(&team_home, &wrong), &wrong);
     assert!(err.contains("does not match"), "{err}");

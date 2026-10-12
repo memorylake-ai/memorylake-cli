@@ -76,7 +76,8 @@ pub use types::{
     UsageQuota, UsageRecord, UsageRecordMember, UsageSummary, UsageSummaryWindow, UsageTotals,
 };
 pub use usage::{
-    GetUsageParams, ListUsageRecordsParams, get_usage, get_usage_summary, list_usage_records,
+    GetUsageParams, ListUsageRecordsParams, MAX_USAGE_WINDOW_DAYS, get_usage, get_usage_summary,
+    list_usage_records,
 };
 
 /// Header that makes a retried write replay its first result.

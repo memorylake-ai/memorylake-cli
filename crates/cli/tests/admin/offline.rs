@@ -86,6 +86,61 @@ fn bad_input_is_rejected_locally_before_credentials_are_needed() {
             vec!["team", "transfer-ownership", "--to", "prin-2"],
             "--confirm",
         ),
+        // Pages are 1-100 on every management list.
+        (vec!["api-key", "list", "--page-size", "0"], "invalid value"),
+        (
+            vec!["member", "list", "--page-size", "101"],
+            "invalid value",
+        ),
+        (
+            vec!["invitation", "list", "--page-size", "0"],
+            "invalid value",
+        ),
+        (
+            vec!["usage", "records", "--page-size", "101"],
+            "invalid value",
+        ),
+        // An empty id would address the collection instead of an item.
+        (vec!["api-key", "revoke", ""], "must not be empty"),
+        (vec!["member", "remove", " "], "must not be empty"),
+        (vec!["invitation", "get", ""], "must not be empty"),
+        (
+            vec!["member", "set-role", "prin-1", "--role", ""],
+            "must not be empty",
+        ),
+        (
+            vec!["api-key", "rotate", "42", "--idempotency-key", ""],
+            "must not be empty",
+        ),
+        (vec!["team", "rename", "--name", ""], "must not be empty"),
+        // A create expiry of 0 would be a key that is already expired.
+        (
+            vec!["api-key", "create", "--name", "k", "--expires-at", "0"],
+            "invalid value",
+        ),
+        (vec!["usage", "--start-date", "2026-13-01"], "YYYY-MM-DD"),
+        (
+            vec![
+                "usage",
+                "records",
+                "--start-time",
+                "1000",
+                "--end-time",
+                "1000",
+            ],
+            "must be before",
+        ),
+        (
+            vec![
+                "usage",
+                "records",
+                "--start-time",
+                "1",
+                "--end-time",
+                "8000000",
+            ],
+            "92 days",
+        ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);
         assert!(err.contains(expected), "{args:?}: {err}");

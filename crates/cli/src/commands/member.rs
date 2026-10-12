@@ -9,15 +9,15 @@ use memorylake_core::api::admin::{
 };
 
 use super::scope_input::ScopeSetArgs;
-use super::{api_client, print_json, print_json_with_etag};
+use super::{api_client, parse_non_blank, print_json, print_json_with_etag};
 
 /// Member subcommands.
 #[derive(Debug, Subcommand)]
 pub enum MemberCommand {
     /// List the team roster. Contact details appear only for owners/admins.
     List {
-        /// Number of items per page.
-        #[arg(long)]
+        /// Number of items per page (1-100).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         page_size: Option<u32>,
         /// Continuation token from a previous response.
         #[arg(long)]
@@ -27,7 +27,7 @@ pub enum MemberCommand {
         #[arg(long = "name")]
         name_fuzzy: Option<String>,
         /// Only members holding this role key (tenant_owner, tenant_admin,
-        /// tenant_member, or a custom role key).
+        /// tenant_member, or a custom role key from `role list`).
         #[arg(long)]
         role: Option<String>,
         /// Only members with this email address (exact, case-insensitive).
@@ -42,19 +42,21 @@ pub enum MemberCommand {
     /// Get one member by principal id.
     Get {
         /// Member principal id (from `member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
     },
     /// Create a virtual member: a login-less identity that acts only through
     /// API keys issued for it (`api-key create --member`).
     Create {
         /// Display name of the virtual member.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         name: String,
-        /// Role: tenant_admin, tenant_member, or a custom role key.
-        #[arg(long)]
+        /// Role: tenant_admin, tenant_member, or a custom role key from `role
+        /// list`.
+        #[arg(long, value_parser = parse_non_blank)]
         role: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Change a member's role and/or usage cap. Only the flags given change.
@@ -62,35 +64,42 @@ pub enum MemberCommand {
     /// your own can be changed.
     Update {
         /// Member principal id (from `member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
-        /// New role: tenant_admin, tenant_member, or a custom role key.
-        #[arg(long)]
+        /// New role: tenant_admin, tenant_member, or a custom role key from
+        /// `role list`.
+        #[arg(long, value_parser = parse_non_blank)]
         role: Option<String>,
         /// Per-member usage cap in tokens; 0 removes the cap.
         #[arg(long, value_parser = clap::value_parser!(i64).range(0..=MAX_MEMBER_TOKENS))]
         max_tokens: Option<i64>,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Change a member's role. Shorthand for `member update --role`.
     SetRole {
         /// Member principal id (from `member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
-        /// New role: tenant_admin, tenant_member, or a custom role key.
-        #[arg(long)]
+        /// New role: tenant_admin, tenant_member, or a custom role key from
+        /// `role list`.
+        #[arg(long, value_parser = parse_non_blank)]
         role: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Remove a member. Their API keys in this team are disabled, not
-    /// deleted. The owner cannot be removed; neither can yourself.
+    /// deleted. The owner cannot be removed; neither can yourself. There is
+    /// no confirmation prompt.
+    #[command(visible_alias = "delete")]
     Remove {
         /// Member principal id (from `member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Explain what a member can do and where each permission comes from:
@@ -177,7 +186,8 @@ pub fn run(
             print_json(&data)
         }
         MemberCommand::Get { principal_id } => {
-            let data = get_member(&client, &principal_id).context("get member")?;
+            let data = get_member(&client, &principal_id)
+                .with_context(|| format!("get member `{principal_id}`"))?;
             print_json(&data)
         }
         MemberCommand::Create {
@@ -208,7 +218,7 @@ pub fn run(
                 &UpdateMemberRequest { role, max_tokens },
                 idempotency_key.as_deref(),
             )
-            .context("update member")?;
+            .with_context(|| format!("update member `{principal_id}`"))?;
             // The endpoint answers with no payload; show the member as it
             // now stands rather than echoing what was asked for.
             let data = get_member(&client, &principal_id).context("read the updated member")?;
@@ -228,17 +238,19 @@ pub fn run(
                 },
                 idempotency_key.as_deref(),
             )
-            .context("change member role")?;
-            println!("member {principal_id} now has role {role}");
-            Ok(())
+            .with_context(|| format!("change the role of member `{principal_id}`"))?;
+            // Same output as `member update --role`: the member as it now
+            // stands.
+            let data = get_member(&client, &principal_id).context("read the updated member")?;
+            print_json(&data)
         }
         MemberCommand::Remove {
             principal_id,
             idempotency_key,
         } => {
             remove_member(&client, &principal_id, idempotency_key.as_deref())
-                .context("remove member")?;
-            println!("member {principal_id} removed");
+                .with_context(|| format!("remove member `{principal_id}`"))?;
+            println!("Removed member `{principal_id}`");
             Ok(())
         }
         MemberCommand::Explain { principal_id } => {
