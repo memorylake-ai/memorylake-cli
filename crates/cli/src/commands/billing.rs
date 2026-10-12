@@ -18,7 +18,7 @@ use memorylake_core::api::admin::{
     set_billing_details,
 };
 
-use super::download::{SaveTo, save_download};
+use super::download::{SaveTo, file_safe, save_download};
 use super::{api_client, parse_non_blank, print_json};
 
 /// Billing subcommands.
@@ -40,10 +40,10 @@ pub enum BillingCommand {
     /// Pages carry no total: follow the continuation token until it is gone.
     Transactions {
         /// Only entries at or after this time, Unix seconds.
-        #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
         start_time: Option<i64>,
         /// Only entries before this time, Unix seconds.
-        #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
         end_time: Option<i64>,
         #[command(flatten)]
         page: PageArgs,
@@ -95,7 +95,7 @@ pub enum AlertCommand {
         #[arg(long = "recipient", value_name = "EMAIL", value_delimiter = ',', value_parser = parse_non_blank)]
         recipients: Vec<String>,
         /// Save the levels but send no alerts.
-        #[arg(long)]
+        #[arg(long, visible_alias = "disable")]
         disabled: bool,
     },
     /// Turn alerts on, keeping the saved levels and recipients.
@@ -175,7 +175,8 @@ pub enum InvoiceCommand {
     },
     /// Get one invoice.
     Get {
-        /// Invoice id.
+        /// Invoice id (from `billing invoice list`).
+        #[arg(value_parser = parse_non_blank)]
         invoice_id: String,
     },
     /// Download an invoice as PDF: the version carrying the saved buyer
@@ -183,7 +184,8 @@ pub enum InvoiceCommand {
     /// reports (or invoice-<id>.pdf) unless `--output` says otherwise; an
     /// existing file is never overwritten without `--force`.
     Pdf {
-        /// Invoice id.
+        /// Invoice id (from `billing invoice list`).
+        #[arg(value_parser = parse_non_blank)]
         invoice_id: String,
         /// Where to write it: a file path, a directory, or `-` for stdout.
         #[arg(long, short = 'o', value_name = "PATH")]
@@ -205,13 +207,15 @@ pub enum DetailsCommand {
     /// Show the buyer details. saved false means none are saved: the fields
     /// are then a suggestion from the invoiced member's profile.
     Get {
-        /// Invoice id.
+        /// Invoice id (from `billing invoice list`).
+        #[arg(value_parser = parse_non_blank)]
         invoice_id: String,
     },
     /// Replace the buyer details of a paid invoice; fields not given are
     /// cleared. The PDF then carries them.
     Set {
-        /// Invoice id.
+        /// Invoice id (from `billing invoice list`).
+        #[arg(value_parser = parse_non_blank)]
         invoice_id: String,
         /// `individual` (needs --name) or `business` (needs --company).
         #[arg(long = "type", value_parser = ["individual", "business"])]
@@ -220,10 +224,10 @@ pub enum DetailsCommand {
         #[arg(long, value_parser = parse_non_blank)]
         address: String,
         /// Person's name.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         name: Option<String>,
         /// Company name.
-        #[arg(long = "company")]
+        #[arg(long = "company", value_parser = parse_non_blank)]
         company_name: Option<String>,
         /// Tax identification number.
         #[arg(long)]
@@ -250,7 +254,8 @@ pub enum OrderCommand {
     },
     /// Get one order.
     Get {
-        /// Order id.
+        /// Order id (from `billing order list`).
+        #[arg(value_parser = parse_non_blank)]
         order_id: String,
     },
 }
@@ -264,7 +269,9 @@ pub enum SubscriptionCommand {
     /// Price switching to a plan without changing anything: what would be
     /// charged now, the line items, and the next full invoice.
     PreviewChange {
-        /// The plan id to price (as `subscription get` reports plan ids).
+        /// The plan id to price. `subscription get` reports the current
+        /// plan's id; the other plans' ids are listed in the console only,
+        /// since the API has no plan catalog.
         #[arg(long = "plan", value_name = "PLAN_ID", value_parser = clap::value_parser!(i64).range(1..))]
         plan_id: i64,
     },
@@ -494,29 +501,5 @@ pub fn run(
                 &preview_plan_change(&client, plan_id).context("preview the plan change")?,
             ),
         },
-    }
-}
-
-/// `id` with anything that could leave the directory replaced.
-fn file_safe(id: &str) -> String {
-    id.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_invoice_id_cannot_name_another_directory() {
-        assert_eq!(file_safe("in_1Abc-2"), "in_1Abc-2");
-        assert_eq!(file_safe("../../etc/x"), "______etc_x");
     }
 }

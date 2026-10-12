@@ -809,12 +809,14 @@ memorylake billing auto-topup get|attempts
 memorylake billing transactions [--start-time UNIX] [--end-time UNIX] [--page-size N]
 memorylake billing invoice list [--status paid,open,...] | get <id>
 memorylake billing invoice pdf <id> [-o PATH|DIR|-] [--force]
-memorylake billing invoice details get|set <id> --type individual|business --address A [--name N] [--company C] [--tax-id T] [--contact-email E]
+memorylake billing invoice details get <id>
+memorylake billing invoice details set <id> --type individual|business --address A [--name N] [--company C]
+                                  [--tax-id T] [--contact-email E]
 memorylake billing order list [--type onetime|auto_topup|subscription] [--status S] | get <id>
 memorylake billing payment-methods
-memorylake billing subscription get | preview-change --plan <id>
+memorylake billing subscription get | preview-change --plan <id>   # other plan ids: console only
 
-memorylake audit list [--category management|system] [--action A]... [--actor <principal-id>]...
+memorylake audit list [--category management|system] [--action A]... [--actor|--member <principal-id>]...
                       [--target-type T] [--target-id ID] [--result succeeded|failed|partial]
                       [--start-time UNIX] [--end-time UNIX] [--page-size N]
 ```
@@ -825,7 +827,7 @@ team owner, who is always notified. `details set` replaces every field: ones
 left out are cleared.
 
 `audit list` covers the last 7 days unless `--start-time`/`--end-time` say
-otherwise, and at most 92 days. Pages carry no total — follow the
+otherwise, and at most 92 days; times are Unix seconds, 1 or later. Pages carry no total — follow the
 continuation token, with the same filters, until it is gone. Without permission
 to read the whole team's log you see your own events only. The endpoint has its
 own rate limit (20 requests a minute per key), so page with `--page-size 100`.

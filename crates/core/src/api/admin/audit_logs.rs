@@ -12,6 +12,18 @@ use super::types::{Page, push_each, push_opt, push_page_query};
 /// Longest window one audit-log query may span, in seconds (92 days).
 pub const MAX_AUDIT_WINDOW_SECS: i64 = 92 * 24 * 60 * 60;
 
+/// Most actions one listing may filter on.
+pub const MAX_AUDIT_ACTIONS: usize = 50;
+
+/// Most actors one listing may filter on.
+pub const MAX_AUDIT_ACTORS: usize = 100;
+
+/// Longest target type a listing may filter on, in characters.
+pub const MAX_AUDIT_TARGET_TYPE: usize = 32;
+
+/// Longest target id a listing may filter on, in characters.
+pub const MAX_AUDIT_TARGET_ID: usize = 128;
+
 /// One audit event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditLogEntry {

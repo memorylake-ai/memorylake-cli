@@ -56,7 +56,10 @@ pub use api_keys::{
     CreateApiKeyRequest, ListApiKeysParams, UpdateApiKeyRequest, create_api_key, get_api_key,
     list_api_keys, revoke_api_key, rotate_api_key, update_api_key,
 };
-pub use audit_logs::{AuditLogEntry, ListAuditLogsParams, MAX_AUDIT_WINDOW_SECS, list_audit_logs};
+pub use audit_logs::{
+    AuditLogEntry, ListAuditLogsParams, MAX_AUDIT_ACTIONS, MAX_AUDIT_ACTORS, MAX_AUDIT_TARGET_ID,
+    MAX_AUDIT_TARGET_TYPE, MAX_AUDIT_WINDOW_SECS, list_audit_logs,
+};
 pub use billing::{
     AlertChannel, AlertThreshold, AutoTopup, AutoTopupAttempt, BalanceAlert, BalanceAlertEvent,
     BillingDetails, CreditBalance, CreditTransaction, Invoice, ListCreditTransactionsParams,
