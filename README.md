@@ -15,6 +15,11 @@ manage the workspaces, projects, actors and teams they all belong to.
 New to MemoryLake? The [documentation overview](https://docs.memorylake.ai/overview)
 explains what the platform does and the concepts these commands operate on.
 
+Working inside a coding agent? [MemoryLake Harness](https://github.com/memorylake-ai/memorylake-harness)
+plugs the same memory into Claude Code, Codex, DeepSeek Harness, opencode,
+QwenPaw, QwenWork and WorkBuddy. Its plugins fetch and log in this CLI for you,
+so there is nothing to install here first.
+
 Every command prints the API response as pretty JSON, so anything here pipes into
 `jq`.
 
@@ -777,6 +782,11 @@ fails and says how to supply it.
   actors, how memories are extracted, and traces and conflicts.
 - [Quick start](https://docs.memorylake.ai/quickstart) — sign up, try memory in
   the Playground, and create the API key `auth login` asks for.
+- [MemoryLake Harness](https://github.com/memorylake-ai/memorylake-harness) — the
+  same memory inside your coding agent: Claude Code, Codex, DeepSeek Harness,
+  opencode, QwenPaw, QwenWork and WorkBuddy. The plugins drive this CLI and share
+  its login (`~/.memorylake/credentials.toml`), so a machine set up for a harness
+  is already logged in here, and the other way round.
 
 ## Contributing
 
