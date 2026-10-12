@@ -136,8 +136,9 @@ pub fn get_task(
 
 /// Cancel a task that is still running.
 ///
-/// A task already in a terminal state is refused with reason
-/// `TASK_NOT_CANCELABLE`.
+/// A task already in a terminal state is refused with `Task cannot be
+/// canceled - current state: N` (`INVALID_ARGUMENT`), formerly wrapped in an
+/// A2A error document with reason `TASK_NOT_CANCELABLE`.
 pub fn cancel_task(
     client: &Client,
     workspace_id: &str,
@@ -303,8 +304,8 @@ mod tests {
 
     #[test]
     fn cancel_of_a_finished_task_surfaces_the_a2a_reason() {
-        // The production response, verbatim: an envelope whose `message` is
-        // the A2A error document as a string.
+        // The production response until 2026-10-10, verbatim: an envelope
+        // whose `message` is the A2A error document as a string.
         let body = r#"{"success":false,"message":"{\"error\":{\"code\":400,\"status\":\"FAILED_PRECONDITION\",\"message\":\"Task cannot be canceled - current state: 3\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"TASK_NOT_CANCELABLE\",\"domain\":\"a2a-protocol.org\",\"metadata\":{}}]}}","error_code":"INVALID_ARGUMENT"}"#;
         let (base_url, _server) = one_shot_server(format!(
             "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",

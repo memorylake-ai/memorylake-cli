@@ -484,7 +484,9 @@ fn a2a_round_trip_against_the_default_agent() {
         "rating missing after feedback: {task}"
     );
 
-    // 5. Cancelling a finished task is refused with the A2A reason.
+    // 5. Cancelling a finished task is refused. Production used to answer
+    //    with an A2A error document carrying `TASK_NOT_CANCELABLE`; since
+    //    2026-10-10 it sends the message alone, so only that is asserted.
     let cancel_args = [
         "agent",
         "task",
@@ -495,7 +497,7 @@ fn a2a_round_trip_against_the_default_agent() {
         ws,
     ];
     let err = assert_failure(&run(&home, &cancel_args), &cancel_args);
-    assert!(err.contains("TASK_NOT_CANCELABLE"), "{err}");
+    assert!(err.contains("Task cannot be canceled"), "{err}");
 
     // 6. Streaming prints the reply once, not once per token plus the artifact.
     let stream_args = [
