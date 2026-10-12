@@ -720,7 +720,8 @@ owner key exactly once; the key you ran it with stays in its own team.
 
 `usage` reports for the whole team when you may view it, otherwise for you
 alone; `scope` says which. A report or a `usage records` window spans at most 92
-days, checked before anything is sent. `used_tokens` is what is charged against the balance.
+days, both ends counted; when both ends are given, that is checked before
+anything is sent. `used_tokens` is what is charged against the balance.
 
 ### Access control
 
