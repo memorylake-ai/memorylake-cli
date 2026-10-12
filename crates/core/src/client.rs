@@ -1985,18 +1985,18 @@ mod tests {
             "one attempt plus one per retry pause"
         );
 
-        // Nothing listening: refused at once, without the pauses.
+        // Nothing listening: a refusal is not worth a pause. (Asserted on the
+        // classification rather than on timing: Windows itself spends about
+        // two seconds re-sending SYNs before it reports a refusal.)
         let refused = TcpListener::bind("127.0.0.1:0")
             .and_then(|listener| listener.local_addr())
             .expect("reserve a port");
-        let client = Client::new(format!("http://{refused}"), "sk_test_key_1234").unwrap();
-        let started = std::time::Instant::now();
-        let _ = client.get_data::<Value>("/api/v3/things", &[]);
-        assert!(
-            started.elapsed() < CONNECT_RETRY_PAUSES[0],
-            "a refusal was retried: {:?}",
-            started.elapsed()
-        );
+        let err = reqwest::blocking::Client::new()
+            .get(format!("http://{refused}/"))
+            .send()
+            .expect_err("nothing listens");
+        assert!(err.is_connect(), "{err:?}");
+        assert!(!is_transient_connect_failure(&err), "{err:?}");
     }
 
     #[test]
