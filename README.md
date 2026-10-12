@@ -105,6 +105,11 @@ memorylake search "what were the quarterly revenue figures"
 `workspace use` remembers a workspace, so `--workspace` can be omitted everywhere
 after it. Pass it explicitly to override for a single command.
 
+For more than six lines, [memorylake-usecases](https://github.com/memorylake-ai/memorylake-usecases)
+has runnable end-to-end demos built on this CLI — sales calls, meetings, a
+codebase, contract review, bookkeeping, agent memory and more — each printing
+every `memorylake` command before it runs it, with a recording of the run.
+
 ## Commands
 
 Aliases: `ws` = `workspace`, `proj` = `project`, `lib` = `library`,
@@ -787,6 +792,10 @@ fails and says how to supply it.
   opencode, QwenPaw, QwenWork and WorkBuddy. The plugins drive this CLI and share
   its login (`~/.memorylake/credentials.toml`), so a machine set up for a harness
   is already logged in here, and the other way round.
+- [MemoryLake use cases](https://github.com/memorylake-ai/memorylake-usecases) —
+  runnable demos on this CLI, one directory per use case, each with its sample
+  data, a web UI and a recorded run; the quickest way to see what a project, an
+  actor or a fact instruction is for.
 
 ## Contributing
 
