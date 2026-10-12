@@ -24,6 +24,7 @@ fn every_management_command_family_requires_login() {
         ["access", "show", "workspace", "ws-1"].as_slice(),
         ["billing", "balance"].as_slice(),
         ["audit-log", "list"].as_slice(),
+        ["integration", "list"].as_slice(),
     ] {
         let err = assert_failure(&run(&home, args), args);
         assert!(
@@ -445,5 +446,146 @@ fn bad_billing_and_audit_input_is_rejected_locally() {
         assert!(err.contains(expected), "{args:?}: {err}");
         assert!(!err.contains("not logged in"), "{args:?}: {err}");
     }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn bad_integration_input_is_rejected_locally() {
+    let home = temp_home();
+    let base = [
+        "im",
+        "create",
+        "--channel",
+        "slack",
+        "--workspace",
+        "ws-1",
+        "--name",
+        "Help",
+        "--agent",
+        "ag-1",
+        "--read-write-project",
+        "p-1",
+    ];
+    let with = |extra: &[&'static str]| {
+        let mut args = base.to_vec();
+        args.extend_from_slice(extra);
+        args
+    };
+    let long_dataset = "d".repeat(129);
+    let too_many_datasets = (0..65)
+        .map(|i| format!("ds-{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for (args, expected) in [
+        // No way to put a credential on the command line.
+        (with(&["--credentials", "{}"]), "unexpected argument"),
+        (with(&[]), "credentials are needed"),
+        (
+            with(&["--credentials-env", "MLCLI_SURELY_UNSET_IM_CREDS"]),
+            "MLCLI_SURELY_UNSET_IM_CREDS",
+        ),
+        (
+            with(&["--credentials-file", "/nonexistent/mlcli-creds.json"]),
+            "read credentials file",
+        ),
+        (
+            with(&[
+                "--credentials-env",
+                "HOME",
+                "--credentials-file",
+                "/nonexistent/x",
+            ]),
+            "cannot be used with",
+        ),
+        (
+            vec![
+                "im",
+                "create",
+                "--channel",
+                "teams",
+                "--name",
+                "x",
+                "--agent",
+                "a",
+                "--read-write-project",
+                "p",
+            ],
+            "invalid value",
+        ),
+        (vec!["im", "update", "im-1"], "nothing to update"),
+        (
+            vec!["im", "update", "im-1", "--enable", "--disable"],
+            "cannot be used with",
+        ),
+        (
+            vec!["im", "update", "im-1", "--dataset", "ds-1", "--no-datasets"],
+            "cannot be used with",
+        ),
+        (
+            vec!["im", "update", "im-1", "--dataset", long_dataset.as_str()],
+            "longer than 128 bytes",
+        ),
+        (
+            vec![
+                "im",
+                "update",
+                "im-1",
+                "--dataset",
+                too_many_datasets.as_str(),
+            ],
+            "at most 64 datasets",
+        ),
+        (
+            vec!["im", "update", "im-1", "--daily-message-limit=-1"],
+            "invalid value",
+        ),
+        (vec!["im", "list", "--page-size", "0"], "invalid value"),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn credentials_are_checked_against_the_channel_before_login() {
+    // Read from stdin and refused for the wrong channel, still logged out.
+    let home = temp_home();
+    for (channel, creds, expected) in [
+        (
+            "slack",
+            r#"{"appKey":"k","appSecret":"s"}"#,
+            "exactly botToken and appToken",
+        ),
+        ("wecom", r#"{"botId":"b"}"#, "exactly botId and secret"),
+        ("feishu", r#"{"appId":"a","appSecret":""}"#, "is empty"),
+        ("dingtalk", "not json", "not valid JSON"),
+    ] {
+        let args = [
+            "im",
+            "create",
+            "--channel",
+            channel,
+            "--workspace",
+            "ws-1",
+            "--name",
+            "Help",
+            "--agent",
+            "ag-1",
+            "--read-write-project",
+            "p-1",
+            "--credentials-stdin",
+        ];
+        let output = crate::common::run_with_input(&home, &args, creds, &[]);
+        let err = assert_failure(&output, &args);
+        assert!(err.contains(expected), "{channel}: {err}");
+        assert!(!err.contains("not logged in"), "{channel}: {err}");
+    }
+    // A rotation may carry one field, but only a real one.
+    let args = ["im", "update", "im-1", "--credentials-stdin"];
+    let output = crate::common::run_with_input(&home, &args, r#"{"token":"x"}"#, &[]);
+    let err = assert_failure(&output, &args);
+    assert!(err.contains("`token` is not a credential field"), "{err}");
     let _ = fs::remove_dir_all(&home);
 }

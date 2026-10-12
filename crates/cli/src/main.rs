@@ -21,6 +21,7 @@ use commands::conversation::{ConversationCommand, run as run_conversation};
 use commands::datasource::{DatasourceCommand, run as run_datasource};
 use commands::db_connection::{DbConnectionCommand, run as run_db_connection};
 use commands::fact::{FactCommand, run as run_fact};
+use commands::integration::{IntegrationCommand, run as run_integration};
 use commands::invitation::{InvitationCommand, run as run_invitation};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::member::{MemberCommand, run as run_member};
@@ -204,6 +205,12 @@ enum Commands {
         #[command(subcommand)]
         command: AuditLogCommand,
     },
+    /// Connect DingTalk, WeCom, Feishu, or Slack bots to agents.
+    #[command(visible_alias = "im")]
+    Integration {
+        #[command(subcommand)]
+        command: IntegrationCommand,
+    },
     /// Print the CLI version.
     Version,
 }
@@ -240,6 +247,7 @@ fn main() -> Result<()> {
         Commands::Usage(args) => run_usage(args, cli.profile, cli.base_url)?,
         Commands::Billing { command } => run_billing(command, cli.profile, cli.base_url)?,
         Commands::AuditLog { command } => run_audit_log(command, cli.profile, cli.base_url)?,
+        Commands::Integration { command } => run_integration(command, cli.profile, cli.base_url)?,
         Commands::Version => {
             println!("{VERSION}");
         }

@@ -823,6 +823,55 @@ continuation token, with the same filters, until it is gone. Without permission
 to read the whole team's log you see your own events only. The endpoint has its
 own rate limit (20 requests a minute per key), so page with `--page-size 100`.
 
+### IM integrations
+
+Connect a DingTalk, WeCom, Feishu or Slack bot to an agent, so people can
+talk to the agent from their chat app. Which channels are available depends on
+the deployment.
+
+```bash
+memorylake im list [--workspace ID] [--agent ID] [--page-size N]
+memorylake im get <id>
+memorylake im create --channel slack --name Help --agent <agent-id> --read-write-project <project-id>
+                     [--workspace ID] [--read-only-project ID]... [--dataset ID]...
+                     [--daily-message-limit N] [--card-template-id ID]
+                     (--credentials-env VAR | --credentials-stdin | --credentials-file PATH) [--wait]
+memorylake im update <id> [--name N] [--agent ID] [--read-write-project ID]
+                     [--read-only-project ID... | --no-read-only-projects] [--dataset ID... | --no-datasets]
+                     [--daily-message-limit N] [--card-template-id ID|""] [--enable | --disable]
+                     [--credentials-env VAR | --credentials-stdin | --credentials-file PATH] [--wait]
+memorylake im delete <id>
+```
+
+Credentials are a JSON object keyed by the platform's own field names:
+
+| Channel    | Fields                     |
+|------------|----------------------------|
+| `dingtalk` | `appKey`, `appSecret`      |
+| `feishu`   | `appId`, `appSecret`       |
+| `slack`    | `botToken`, `appToken`     |
+| `wecom`    | `botId`, `secret`          |
+
+```bash
+export SLACK_BOT='{"botToken":"xoxb-…","appToken":"xapp-…"}'
+memorylake im create --channel slack ... --credentials-env SLACK_BOT --wait
+```
+
+There is no `--credentials` flag: a value there would be saved in shell
+history. Credentials are write-only — the API never returns them, and `-v`
+traces redact them. To rotate a secret, `update` with just that field (e.g.
+`{"appSecret":"…"}`); the bot's identifier cannot change, so connecting a
+different bot means delete and create.
+
+DingTalk, Feishu and Slack credentials are verified with the platform before
+anything is saved, so a bad token fails at once and leaves nothing behind.
+WeCom's are checked by connecting: `status` goes `pending` → `connected` or
+`error`, with `status_error_code` saying why. `--wait` follows it for up to two
+minutes and fails if it ends in `error`.
+
+Anyone who can message the bot can add memories to the `--read-write-project`,
+so point it at a project meant for that.
+
 ## Configuration
 
 Credentials and settings live in `~/.memorylake/` (`credentials.toml`,

@@ -22,6 +22,7 @@ pub(super) const MY_PERMISSIONS: &str = "/admin/v1/me/permissions";
 pub(super) const PERMISSION_CATALOG: &str = "/admin/v1/permission-catalog";
 pub(super) const PERMISSION_RULES: &str = "/admin/v1/permission-rules";
 pub(super) const AUDIT_LOGS: &str = "/admin/v1/audit-logs";
+pub(super) const INTEGRATIONS: &str = "/admin/v1/integrations";
 pub(super) const CREDIT_BALANCE: &str = "/admin/v1/billing/credit-balance";
 pub(super) const BALANCE_ALERT: &str = "/admin/v1/billing/credit-balance/alert";
 pub(super) const BALANCE_ALERT_EVENTS: &str = "/admin/v1/billing/credit-balance/alert/events";
@@ -108,6 +109,10 @@ pub(super) fn invoice_pdf(id: &str) -> String {
 
 pub(super) fn invoice_billing_details(id: &str) -> String {
     format!("{}/billing-details", invoice(id))
+}
+
+pub(super) fn integration(id: &str) -> String {
+    format!("{INTEGRATIONS}/{}", encode_segment(id))
 }
 
 pub(super) fn order(id: &str) -> String {
