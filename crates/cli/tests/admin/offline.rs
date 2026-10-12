@@ -161,10 +161,6 @@ fn bad_access_control_input_is_rejected_locally() {
     for (args, expected) in [
         // `access`: the --workspace rule and the subject.
         (
-            vec!["access", "show", "workspace-actor", "act-1"],
-            "needs --workspace",
-        ),
-        (
             vec!["access", "show", "skill", "sk-1", "--workspace", "ws-1"],
             "takes no --workspace",
         ),
@@ -324,7 +320,7 @@ fn bad_access_control_input_is_rejected_locally() {
                 "--reason",
                 "r",
             ],
-            "leave the entry out",
+            "Leave the entry out",
         ),
         (
             vec![
@@ -357,6 +353,45 @@ fn bad_access_control_input_is_rejected_locally() {
                 "r",
             ],
             "required",
+        ),
+        // Empty ids would address the collection; pages are 1-100.
+        (vec!["ag", "delete", ""], "must not be empty"),
+        (vec!["role", "get", " "], "must not be empty"),
+        (vec!["member", "scope", "get", ""], "must not be empty"),
+        (vec!["perm", "rule", "delete", ""], "must not be empty"),
+        (vec!["ag", "list", "--page-size", "0"], "invalid value"),
+        (
+            vec!["ag", "member", "list", "g-1", "--page-size", "101"],
+            "invalid value",
+        ),
+        (
+            vec!["perm", "rule", "list", "--page-size", "0"],
+            "invalid value",
+        ),
+        (
+            vec![
+                "ag",
+                "permissions",
+                "set",
+                "g-1",
+                "--none",
+                "--reason",
+                "r",
+                "--if-match",
+                " ",
+            ],
+            "must not be empty",
+        ),
+        (
+            vec![
+                "ag",
+                "create",
+                "--name",
+                "Ops",
+                "--permission",
+                "memorylake:actor::create",
+            ],
+            "is not <resource_type>:<action>",
         ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);

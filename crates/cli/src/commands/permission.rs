@@ -40,10 +40,10 @@ pub enum RuleCommand {
         #[arg(long, value_parser = ["role", "member"])]
         subject_type: Option<String>,
         /// Only rules of this role key or principal id.
-        #[arg(long, requires = "subject_type")]
+        #[arg(long, requires = "subject_type", value_parser = parse_non_blank)]
         subject_id: Option<String>,
         /// Number of items per page (1–100).
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         page_size: Option<u32>,
         /// Continuation token from a previous response.
         #[arg(long)]
@@ -71,19 +71,20 @@ pub enum RuleCommand {
         #[arg(long, value_parser = parse_reason)]
         reason: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Delete one rule by the rule_id `rule list` prints. Rules of the
     /// built-in roles cannot be deleted.
     Delete {
-        /// Rule id.
+        /// Rule id (the `rule_id` of `permission rule list`).
+        #[arg(value_parser = parse_non_blank)]
         rule_id: String,
         /// Why; recorded in the audit log.
         #[arg(long, value_parser = parse_reason)]
         reason: Option<String>,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
 }
@@ -92,11 +93,11 @@ pub enum RuleCommand {
 #[derive(Debug, Args)]
 #[group(required = true, multiple = false)]
 pub struct RuleSubject {
-    /// A custom role key.
-    #[arg(long, value_name = "ROLE_KEY")]
+    /// A custom role key (from `role list`).
+    #[arg(long, value_name = "ROLE_KEY", value_parser = parse_non_blank)]
     role: Option<String>,
-    /// A member's principal id.
-    #[arg(long, value_name = "PRINCIPAL_ID")]
+    /// A member's principal id (from `member list`).
+    #[arg(long, value_name = "PRINCIPAL_ID", value_parser = parse_non_blank)]
     member: Option<String>,
 }
 
@@ -176,8 +177,8 @@ pub fn run(
                     reason.as_deref(),
                     idempotency_key.as_deref(),
                 )
-                .context("delete permission rule")?;
-                println!("permission rule {rule_id} deleted");
+                .with_context(|| format!("delete permission rule `{rule_id}`"))?;
+                println!("Deleted permission rule `{rule_id}`");
                 Ok(())
             }
         },

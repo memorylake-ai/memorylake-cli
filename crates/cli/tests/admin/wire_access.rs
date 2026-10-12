@@ -7,7 +7,8 @@
 //! standard error) and `Idempotency-Key`.
 
 use crate::common::stub::{
-    exchange, exchange_with_response_headers, request_body, request_header, request_line,
+    exchange, exchange_with_input, exchange_with_response_headers, request_body, request_header,
+    request_line,
 };
 use crate::common::{assert_failure, assert_success};
 
@@ -76,7 +77,7 @@ fn role_delete_deletes_and_confirms() {
         request_line(&request),
         "DELETE /admin/v1/roles/tenant_custom_1 HTTP/1.1"
     );
-    assert!(stdout.contains("deleted"), "{stdout}");
+    assert!(stdout.contains("Deleted"), "{stdout}");
 }
 
 #[test]
@@ -406,7 +407,7 @@ fn permission_rule_delete_carries_the_reason_in_the_query() {
         request_line(&request),
         "DELETE /admin/v1/permission-rules/pr1_abc?reason=cleanup HTTP/1.1"
     );
-    assert!(stdout.contains("deleted"), "{stdout}");
+    assert!(stdout.contains("Deleted"), "{stdout}");
 }
 
 #[test]
@@ -640,7 +641,7 @@ fn access_group_delete_deletes_and_confirms() {
         request_line(&request),
         "DELETE /admin/v1/access-groups/g-1 HTTP/1.1"
     );
-    assert!(stdout.contains("deleted"), "{stdout}");
+    assert!(stdout.contains("Deleted"), "{stdout}");
 }
 
 #[test]
@@ -665,5 +666,58 @@ fn access_group_member_list_and_scope_get_read_their_endpoints() {
         stderr(&output).contains(r#"ETag: "s1""#),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn an_etag_whose_quotes_the_shell_ate_is_quoted_again() {
+    // `--if-match "abc"` reaches the CLI as `abc`; the server compares the
+    // tag quotes included, so it must go out as `"abc"`. A pasted
+    // `ETag: "abc"` line works as well.
+    for given in ["abc", "ETag: \"abc\""] {
+        let args = [
+            "ag",
+            "permissions",
+            "set",
+            "g-1",
+            "--none",
+            "--reason",
+            "r",
+            "--if-match",
+            given,
+        ];
+        let (request, output) = exchange(GROUP, &args);
+        assert_success(&output, &args);
+        assert_eq!(request_header(&request, "if-match"), Some("\"abc\""));
+    }
+}
+
+#[test]
+fn a_workspace_binding_defaults_to_the_remembered_workspace() {
+    let args = ["access", "show", "workspace-actor", "act-1"];
+    let (request, output) = exchange_with_input(
+        RESOURCE_ACCESS,
+        &args,
+        "",
+        &[("MEMORYLAKE_WORKSPACE", "ws-9")],
+    );
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "GET /admin/v1/access/workspaces/ws-9/actors/act-1 HTTP/1.1"
+    );
+
+    // A project's workspace only labels it, so it is never guessed.
+    let args = ["access", "show", "project", "p-1"];
+    let (request, output) = exchange_with_input(
+        RESOURCE_ACCESS,
+        &args,
+        "",
+        &[("MEMORYLAKE_WORKSPACE", "ws-9")],
+    );
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "GET /admin/v1/access/projects/p-1 HTTP/1.1"
     );
 }

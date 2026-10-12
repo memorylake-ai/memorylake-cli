@@ -8,7 +8,7 @@ use memorylake_core::api::admin::{
     update_member,
 };
 
-use super::scope_input::ScopeSetArgs;
+use super::scope_input::{SCOPE_SET_HELP, ScopeSetArgs};
 use super::{api_client, parse_non_blank, print_json, print_json_with_etag};
 
 /// Member subcommands.
@@ -106,6 +106,7 @@ pub enum MemberCommand {
     /// the role, access groups, or a direct grant.
     Explain {
         /// Member principal id (from `member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
     },
     /// Show or limit which instances a member reaches.
@@ -122,15 +123,18 @@ pub enum ScopeCommand {
     /// only the listed ones. The ETag (on standard error) is what
     /// `scope set --if-match` takes.
     Get {
-        /// Member principal id.
+        /// Member principal id (from `member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
     },
     /// Replace the scope of each listed resource type. A scope limits a
     /// member; it never grants more than their role allows, and a limited
     /// type must leave them at least one instance. Project instances need
     /// their workspace_id.
+    #[command(after_long_help = SCOPE_SET_HELP)]
     Set {
-        /// Member principal id.
+        /// Member principal id (from `member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
         #[command(flatten)]
         input: ScopeSetArgs,

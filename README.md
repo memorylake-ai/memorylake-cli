@@ -766,26 +766,29 @@ memorylake ag scope get|set <id> ...
 memorylake access show <type> <id>              # who can reach the instance, and why
 memorylake access levels <type> <id> --member <principal-id>
 memorylake access set-level <type> <id> --member <principal-id> --level read|write|manage|none --reason TEXT
-memorylake access grant|revoke <type> <id> (--member <principal-id> | --group <id>) --reason TEXT
+memorylake access grant <type> <id> (--member <principal-id> | --group <id>) --reason TEXT
+memorylake access revoke <type> <id> (--member <principal-id> | --group <id>) [--reason TEXT]
 ```
 
 `<type>` is one of `workspace`, `project`, `actor`, `agent`, `boundary`,
 `db-connection`, `db-datasource`, `skill`, `workspace-actor` and
 `workspace-agent`. The last two are an actor's or agent's binding in one
-workspace and need `--workspace <id>`. A project accepts `--workspace` as well;
-nothing else does. `--workspace` is never taken from `workspace use`, because
-here it changes which instance is meant.
+workspace: `--workspace <id>`, or else the workspace `workspace use` remembered,
+as for `actor bind`. A project accepts `--workspace` as well, so it shows by name
+in access scopes; that one is never filled in for you. Nothing else takes it.
 
 `scope set` takes a JSON array of `{resource_type, mode, instances}` entries,
 where `mode` is `all` or `instances`, and replaces the scope of only the types
 it lists. It also accepts what `scope get` printed, edited: read-only fields
-are dropped. Entries that list no instances must be removed first. Project
-instances need their `workspace_id`.
+are dropped. Entries that list no instances must be removed first: leaving a
+type out keeps it as it is, and for an access group mode `all` removes its
+instances. Project instances need their `workspace_id`. `scope set --help` shows
+the whole read-edit-write loop.
 
 Reads that a later write can be checked against (`scope get`, `ag get`) print
 an `ETag: "..."` line on standard error, leaving standard output as plain JSON.
-Pass that value as `--if-match` and the write is refused with `412` if someone
-changed the same thing in between. Scope, rule, level and grant changes take a
+Pass that value as `--if-match` (quotes optional; the whole line works too) and
+the write is refused with `412` if someone changed the same thing in between. Scope, rule, level and grant changes take a
 `--reason` (at most 255 bytes), which is recorded in the audit log.
 
 ## Configuration

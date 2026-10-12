@@ -10,8 +10,10 @@ use memorylake_core::api::admin::{
     update_access_group,
 };
 
-use super::scope_input::ScopeSetArgs;
-use super::{api_client, parse_non_blank, parse_reason, print_json, print_json_with_etag};
+use super::scope_input::{SCOPE_SET_HELP, ScopeSetArgs};
+use super::{
+    api_client, parse_etag, parse_non_blank, parse_reason, print_json, print_json_with_etag,
+};
 
 /// Most members one `access-group member add` may name.
 const MAX_MEMBERS_PER_ADD: usize = 200;
@@ -26,7 +28,7 @@ pub enum AccessGroupCommand {
     /// List the team's access groups.
     List {
         /// Number of items per page (1–100).
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         page_size: Option<u32>,
         /// Continuation token from a previous response.
         #[arg(long)]
@@ -35,7 +37,8 @@ pub enum AccessGroupCommand {
     /// Get one access group. Its ETag (on standard error) is what
     /// `permissions set --if-match` takes.
     Get {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
     /// Create an access group: an optional base (a role or another group,
@@ -60,13 +63,14 @@ pub enum AccessGroupCommand {
         #[arg(long = "permission", value_name = "PERMISSION", value_parser = AccessGroupPermission::parse)]
         permissions: Vec<AccessGroupPermission>,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Rename an access group or change its description. The base cannot
     /// change.
     Update {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// New display name.
         #[arg(long, value_parser = parse_non_blank)]
@@ -75,22 +79,24 @@ pub enum AccessGroupCommand {
         #[arg(long)]
         description: Option<String>,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Delete an access group; its members lose what it gave them. Refused
     /// while other groups are based on it. There is no confirmation prompt.
     Delete {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Explain everything the group grants and where each permission comes
     /// from, plus the instances it gives access to.
     Explain {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
     /// List, add, or remove the group's members.
@@ -115,10 +121,11 @@ pub enum AccessGroupCommand {
 pub enum MemberCommand {
     /// List the group's members.
     List {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Number of items per page (1–100).
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         page_size: Option<u32>,
         /// Continuation token from a previous response.
         #[arg(long)]
@@ -127,23 +134,25 @@ pub enum MemberCommand {
     /// Add members, all or nothing: one id outside the team adds nobody.
     /// Someone already in the group is not an error.
     Add {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
-        /// Principal ids to add (1–200).
+        /// Principal ids to add (1–200, from `member list`).
         #[arg(required = true, value_name = "PRINCIPAL_ID", value_parser = parse_non_blank)]
         principal_ids: Vec<String>,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
     /// Remove one member from the group.
     Remove {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Principal id to remove.
         principal_id: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
 }
@@ -153,9 +162,12 @@ pub enum MemberCommand {
 pub enum PermissionsCommand {
     /// Replace the group's own permission list. The base is unaffected.
     Set {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
-        /// A permission, as <resource_type>:<action>. Repeat for several.
+        /// A permission, as <resource_type>:<action>, e.g.
+        /// memorylake:actor:actor:create. Repeat for several; see `permission
+        /// catalog --access-group` for what is accepted.
         #[arg(
             long = "permission",
             value_name = "PERMISSION",
@@ -171,8 +183,9 @@ pub enum PermissionsCommand {
         #[arg(long, value_parser = parse_reason)]
         reason: String,
         /// Only write if the list is unchanged since the `get` that printed
-        /// this ETag; otherwise fail with 412.
-        #[arg(long, value_name = "ETAG")]
+        /// this ETag (`ETag: "..."` on standard error; the value, with or
+        /// without its quotes, or the whole line); otherwise fail with 412.
+        #[arg(long, value_name = "ETAG", value_parser = parse_etag)]
         if_match: Option<String>,
     },
 }
@@ -183,14 +196,17 @@ pub enum ScopeCommand {
     /// Show, per resource type, the instances the group gives access to.
     /// The ETag (on standard error) is what `scope set --if-match` takes.
     Get {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
     /// Replace, per listed resource type, the instances the group gives
     /// access to. Mode `all` removes the type's instances: a group never
     /// limits anyone. Project instances need their workspace_id.
+    #[command(after_long_help = SCOPE_SET_HELP)]
     Set {
-        /// Access group id.
+        /// Access group id (from `access-group list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         #[command(flatten)]
         input: ScopeSetArgs,
@@ -237,7 +253,8 @@ pub fn run(
             print_json(&data)
         }
         AccessGroupCommand::Get { id } => {
-            let (data, etag) = get_access_group(&client, &id).context("get access group")?;
+            let (data, etag) = get_access_group(&client, &id)
+                .with_context(|| format!("get access group `{id}`"))?;
             print_json_with_etag(&data, etag.as_deref())
         }
         AccessGroupCommand::Create {
@@ -274,7 +291,7 @@ pub fn run(
                 &UpdateAccessGroupRequest { name, description },
                 idempotency_key.as_deref(),
             )
-            .context("update access group")?;
+            .with_context(|| format!("update access group `{id}`"))?;
             print_json(&data)
         }
         AccessGroupCommand::Delete {
@@ -282,12 +299,13 @@ pub fn run(
             idempotency_key,
         } => {
             delete_access_group(&client, &id, idempotency_key.as_deref())
-                .context("delete access group")?;
-            println!("access group {id} deleted");
+                .with_context(|| format!("delete access group `{id}`"))?;
+            println!("Deleted access group `{id}`");
             Ok(())
         }
         AccessGroupCommand::Explain { id } => {
-            let data = explain_access_group(&client, &id).context("explain access group")?;
+            let data = explain_access_group(&client, &id)
+                .with_context(|| format!("explain access group `{id}`"))?;
             print_json(&data)
         }
         AccessGroupCommand::Member { command } => match command {
@@ -325,8 +343,10 @@ pub fn run(
                 idempotency_key,
             } => {
                 remove_access_group_member(&client, &id, &principal_id, idempotency_key.as_deref())
-                    .context("remove access group member")?;
-                println!("member {principal_id} removed from access group {id}");
+                    .with_context(|| {
+                        format!("remove member `{principal_id}` from access group `{id}`")
+                    })?;
+                println!("Removed member `{principal_id}` from access group `{id}`");
                 Ok(())
             }
         },
