@@ -44,10 +44,13 @@ pub enum ApiKeyCommand {
         name: String,
         /// Issue the key for this virtual member (see `member create`); the
         /// key then acts as that member. Human members cannot be targeted.
-        #[arg(long = "member", value_name = "PRINCIPAL_ID")]
+        // Never blank: the server reads "" as "no member" and would issue
+        // the key for the caller instead.
+        #[arg(long = "member", value_name = "PRINCIPAL_ID", value_parser = parse_non_blank)]
         member_principal_id: Option<String>,
-        /// Expiry, Unix seconds. Omit for a key that never expires.
-        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        /// Expiry, Unix seconds, in the future. Omit, or pass 0, for a key
+        /// that never expires.
+        #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
         expires_at: Option<i64>,
         /// Only allow requests from this IP or CIDR range. Repeat, or
         /// separate with commas, for several. Omit for no restriction.
@@ -151,6 +154,14 @@ pub fn run(
             "nothing to update; pass --name, --status, --expires-at, --allowed-ip, \
              --no-ip-restriction, --group or --backup-group"
         );
+    }
+
+    if let ApiKeyCommand::Create {
+        expires_at: Some(expires_at),
+        ..
+    } = &command
+    {
+        check_future_expiry(*expires_at)?;
     }
 
     let client = api_client(profile, base_url)?;
@@ -262,6 +273,20 @@ pub fn run(
             Ok(())
         }
     }
+}
+
+/// A create expiry must be 0 (never) or in the future: the server would
+/// otherwise mint a key that is expired from the start.
+fn check_future_expiry(expires_at: i64) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64);
+    if expires_at != 0 && expires_at <= now {
+        bail!(
+            "--expires-at {expires_at} is not in the future (now is {now}); omit it or pass 0 for a key that never expires"
+        );
+    }
+    Ok(())
 }
 
 /// Say so on standard error when a create or rotate answered without the

@@ -149,7 +149,8 @@ pub enum MemberCommand {
         /// Access group id (from `access-group list`).
         #[arg(value_parser = parse_non_blank)]
         id: String,
-        /// Principal id to remove.
+        /// Principal id to remove (from `access-group member list`).
+        #[arg(value_parser = parse_non_blank)]
         principal_id: String,
         /// Retrying with the same value replays the first result.
         #[arg(long, value_parser = parse_non_blank)]

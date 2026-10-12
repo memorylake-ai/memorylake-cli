@@ -216,7 +216,8 @@ fn usage_honours_the_period_and_its_cap() {
     assert_eq!(str_field(period, "start_date"), "2026-08-01");
     assert_eq!(str_field(period, "end_date"), "2026-08-27");
 
-    // A window over 92 days is a client error, surfaced with its error code.
+    // A period over 92 days is refused before anything is sent; the
+    // longest one the server takes still goes through.
     let args = [
         "usage",
         "--start-date",
@@ -226,9 +227,17 @@ fn usage_honours_the_period_and_its_cap() {
     ];
     let err = assert_failure(&run(&home, &args), &args);
     assert!(
-        err.contains("92") && err.contains("INVALID_ARGUMENT"),
+        err.contains("more than 92 days"),
         "cap violation not surfaced: {err}"
     );
+    let args = [
+        "usage",
+        "--start-date",
+        "2026-01-01",
+        "--end-date",
+        "2026-04-02",
+    ];
+    assert_success(&run(&home, &args), &args);
 
     let _ = fs::remove_dir_all(&home);
 }
