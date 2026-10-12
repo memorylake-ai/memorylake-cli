@@ -387,6 +387,10 @@ fn bad_access_control_input_is_rejected_locally() {
         (vec!["role", "get", " "], "must not be empty"),
         (vec!["member", "scope", "get", ""], "must not be empty"),
         (vec!["perm", "rule", "delete", ""], "must not be empty"),
+        (
+            vec!["ag", "member", "remove", "g-1", ""],
+            "must not be empty",
+        ),
         (vec!["ag", "list", "--page-size", "0"], "invalid value"),
         (
             vec!["ag", "member", "list", "g-1", "--page-size", "101"],

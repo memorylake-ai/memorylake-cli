@@ -137,10 +137,30 @@ pub fn parse_etag(raw: &str) -> std::result::Result<String, String> {
     if value.is_empty() {
         return Err("must not be empty".to_string());
     }
-    if value == "*" || value.starts_with('"') || value.starts_with("W/") {
+    if value == "*" {
         return Ok(value.to_string());
     }
-    Ok(format!("\"{value}\""))
+    // One tag or a comma-separated list; quote each bare one again.
+    let tags: Vec<String> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(|tag| {
+            let (weak, opaque) = match tag.strip_prefix("W/") {
+                Some(rest) => ("W/", rest),
+                None => ("", tag),
+            };
+            if opaque.starts_with('"') {
+                tag.to_string()
+            } else {
+                format!("{weak}\"{opaque}\"")
+            }
+        })
+        .collect();
+    if tags.is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    Ok(tags.join(", "))
 }
 
 /// Accept a non-blank flag or argument value, trimmed.
@@ -168,6 +188,10 @@ mod tests {
         assert_eq!(parse_etag("etag: v7").as_deref(), Ok(r#""v7""#));
         assert_eq!(parse_etag(r#"W/"v7""#).as_deref(), Ok(r#"W/"v7""#));
         assert_eq!(parse_etag("*").as_deref(), Ok("*"));
+        assert_eq!(parse_etag("W/v7").as_deref(), Ok(r#"W/"v7""#));
+        assert_eq!(parse_etag("a, b").as_deref(), Ok(r#""a", "b""#));
+        assert_eq!(parse_etag(r#""a", "b""#).as_deref(), Ok(r#""a", "b""#));
+        assert!(parse_etag(",").is_err());
         assert!(parse_etag(" ").is_err());
     }
 
