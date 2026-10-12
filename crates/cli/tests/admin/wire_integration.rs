@@ -230,5 +230,40 @@ fn delete_deletes_and_confirms() {
         request_header(&request, "idempotency-key"),
         Some("idem-del")
     );
-    assert!(stdout.contains("deleted"), "{stdout}");
+    assert!(stdout.contains("Deleted"), "{stdout}");
+}
+
+#[test]
+fn update_wait_without_a_reconnection_prints_the_integration_as_it_is() {
+    // --enable on an integration that is already enabled starts no
+    // reconnection; an old `error` must not fail the update.
+    let args = ["im", "update", "im-1", "--enable", "--wait"];
+    let failed = integration(
+        "error",
+        r#","status_error":"x","status_error_code":"credentials_invalid""#,
+    );
+    let (requests, output) = exchange_sequence(&[&failed], &args);
+    let stdout = assert_success(&output, &args);
+    assert_eq!(requests.len(), 1, "no poll expected: {requests:?}");
+    assert!(stdout.contains(r#""status": "error""#), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("nothing to wait for"), "{stderr}");
+}
+
+#[test]
+fn a_failed_poll_names_the_integration_that_was_saved() {
+    let args = create_args(&["--credentials-env", "MLCLI_WIRE_POLL", "--wait"]);
+    let pending = integration("pending", "");
+    let broken = r#"{"success":false,"message":"internal error","error_code":"INTERNAL"}"#;
+    let (_, output) = crate::common::stub::exchange_sequence_with_input(
+        &[&pending, broken],
+        &args,
+        "",
+        &[("MLCLI_WIRE_POLL", SLACK_CREDS)],
+    );
+    let err = assert_failure(&output, &args);
+    assert!(
+        err.contains("im-1") && err.contains("was saved"),
+        "the error must say the integration exists: {err}"
+    );
 }

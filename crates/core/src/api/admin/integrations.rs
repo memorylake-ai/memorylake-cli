@@ -29,8 +29,10 @@ pub const MAX_INTEGRATION_DATASET_ID: usize = 128;
 /// Longest display name.
 pub const MAX_INTEGRATION_NAME: usize = 255;
 
-/// The two credential fields a channel takes: the bot's identifier (not a
-/// secret, fixed for the integration's life) and its secret.
+/// The two credential fields a channel takes. For DingTalk, Feishu and
+/// WeCom: the bot's identifier (not a secret, fixed for the integration's
+/// life) and its secret. For Slack both are secret tokens; the bot's
+/// identity is the Slack workspace and bot user they belong to.
 pub fn credential_keys(channel: &str) -> Option<[&'static str; 2]> {
     match channel {
         "dingtalk" => Some(["appKey", "appSecret"]),

@@ -607,6 +607,17 @@ fn bad_integration_input_is_rejected_locally() {
     for (args, expected) in [
         // No way to put a credential on the command line.
         (with(&["--credentials", "{}"]), "unexpected argument"),
+        // --wait follows a reconnection; a plain rename starts none.
+        (
+            vec!["im", "update", "im-1", "--name", "x", "--wait"],
+            "only new credentials or --enable",
+        ),
+        (vec!["im", "get", ""], "must not be empty"),
+        (
+            vec!["im", "update", "im-1", "--disable", "--idempotency-key", ""],
+            "must not be empty",
+        ),
+        (with(&["--wait", "--timeout", "soon"]), "invalid value"),
         (with(&[]), "credentials are needed"),
         (
             with(&["--credentials-env", "MLCLI_SURELY_UNSET_IM_CREDS"]),

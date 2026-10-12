@@ -24,10 +24,42 @@ use super::input::{read_file_or_stdin, strip_one_line_ending};
 use super::{parse_non_blank, print_json, require_workspace};
 use crate::interactive::prompt_secret_verbatim;
 
-/// How long `--wait` follows a pending connection before giving up.
-const WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long `--wait` follows a pending connection by default.
+const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 120;
 /// Gap between `--wait` polls.
 const WAIT_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The `--help` epilogue of `create` and `update`: the credential fields
+/// of each channel, which flattened arguments cannot show.
+const CREDENTIALS_HELP: &str = "\
+Credentials: a JSON object of the platform's own fields, read from
+--credentials-env VAR, --credentials-stdin or --credentials-file PATH (never
+from the command line):
+  dingtalk  {\"appKey\": \"...\", \"appSecret\": \"...\"}
+  feishu    {\"appId\": \"...\", \"appSecret\": \"...\"}
+  slack     {\"botToken\": \"xoxb-...\", \"appToken\": \"xapp-...\"}
+  wecom     {\"botId\": \"...\", \"secret\": \"...\"}
+`create` needs both fields. `update` takes only the ones that change, e.g.
+{\"appSecret\": \"...\"} to rotate a secret; the bot itself (appKey, appId,
+botId, or the Slack workspace) cannot change.
+
+Example:
+  export SLACK_BOT='{\"botToken\":\"xoxb-...\",\"appToken\":\"xapp-...\"}'
+  memorylake im create --channel slack --name Help --agent <agent-id> \\
+      --read-write-project <project-id> --credentials-env SLACK_BOT --wait";
+
+/// `--wait` and its `--timeout`.
+#[derive(Debug, Clone, Args)]
+pub struct WaitArgs {
+    /// Poll until the status leaves `pending`, and fail if it ends in
+    /// `error`, naming its `status_error_code`.
+    #[arg(long)]
+    wait: bool,
+    /// Seconds to keep polling. Only meaningful with `--wait`. Giving up
+    /// leaves the integration as it is; follow it with `integration get`.
+    #[arg(long, default_value_t = DEFAULT_WAIT_TIMEOUT_SECS, value_name = "SECS")]
+    timeout: u64,
+}
 
 /// Integration subcommands.
 #[derive(Debug, Subcommand)]
@@ -35,11 +67,12 @@ pub enum IntegrationCommand {
     /// List the integrations in the workspaces you may manage, newest first.
     /// Credentials are never returned.
     List {
-        /// Only this workspace's integrations.
-        #[arg(long)]
+        /// Only this workspace's integrations. Not taken from `workspace
+        /// use`: without it, every workspace you may manage is listed.
+        #[arg(long, value_parser = parse_non_blank)]
         workspace: Option<String>,
         /// Only integrations answered by this agent.
-        #[arg(long)]
+        #[arg(long, value_name = "AGENT_ID", value_parser = parse_non_blank)]
         agent: Option<String>,
         /// Number of items per page (1–100).
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
@@ -51,37 +84,40 @@ pub enum IntegrationCommand {
     /// Get one integration. Its `status` goes pending → connected or error;
     /// `status_error_code` says why.
     Get {
-        /// Integration id.
+        /// Integration id (from `integration list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
     },
     /// Connect a bot to an agent. DingTalk, Feishu and Slack credentials are
     /// verified with the platform before anything is saved; WeCom's are
     /// checked by connecting, so follow the status (or pass --wait). A bot
     /// can be connected only once.
+    #[command(after_long_help = CREDENTIALS_HELP)]
     Create {
         /// IM platform.
         #[arg(long, value_parser = CHANNELS)]
         channel: String,
         /// Workspace the integration belongs to; cannot change later.
         /// Defaults to the workspace remembered by `workspace use`.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         workspace: Option<String>,
         /// Display name (1–255 characters).
         #[arg(long, value_parser = parse_non_blank)]
         name: String,
-        /// Agent that answers messages sent to the bot.
+        /// Agent that answers messages sent to the bot (from `agent list`).
         #[arg(long, value_name = "AGENT_ID", value_parser = parse_non_blank)]
         agent: String,
         /// Project that memories extracted from IM conversations are written
-        /// to. Anyone who can message the bot can add to it.
+        /// to (from `project list`, in the same workspace). Anyone who can
+        /// message the bot can add to it.
         #[arg(long = "read-write-project", value_name = "PROJECT_ID", value_parser = parse_non_blank)]
         read_write_project: String,
         /// Additional project searched read-only. Repeat, or separate with
         /// commas, for several.
         #[arg(long = "read-only-project", value_name = "PROJECT_ID", value_delimiter = ',', value_parser = parse_non_blank)]
         read_only_projects: Vec<String>,
-        /// Open-data dataset the agent may use (at most 64). Repeat, or
-        /// separate with commas, for several.
+        /// Open-data dataset the agent may use (from `opendata list`; at most
+        /// 64). Repeat, or separate with commas, for several.
         #[arg(long = "dataset", value_name = "DATASET_ID", value_delimiter = ',', value_parser = parse_non_blank)]
         datasets: Vec<String>,
         /// Messages handled per day; 0 or absent = unlimited.
@@ -95,18 +131,18 @@ pub enum IntegrationCommand {
         credentials: CredentialsArgs,
         /// Retrying with the same value replays the first result instead of
         /// connecting a second time. Credential values are not compared.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
-        /// Poll until the status leaves `pending` (up to 2 minutes), and
-        /// fail if it ends in `error`.
-        #[arg(long)]
-        wait: bool,
+        #[command(flatten)]
+        wait: WaitArgs,
     },
     /// Change an integration. Only the flags given change. Credentials not
     /// given are kept; give only the values that change to rotate a secret.
     /// The bot's identifier cannot change: delete and recreate instead.
+    #[command(after_long_help = CREDENTIALS_HELP)]
     Update {
-        /// Integration id.
+        /// Integration id (from `integration list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// New display name.
         #[arg(long, value_parser = parse_non_blank)]
@@ -135,7 +171,8 @@ pub enum IntegrationCommand {
         /// DingTalk only: AI card template id; "" goes back to plain messages.
         #[arg(long, value_name = "TEMPLATE_ID")]
         card_template_id: Option<String>,
-        /// Connect the bot.
+        /// Connect the bot again after --disable. Enabling an integration
+        /// that is already enabled starts no reconnection.
         #[arg(long, conflicts_with = "disable")]
         enable: bool,
         /// Disconnect the bot, keeping everything else.
@@ -144,21 +181,23 @@ pub enum IntegrationCommand {
         #[command(flatten)]
         credentials: CredentialsArgs,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
-        /// Poll until the status leaves `pending` (up to 2 minutes), and
-        /// fail if it ends in `error`.
-        #[arg(long)]
-        wait: bool,
+        /// Follow the reconnection that new credentials or --enable start.
+        /// When the update starts none, there is nothing to wait for and the
+        /// integration is printed as it is.
+        #[command(flatten)]
+        wait: WaitArgs,
     },
     /// Disconnect the bot and delete the integration with its conversation
     /// mappings. Conversation history is kept. There is no confirmation
     /// prompt.
     Delete {
-        /// Integration id.
+        /// Integration id (from `integration list`).
+        #[arg(value_parser = parse_non_blank)]
         id: String,
         /// Retrying with the same value replays the first result.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_non_blank)]
         idempotency_key: Option<String>,
     },
 }
@@ -236,33 +275,49 @@ fn check_lists(name: &str, datasets: &[String]) -> Result<()> {
 
 /// Follow `status` until it leaves `pending`, then print the integration.
 /// A final `error` fails the command, naming the reason code.
-fn wait_until_settled(client: &Client, mut integration: Integration) -> Result<()> {
+///
+/// The write has already happened, so a failed poll says so and names the
+/// id: retrying the write would only collide with what it saved.
+fn wait_until_settled(
+    client: &Client,
+    mut integration: Integration,
+    timeout: Duration,
+) -> Result<()> {
+    let id = integration.id.clone();
+    eprintln!(
+        "Waiting up to {}s for integration `{id}` to connect…",
+        timeout.as_secs()
+    );
     let start = Instant::now();
     while integration.status == "pending" {
-        if start.elapsed() >= WAIT_TIMEOUT {
+        if start.elapsed() >= timeout {
             print_json(&integration)?;
             bail!(
-                "integration {} is still pending after {} seconds; keep polling with `integration get`",
-                integration.id,
-                WAIT_TIMEOUT.as_secs()
+                "integration `{id}` is still pending after {} seconds; keep polling with \
+                 `integration get {id}`",
+                timeout.as_secs()
             );
         }
         std::thread::sleep(WAIT_INTERVAL);
-        integration = get_integration(client, &integration.id).context("poll integration")?;
+        integration = get_integration(client, &id).with_context(|| {
+            format!(
+                "integration `{id}` was saved, but reading its status failed; \
+                 follow it with `integration get {id}`"
+            )
+        })?;
     }
     print_json(&integration)?;
     if integration.status == "error" {
         bail!(
-            "integration {} failed to connect: {} ({})",
-            integration.id,
-            integration
-                .status_error
-                .as_deref()
-                .unwrap_or("no reason given"),
+            "integration `{id}` failed to connect: {} ({})",
             integration
                 .status_error_code
                 .as_deref()
-                .unwrap_or("unknown")
+                .unwrap_or("unknown"),
+            integration
+                .status_error
+                .as_deref()
+                .unwrap_or("no reason given")
         );
     }
     Ok(())
@@ -310,6 +365,7 @@ pub fn run(
             enable,
             disable,
             credentials,
+            wait,
             ..
         } => {
             check_lists(name.as_deref().unwrap_or_default(), datasets)?;
@@ -348,6 +404,12 @@ pub fn run(
             if request == UpdateIntegrationRequest::default() {
                 bail!("nothing to update; pass at least one flag");
             }
+            if wait.wait && request.credentials.is_none() && !*enable {
+                bail!(
+                    "--wait follows a reconnection, which only new credentials or --enable \
+                     start; this update starts none"
+                );
+            }
             (None, Some(request))
         }
         _ => (None, None),
@@ -377,9 +439,9 @@ pub fn run(
             .context("list integrations")?;
             print_json(&data)
         }
-        IntegrationCommand::Get { id } => {
-            print_json(&get_integration(&client, &id).context("get integration")?)
-        }
+        IntegrationCommand::Get { id } => print_json(
+            &get_integration(&client, &id).with_context(|| format!("get integration `{id}`"))?,
+        ),
         IntegrationCommand::Create {
             channel,
             workspace,
@@ -413,8 +475,8 @@ pub fn run(
             };
             let created = create_integration(&client, &request, idempotency_key.as_deref())
                 .context("create integration")?;
-            if wait {
-                wait_until_settled(&client, created)
+            if wait.wait {
+                wait_until_settled(&client, created, Duration::from_secs(wait.timeout))
             } else {
                 print_json(&created)
             }
@@ -427,10 +489,16 @@ pub fn run(
         } => {
             let request = update_request.expect("built above");
             let updated = update_integration(&client, &id, &request, idempotency_key.as_deref())
-                .context("update integration")?;
-            if wait {
-                wait_until_settled(&client, updated)
+                .with_context(|| format!("update integration `{id}`"))?;
+            if wait.wait && updated.status == "pending" {
+                wait_until_settled(&client, updated, Duration::from_secs(wait.timeout))
             } else {
+                if wait.wait {
+                    eprintln!(
+                        "nothing to wait for: the update started no reconnection (status `{}`)",
+                        updated.status
+                    );
+                }
                 print_json(&updated)
             }
         }
@@ -439,8 +507,8 @@ pub fn run(
             idempotency_key,
         } => {
             delete_integration(&client, &id, idempotency_key.as_deref())
-                .context("delete integration")?;
-            println!("integration {id} deleted");
+                .with_context(|| format!("delete integration `{id}`"))?;
+            println!("Deleted integration `{id}`");
             Ok(())
         }
     }

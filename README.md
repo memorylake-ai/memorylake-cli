@@ -844,11 +844,11 @@ memorylake im get <id>
 memorylake im create --channel slack --name Help --agent <agent-id> --read-write-project <project-id>
                      [--workspace ID] [--read-only-project ID]... [--dataset ID]...
                      [--daily-message-limit N] [--card-template-id ID]
-                     (--credentials-env VAR | --credentials-stdin | --credentials-file PATH) [--wait]
+                     (--credentials-env VAR | --credentials-stdin | --credentials-file PATH) [--wait [--timeout SECS]]
 memorylake im update <id> [--name N] [--agent ID] [--read-write-project ID]
                      [--read-only-project ID... | --no-read-only-projects] [--dataset ID... | --no-datasets]
                      [--daily-message-limit N] [--card-template-id ID|""] [--enable | --disable]
-                     [--credentials-env VAR | --credentials-stdin | --credentials-file PATH] [--wait]
+                     [--credentials-env VAR | --credentials-stdin | --credentials-file PATH] [--wait [--timeout SECS]]
 memorylake im delete <id>
 ```
 
@@ -875,8 +875,12 @@ different bot means delete and create.
 DingTalk, Feishu and Slack credentials are verified with the platform before
 anything is saved, so a bad token fails at once and leaves nothing behind.
 WeCom's are checked by connecting: `status` goes `pending` → `connected` or
-`error`, with `status_error_code` saying why. `--wait` follows it for up to two
-minutes and fails if it ends in `error`.
+`error`, with `status_error_code` saying why. `--wait` follows it (two minutes
+unless `--timeout` says otherwise) and fails if it ends in `error`. On `update`,
+only new credentials or re-enabling a disabled integration start a
+reconnection; `--wait` without either is refused, and when the update started
+none it just prints the integration. If following the status fails, the error
+names the integration, which was saved all the same.
 
 Anyone who can message the bot can add memories to the `--read-write-project`,
 so point it at a project meant for that.
