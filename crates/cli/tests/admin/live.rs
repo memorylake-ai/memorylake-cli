@@ -886,6 +886,41 @@ fn a_created_team_dies_by_its_own_key() {
     // the creating key's own team is untouched.
     let team_home = temp_home();
     assert_success(&login(&team_home, &team_key, "lab"), &["login lab"]);
+
+    // Ownership can only go to another human member, which a test team
+    // never has; what can be proven is that the endpoint is reached and
+    // refuses a virtual member, after the local --confirm check passed.
+    let wrong = [
+        "team",
+        "transfer-ownership",
+        "--to",
+        "prin-mlcli-none",
+        "--confirm",
+        own_team.as_str(),
+    ];
+    let err = assert_failure(&run(&team_home, &wrong), &wrong);
+    assert!(err.contains("does not match"), "{err}");
+    let args = [
+        "member",
+        "create",
+        "--name",
+        "mlcli bot",
+        "--role",
+        "tenant_member",
+    ];
+    let bot = parse(&assert_success(&run(&team_home, &args), &args), "member");
+    let bot_id = str_field(&bot, "principal_id");
+    let args = [
+        "team",
+        "transfer-ownership",
+        "--to",
+        bot_id.as_str(),
+        "--confirm",
+        team_id.as_str(),
+    ];
+    let err = assert_failure(&run(&team_home, &args), &args);
+    assert!(err.contains("human member"), "{err}");
+
     let wrong = ["team", "delete", "--confirm", own_team.as_str()];
     let err = assert_failure(&run(&team_home, &wrong), &wrong);
     assert!(err.contains("does not match"), "{err}");
