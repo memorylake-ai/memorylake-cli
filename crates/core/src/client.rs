@@ -14,6 +14,29 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+
+/// Whether `err` is a connection that broke while opening, other than a
+/// refusal: the request was never sent, and trying again may well work.
+fn is_transient_connect_failure(err: &reqwest::Error) -> bool {
+    if !err.is_connect() {
+        return false;
+    }
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>()
+            && io.kind() == std::io::ErrorKind::ConnectionRefused
+        {
+            return false;
+        }
+        source = cause.source();
+    }
+    true
+}
+
+/// Pauses before each retry of a request whose connection failed to open.
+/// Short: they cover a dropped handshake, not an outage.
+const CONNECT_RETRY_PAUSES: [Duration; 2] =
+    [Duration::from_millis(500), Duration::from_millis(1500)];
 use crate::sse::EventStream;
 
 /// What a completed download reported about itself.
@@ -578,7 +601,16 @@ impl Client {
     ///
     /// Every verb funnels through here so the `Authorization` header is
     /// redacted in exactly one place and no method can bypass it.
-    fn execute(&self, request: reqwest::blocking::Request) -> Result<reqwest::blocking::Response> {
+    ///
+    /// A connection that fails while opening — reset, or a TLS handshake cut
+    /// short — is retried a few times with a short pause. Nothing has been
+    /// sent then, so even a non-idempotent write is safe to repeat. A refused
+    /// connection is not retried (nothing listens; a pause will not change
+    /// that), nor is a request whose body cannot be replayed (a stream).
+    fn execute(
+        &self,
+        mut request: reqwest::blocking::Request,
+    ) -> Result<reqwest::blocking::Response> {
         tracing::trace!(
             method = %request.method(),
             url = %request.url(),
@@ -586,6 +618,19 @@ impl Client {
             body = %request_body_as_str(&request),
             "HTTP request"
         );
+        for pause in CONNECT_RETRY_PAUSES {
+            let Some(retry) = request.try_clone() else {
+                break;
+            };
+            match self.http.execute(request) {
+                Err(err) if is_transient_connect_failure(&err) => {
+                    tracing::debug!(error = %err, "connection failed; retrying in {pause:?}");
+                    std::thread::sleep(pause);
+                    request = retry;
+                }
+                result => return Ok(result?),
+            }
+        }
         Ok(self.http.execute(request)?)
     }
 
@@ -1907,6 +1952,50 @@ mod tests {
         assert!(
             !logged.contains("hunter2-secret"),
             "password leaked into trace output: {logged}"
+        );
+    }
+
+    #[test]
+    fn a_handshake_cut_short_is_retried_and_a_refusal_is_not() {
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // A plain TCP server behind an https URL: every TLS handshake ends
+        // the moment it starts, as a dropped connection does in the field.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                counter.fetch_add(1, Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+
+        let client = Client::new(format!("https://{addr}"), "sk_test_key_1234").unwrap();
+        let err = client
+            .post_data::<Value, _>("/api/v3/things", &serde_json::json!({"name": "x"}))
+            .expect_err("no handshake ever completes");
+        assert!(err.to_string().contains("could not connect"), "{err}");
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1 + CONNECT_RETRY_PAUSES.len(),
+            "one attempt plus one per retry pause"
+        );
+
+        // Nothing listening: refused at once, without the pauses.
+        let refused = TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("reserve a port");
+        let client = Client::new(format!("http://{refused}"), "sk_test_key_1234").unwrap();
+        let started = std::time::Instant::now();
+        let _ = client.get_data::<Value>("/api/v3/things", &[]);
+        assert!(
+            started.elapsed() < CONNECT_RETRY_PAUSES[0],
+            "a refusal was retried: {:?}",
+            started.elapsed()
         );
     }
 
