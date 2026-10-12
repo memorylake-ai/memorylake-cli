@@ -673,7 +673,7 @@ memorylake key create --name ci [--member <principal-id>] [--expires-at UNIX_SEC
 memorylake key update <id> [--name N] [--status enabled|disabled] [--expires-at UNIX_SECONDS|0]
                       [--allowed-ip IP_OR_CIDR... | --no-ip-restriction] [--group G] [--backup-group G]
 memorylake key rotate <id>
-memorylake key revoke <id>
+memorylake key revoke <id>                      # alias: key delete
 
 memorylake role list                    # what --role below accepts
 memorylake member list [--name FUZZY] [--role KEY] [--email ADDR]... [--type human|virtual] [--page-size N]
@@ -681,12 +681,12 @@ memorylake member get <principal-id>
 memorylake member create --name "CI Bot" --role tenant_member   # virtual member
 memorylake member update <principal-id> [--role KEY] [--max-tokens N|0]
 memorylake member set-role <principal-id> --role tenant_admin
-memorylake member remove <principal-id>
+memorylake member remove <principal-id>         # alias: member delete
 
 memorylake invite create --email person@example.com --role tenant_member
 memorylake invite list [--status pending|accepted|rejected|expired|revoked] [--email ADDR]...
 memorylake invite get <id>
-memorylake invite revoke <id>
+memorylake invite revoke <id>                   # alias: invite delete
 
 memorylake usage [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--daily] [--group-by member,model]
 memorylake usage summary                # today, last 7 days, month to date
@@ -696,7 +696,10 @@ memorylake usage records [--start-time UNIX] [--end-time UNIX] [--model M]... [-
 
 `key create` and `key rotate` print the full key **exactly once** — list and get
 only ever return its prefix, and an idempotent replay omits it too, so capture
-it from the first response.
+it from the first response. When a response carries no key, a note on standard
+error says so and how to get a new one. To tell which key a profile runs with,
+compare the last four characters `auth status` shows with `key_suffix` in
+`key list`: that key cannot revoke or disable itself.
 
 A *virtual member* is a login-less identity for automations: create one with
 `member create`, then issue it a key with `key create --member <principal-id>`.
@@ -716,7 +719,8 @@ one that ran the command. `team create --issue-api-key` prints the new team's
 owner key exactly once; the key you ran it with stays in its own team.
 
 `usage` reports for the whole team when you may view it, otherwise for you
-alone; `scope` says which. `used_tokens` is what is charged against the balance.
+alone; `scope` says which. A report or a `usage records` window spans at most 92
+days, checked before anything is sent. `used_tokens` is what is charged against the balance.
 
 ### Access control
 
@@ -762,26 +766,29 @@ memorylake ag scope get|set <id> ...
 memorylake access show <type> <id>              # who can reach the instance, and why
 memorylake access levels <type> <id> --member <principal-id>
 memorylake access set-level <type> <id> --member <principal-id> --level read|write|manage|none --reason TEXT
-memorylake access grant|revoke <type> <id> (--member <principal-id> | --group <id>) --reason TEXT
+memorylake access grant <type> <id> (--member <principal-id> | --group <id>) --reason TEXT
+memorylake access revoke <type> <id> (--member <principal-id> | --group <id>) [--reason TEXT]
 ```
 
 `<type>` is one of `workspace`, `project`, `actor`, `agent`, `boundary`,
 `db-connection`, `db-datasource`, `skill`, `workspace-actor` and
 `workspace-agent`. The last two are an actor's or agent's binding in one
-workspace and need `--workspace <id>`. A project accepts `--workspace` as well;
-nothing else does. `--workspace` is never taken from `workspace use`, because
-here it changes which instance is meant.
+workspace: `--workspace <id>`, or else the workspace `workspace use` remembered,
+as for `actor bind`. A project accepts `--workspace` as well, so it shows by name
+in access scopes; that one is never filled in for you. Nothing else takes it.
 
 `scope set` takes a JSON array of `{resource_type, mode, instances}` entries,
 where `mode` is `all` or `instances`, and replaces the scope of only the types
 it lists. It also accepts what `scope get` printed, edited: read-only fields
-are dropped. Entries that list no instances must be removed first. Project
-instances need their `workspace_id`.
+are dropped. Entries that list no instances must be removed first: leaving a
+type out keeps it as it is, and for an access group mode `all` removes its
+instances. Project instances need their `workspace_id`. `scope set --help` shows
+the whole read-edit-write loop.
 
 Reads that a later write can be checked against (`scope get`, `ag get`) print
 an `ETag: "..."` line on standard error, leaving standard output as plain JSON.
-Pass that value as `--if-match` and the write is refused with `412` if someone
-changed the same thing in between. Scope, rule, level and grant changes take a
+Pass that value as `--if-match` (quotes optional; the whole line works too) and
+the write is refused with `412` if someone changed the same thing in between. Scope, rule, level and grant changes take a
 `--reason` (at most 255 bytes), which is recorded in the audit log.
 
 ### Billing and audit log

@@ -187,8 +187,9 @@ pub fn parse_scope_entries(json: &str) -> Result<Vec<ScopeEntryInput>, ScopeInpu
             }
             ("instances", _) => {
                 return Err(ScopeInputError(format!(
-                    "`{kind}`: mode `instances` needs at least one instance; \
-                     leave the entry out to keep the type as it is"
+                    "`{kind}`: mode `instances` needs at least one instance. Leave the \
+                     entry out to keep the type as it is; for an access group, mode `all` \
+                     removes the type's instances"
                 )));
             }
             (other, _) => {

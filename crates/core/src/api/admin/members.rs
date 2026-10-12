@@ -82,7 +82,7 @@ pub fn get_member(client: &Client, principal_id: &str) -> Result<Member> {
 
 /// Create a VIRTUAL member: a login-less managed identity that holds a role
 /// and acts only through API keys issued for it (`api-key create
-/// --member-principal-id`). Humans join through invitations only.
+/// --member`). Humans join through invitations only.
 pub fn create_member(
     client: &Client,
     request: &CreateMemberRequest,
