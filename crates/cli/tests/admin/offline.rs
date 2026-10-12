@@ -1,4 +1,7 @@
 //! Offline team-management tests (no network; temp `$HOME` only).
+//!
+//! Every local check must fire before credentials are resolved, so a typo
+//! never costs a login prompt or a round trip.
 
 use std::fs;
 
@@ -16,6 +19,9 @@ fn every_management_command_family_requires_login() {
         ["role", "list"].as_slice(),
         ["invitation", "list"].as_slice(),
         ["usage"].as_slice(),
+        ["access-group", "list"].as_slice(),
+        ["permission", "me"].as_slice(),
+        ["access", "show", "workspace", "ws-1"].as_slice(),
     ] {
         let err = assert_failure(&run(&home, args), args);
         assert!(
@@ -79,6 +85,223 @@ fn bad_input_is_rejected_locally_before_credentials_are_needed() {
         (
             vec!["team", "transfer-ownership", "--to", "prin-2"],
             "--confirm",
+        ),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn bad_access_control_input_is_rejected_locally() {
+    let home = temp_home();
+    let long_reason = "r".repeat(256);
+    let too_many: Vec<String> = (0..201).map(|i| format!("prin-{i}")).collect();
+    let mut add_too_many = vec!["ag", "member", "add", "g-1"];
+    add_too_many.extend(too_many.iter().map(String::as_str));
+    let project_without_workspace =
+        r#"[{"resource_type":"memorylake:project","mode":"instances","instances":[{"id":"p-1"}]}]"#;
+    for (args, expected) in [
+        // `access`: the --workspace rule and the subject.
+        (
+            vec!["access", "show", "workspace-actor", "act-1"],
+            "needs --workspace",
+        ),
+        (
+            vec!["access", "show", "skill", "sk-1", "--workspace", "ws-1"],
+            "takes no --workspace",
+        ),
+        (vec!["access", "show", "folder", "f-1"], "invalid value"),
+        (
+            vec!["access", "grant", "workspace", "ws-1", "--reason", "r"],
+            "required",
+        ),
+        (
+            vec![
+                "access",
+                "grant",
+                "workspace",
+                "ws-1",
+                "--member",
+                "p",
+                "--group",
+                "g",
+                "--reason",
+                "r",
+            ],
+            "cannot be used with",
+        ),
+        (
+            vec![
+                "access",
+                "set-level",
+                "workspace",
+                "ws-1",
+                "--member",
+                "p",
+                "--level",
+                "owner",
+                "--reason",
+                "r",
+            ],
+            "invalid value",
+        ),
+        // Reasons are audited: never blank, never over 255 bytes.
+        (
+            vec![
+                "access",
+                "grant",
+                "workspace",
+                "ws-1",
+                "--member",
+                "p",
+                "--reason",
+                " ",
+            ],
+            "must not be empty",
+        ),
+        (
+            vec![
+                "perm",
+                "rule",
+                "delete",
+                "pr1_x",
+                "--reason",
+                long_reason.as_str(),
+            ],
+            "at most 255 bytes",
+        ),
+        // `access-group`.
+        (vec!["ag", "update", "g-1"], "nothing to update"),
+        (
+            vec![
+                "ag",
+                "create",
+                "--name",
+                "Ops",
+                "--base-role",
+                "tenant_member",
+                "--base-group",
+                "g-2",
+            ],
+            "cannot be used with",
+        ),
+        (
+            vec![
+                "ag",
+                "create",
+                "--name",
+                "Ops",
+                "--base-role",
+                "tenant_owner",
+            ],
+            "invalid value",
+        ),
+        (
+            vec![
+                "ag",
+                "create",
+                "--name",
+                "Ops",
+                "--permission",
+                "memorylake:actor",
+            ],
+            "<resource_type>:<action>",
+        ),
+        (
+            vec!["ag", "permissions", "set", "g-1", "--reason", "r"],
+            "required",
+        ),
+        (
+            vec![
+                "ag",
+                "permissions",
+                "set",
+                "g-1",
+                "--none",
+                "--permission",
+                "memorylake:actor:actor:read",
+                "--reason",
+                "r",
+            ],
+            "cannot be used with",
+        ),
+        (add_too_many, "at most 200"),
+        // `role`.
+        (
+            vec!["role", "update", "tenant_custom_1"],
+            "nothing to update",
+        ),
+        // Scopes are parsed and checked before the request is built.
+        (
+            vec!["member", "scope", "set", "prin-1", "--reason", "r"],
+            "required",
+        ),
+        (
+            vec![
+                "member", "scope", "set", "prin-1", "--scopes", "[]", "--reason", "r",
+            ],
+            "no scope entries",
+        ),
+        (
+            vec![
+                "role",
+                "scope",
+                "set",
+                "tenant_member",
+                "--scopes",
+                project_without_workspace,
+                "--reason",
+                "r",
+            ],
+            "workspace_id",
+        ),
+        (
+            vec![
+                "ag",
+                "scope",
+                "set",
+                "g-1",
+                "--scopes",
+                r#"[{"resource_type":"memorylake:project","mode":"instances"}]"#,
+                "--reason",
+                "r",
+            ],
+            "leave the entry out",
+        ),
+        (
+            vec![
+                "member",
+                "scope",
+                "set",
+                "prin-1",
+                "--scopes-file",
+                "/nonexistent/mlcli-scopes.json",
+                "--reason",
+                "r",
+            ],
+            "read scopes file",
+        ),
+        // `permission rule`.
+        (
+            vec!["perm", "rule", "list", "--subject-id", "prin-1"],
+            "required",
+        ),
+        (
+            vec![
+                "perm",
+                "rule",
+                "create",
+                "--resource",
+                "memorylake:skill",
+                "--action",
+                "skill:read",
+                "--reason",
+                "r",
+            ],
+            "required",
         ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);

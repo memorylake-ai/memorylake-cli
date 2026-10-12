@@ -1,5 +1,7 @@
 //! CLI subcommand handlers.
 
+pub mod access;
+pub mod access_group;
 pub mod actor;
 pub mod agent;
 pub mod api_key;
@@ -14,6 +16,8 @@ pub mod invitation;
 pub mod library;
 pub mod member;
 pub mod opendata;
+pub mod permission;
+mod scope_input;
 
 pub mod project;
 pub mod role;
@@ -41,6 +45,32 @@ pub fn api_client(profile: Option<String>, base_url: Option<String>) -> Result<C
 pub fn print_json<T: serde::Serialize>(data: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(data)?);
     Ok(())
+}
+
+/// Print a payload like [`print_json`], and its `ETag` on standard error.
+///
+/// The `ETag` is what the matching write takes back as `--if-match` to refuse
+/// overwriting a change made since. Standard error keeps standard output a
+/// single JSON document for whoever parses it.
+pub fn print_json_with_etag<T: serde::Serialize>(data: &T, etag: Option<&str>) -> Result<()> {
+    print_json(data)?;
+    if let Some(etag) = etag {
+        eprintln!("ETag: {etag}");
+    }
+    Ok(())
+}
+
+/// Accept an audit-log reason: non-blank, and at most 255 bytes of UTF-8 —
+/// the documented cap of the scope endpoints, applied to every reason so the
+/// limit is the same wherever one is asked for.
+pub fn parse_reason(raw: &str) -> std::result::Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    if raw.len() > 255 {
+        return Err(format!("must be at most 255 bytes, got {}", raw.len()));
+    }
+    Ok(raw.to_string())
 }
 
 /// Parse a flag value holding a JSON object of string values, such as

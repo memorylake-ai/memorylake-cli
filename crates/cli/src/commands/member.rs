@@ -4,10 +4,12 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::admin::{
     CreateMemberRequest, ListMembersParams, MAX_MEMBER_TOKENS, UpdateMemberRequest, create_member,
-    get_member, list_members, remove_member, update_member,
+    explain_member, get_member, get_member_scope, list_members, remove_member, set_member_scope,
+    update_member,
 };
 
-use super::{api_client, print_json};
+use super::scope_input::ScopeSetArgs;
+use super::{api_client, print_json, print_json_with_etag};
 
 /// Member subcommands.
 #[derive(Debug, Subcommand)]
@@ -91,6 +93,39 @@ pub enum MemberCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    /// Explain what a member can do and where each permission comes from:
+    /// the role, access groups, or a direct grant.
+    Explain {
+        /// Member principal id (from `member list`).
+        principal_id: String,
+    },
+    /// Show or limit which instances a member reaches.
+    Scope {
+        #[command(subcommand)]
+        command: ScopeCommand,
+    },
+}
+
+/// `member scope` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum ScopeCommand {
+    /// Show, per resource type, whether the member reaches every instance or
+    /// only the listed ones. The ETag (on standard error) is what
+    /// `scope set --if-match` takes.
+    Get {
+        /// Member principal id.
+        principal_id: String,
+    },
+    /// Replace the scope of each listed resource type. A scope limits a
+    /// member; it never grants more than their role allows, and a limited
+    /// type must leave them at least one instance. Project instances need
+    /// their workspace_id.
+    Set {
+        /// Member principal id.
+        principal_id: String,
+        #[command(flatten)]
+        input: ScopeSetArgs,
+    },
 }
 
 /// Execute a `member` subcommand.
@@ -109,6 +144,12 @@ pub fn run(
     {
         bail!("nothing to update; pass --role or --max-tokens");
     }
+    let scope_request = match &command {
+        MemberCommand::Scope {
+            command: ScopeCommand::Set { input, .. },
+        } => Some(input.request()?),
+        _ => None,
+    };
 
     let client = api_client(profile, base_url)?;
 
@@ -200,5 +241,25 @@ pub fn run(
             println!("member {principal_id} removed");
             Ok(())
         }
+        MemberCommand::Explain { principal_id } => {
+            let data = explain_member(&client, &principal_id).context("explain member")?;
+            print_json(&data)
+        }
+        MemberCommand::Scope { command } => match command {
+            ScopeCommand::Get { principal_id } => {
+                let (data, etag) =
+                    get_member_scope(&client, &principal_id).context("get member scope")?;
+                print_json_with_etag(&data, etag.as_deref())
+            }
+            ScopeCommand::Set {
+                principal_id,
+                input,
+            } => {
+                let request = scope_request.expect("parsed above");
+                let data = set_member_scope(&client, &principal_id, &request, input.if_match())
+                    .context("set member scope")?;
+                print_json(&data)
+            }
+        },
     }
 }

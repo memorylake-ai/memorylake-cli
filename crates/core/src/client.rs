@@ -566,6 +566,72 @@ impl Client {
         Ok(())
     }
 
+    /// Perform a PUT with a JSON body and deserialize the API `data` payload.
+    ///
+    /// `headers` carries per-request extras such as `Idempotency-Key` or
+    /// `If-Match`.
+    pub fn put_data_with_headers<T, B>(
+        &self,
+        path: &str,
+        body: &B,
+        headers: &[(&str, &str)],
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
+        let url = self.url(path)?;
+        let request = apply_headers(self.http.put(&url), headers)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .build()?;
+        self.send(request)
+    }
+
+    /// Perform a DELETE with query parameters and extra headers, and
+    /// deserialize the API `data` payload.
+    pub fn delete_data_with_query_and_headers<T>(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        headers: &[(&str, &str)],
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let url = self.url(path)?;
+        let mut builder =
+            apply_headers(self.http.delete(&url), headers).headers(self.auth_headers()?);
+        for (key, value) in query {
+            builder = builder.query(&[(key, value)]);
+        }
+        self.send(builder.build()?)
+    }
+
+    /// [`Self::get_data`] that also returns the response's `ETag` header, for
+    /// resources whose writes take it back in `If-Match`.
+    pub fn get_data_with_etag<T>(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> Result<(T, Option<String>)>
+    where
+        T: DeserializeOwned,
+    {
+        let url = self.url(path)?;
+        let mut builder = self.http.get(&url).headers(self.auth_headers()?);
+        for (key, value) in query {
+            builder = builder.query(&[(key, value)]);
+        }
+        let response = self.execute(builder.build()?)?;
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        Ok((decode_envelope(response)?, etag))
+    }
+
     /// Trace, execute, and decode a prepared request.
     fn send<T>(&self, request: reqwest::blocking::Request) -> Result<T>
     where

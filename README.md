@@ -718,6 +718,72 @@ owner key exactly once; the key you ran it with stays in its own team.
 `usage` reports for the whole team when you may view it, otherwise for you
 alone; `scope` says which. `used_tokens` is what is charged against the balance.
 
+### Access control
+
+What a member may do comes from four places, each with its own commands:
+
+- **Role** — what actions holders may take. Built-in roles are fixed; a custom
+  role starts as a copy of one and is changed with permission rules.
+- **Access scope** — which instances a member, or every holder of a role, may
+  reach, per resource type. A scope only limits; it never grants more than the
+  role allows.
+- **Access groups** — extra permissions and extra instances for their members.
+  A group only adds.
+- **Permission level** — `read`, `write` or `manage` on one instance, set per
+  member.
+
+```bash
+memorylake perm me                              # what your key may do here
+memorylake perm catalog [--access-group]        # resource types and actions rules can name
+memorylake member explain <principal-id>        # every permission and instance, with its source
+
+memorylake role get <key>
+memorylake role create --label Reviewers [--description D] [--base-role tenant_member]
+memorylake role update <key> [--label L] [--description D|""]
+memorylake role delete <key>
+memorylake perm rule list [--subject-type role|member [--subject-id ID]] [--page-size N]
+memorylake perm rule create (--role KEY | --member <principal-id>) --resource memorylake:skill
+                            --action skill:read[,skill:modify] [--auto-grant-prerequisites] --reason TEXT
+memorylake perm rule delete <rule-id> [--reason TEXT]
+
+memorylake member scope get <principal-id>      # also: role scope get <key>
+memorylake member scope set <principal-id> (--scopes JSON | --scopes-file PATH|-) --reason TEXT [--if-match ETAG]
+
+memorylake ag list | get <id> | explain <id> | delete <id>
+memorylake ag create --name Ops [--base-role tenant_member | --base-group <id>]
+                     [--permission memorylake:actor:actor:create]...
+memorylake ag update <id> [--name N] [--description D|""]
+memorylake ag member list <id>
+memorylake ag member add <id> <principal-id>...  # up to 200, all or nothing
+memorylake ag member remove <id> <principal-id>
+memorylake ag permissions set <id> (--permission P... | --none) --reason TEXT [--if-match ETAG]
+memorylake ag scope get|set <id> ...
+
+memorylake access show <type> <id>              # who can reach the instance, and why
+memorylake access levels <type> <id> --member <principal-id>
+memorylake access set-level <type> <id> --member <principal-id> --level read|write|manage|none --reason TEXT
+memorylake access grant|revoke <type> <id> (--member <principal-id> | --group <id>) --reason TEXT
+```
+
+`<type>` is one of `workspace`, `project`, `actor`, `agent`, `boundary`,
+`db-connection`, `db-datasource`, `skill`, `workspace-actor` and
+`workspace-agent`. The last two are an actor's or agent's binding in one
+workspace and need `--workspace <id>`. A project accepts `--workspace` as well;
+nothing else does. `--workspace` is never taken from `workspace use`, because
+here it changes which instance is meant.
+
+`scope set` takes a JSON array of `{resource_type, mode, instances}` entries,
+where `mode` is `all` or `instances`, and replaces the scope of only the types
+it lists. It also accepts what `scope get` printed, edited: read-only fields
+are dropped. Entries that list no instances must be removed first. Project
+instances need their `workspace_id`.
+
+Reads that a later write can be checked against (`scope get`, `ag get`) print
+an `ETag: "..."` line on standard error, leaving standard output as plain JSON.
+Pass that value as `--if-match` and the write is refused with `412` if someone
+changed the same thing in between. Scope, rule, level and grant changes take a
+`--reason` (at most 255 bytes), which is recorded in the audit log.
+
 ## Configuration
 
 Credentials and settings live in `~/.memorylake/` (`credentials.toml`,
