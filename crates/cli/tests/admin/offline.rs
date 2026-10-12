@@ -25,6 +25,8 @@ fn every_management_command_family_requires_login() {
         ["billing", "balance"].as_slice(),
         ["audit-log", "list"].as_slice(),
         ["integration", "list"].as_slice(),
+        // 0 is a valid expiry: "never". It must reach the credential check.
+        ["api-key", "create", "--name", "k", "--expires-at", "0"].as_slice(),
     ] {
         let err = assert_failure(&run(&home, args), args);
         assert!(
@@ -116,11 +118,37 @@ fn bad_input_is_rejected_locally_before_credentials_are_needed() {
             "must not be empty",
         ),
         (vec!["team", "rename", "--name", ""], "must not be empty"),
-        // A create expiry of 0 would be a key that is already expired.
+        // An expiry in the past would mint a key that is already expired.
         (
-            vec!["api-key", "create", "--name", "k", "--expires-at", "0"],
-            "invalid value",
+            vec!["api-key", "create", "--name", "k", "--expires-at", "1"],
+            "not in the future",
         ),
+        // "" would read as "no member" and issue the key for the caller.
+        (
+            vec!["api-key", "create", "--name", "k", "--member", ""],
+            "must not be empty",
+        ),
+        (
+            vec![
+                "usage",
+                "--start-date",
+                "2026-01-01",
+                "--end-date",
+                "2026-08-27",
+            ],
+            "more than 92 days",
+        ),
+        (
+            vec![
+                "usage",
+                "--start-date",
+                "2026-05-03",
+                "--end-date",
+                "2026-05-02",
+            ],
+            "is after",
+        ),
+        (vec!["usage", "--end-date", "2026-02-30"], "YYYY-MM-DD"),
         (vec!["usage", "--start-date", "2026-13-01"], "YYYY-MM-DD"),
         (
             vec![
@@ -362,6 +390,10 @@ fn bad_access_control_input_is_rejected_locally() {
         (vec!["role", "get", " "], "must not be empty"),
         (vec!["member", "scope", "get", ""], "must not be empty"),
         (vec!["perm", "rule", "delete", ""], "must not be empty"),
+        (
+            vec!["ag", "member", "remove", "g-1", ""],
+            "must not be empty",
+        ),
         (vec!["ag", "list", "--page-size", "0"], "invalid value"),
         (
             vec!["ag", "member", "list", "g-1", "--page-size", "101"],

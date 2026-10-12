@@ -84,7 +84,7 @@ fn api_key_create_posts_the_request_and_prints_the_one_time_key() {
         "--member",
         "prin-bot",
         "--expires-at",
-        "1790000000",
+        "4102444800",
     ];
     let (request, output) = exchange(created, &args);
     let stdout = assert_success(&output, &args);
@@ -92,7 +92,7 @@ fn api_key_create_posts_the_request_and_prints_the_one_time_key() {
     assert_eq!(request_line(&request), "POST /admin/v1/api-keys HTTP/1.1");
     assert!(
         request
-            .contains(r#"{"name":"ci","member_principal_id":"prin-bot","expires_at":1790000000}"#),
+            .contains(r#"{"name":"ci","member_principal_id":"prin-bot","expires_at":4102444800}"#),
         "body not sent: {request}"
     );
     assert!(
