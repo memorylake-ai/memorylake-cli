@@ -285,7 +285,7 @@ fn a_key_works_until_rotated_away_and_dies_on_revoke() {
     // Revoke: the id is gone and the material no longer authenticates.
     let revoke_args = ["api-key", "revoke", id.as_str()];
     let stdout = assert_success(&run(&home, &revoke_args), &revoke_args);
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
     assert_failure(&run(&home, &get_args), &get_args);
     assert_key_rejected(&second_key);
 
@@ -451,7 +451,7 @@ fn a_virtual_members_key_acts_as_that_member() {
     // what's tested.
     let remove_args = ["member", "remove", principal_id.as_str()];
     let stdout = assert_success(&run(&home, &remove_args), &remove_args);
-    assert!(stdout.contains("removed"), "{stdout}");
+    assert!(stdout.contains("Removed"), "{stdout}");
     assert_key_rejected(&vm_key);
 
     let stdout = assert_success(&run(&home, &list_args), &list_args);
@@ -670,7 +670,7 @@ fn an_invitation_is_created_pending_and_dies_on_revoke() {
     // …revoke kills it, and the state filters agree.
     let revoke_args = ["invitation", "revoke", id.as_str()];
     let stdout = assert_success(&run(&home, &revoke_args), &revoke_args);
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
     let stdout = assert_success(&run(&home, &list_args), &list_args);
     assert!(
         !stdout.contains(&id),

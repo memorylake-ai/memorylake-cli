@@ -131,7 +131,7 @@ fn api_key_revoke_deletes_and_confirms() {
         request_line(&request),
         "DELETE /admin/v1/api-keys/42 HTTP/1.1"
     );
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
 }
 
 #[test]
@@ -184,20 +184,22 @@ fn member_create_posts_a_virtual_member() {
 }
 
 #[test]
-fn member_set_role_patches_the_member() {
-    let args = ["member", "set-role", "prin-1", "--role", "tenant_admin"];
-    let (request, output) = exchange(EMPTY_DATA, &args);
+fn member_set_role_patches_the_member_then_prints_it() {
+    let args = ["member", "set-role", "prin-b", "--role", "tenant_admin"];
+    let (requests, output) = exchange_sequence(&[EMPTY_DATA, MEMBER], &args);
     let stdout = assert_success(&output, &args);
 
     assert_eq!(
-        request_line(&request),
-        "PATCH /admin/v1/members/prin-1 HTTP/1.1"
+        request_line(&requests[0]),
+        "PATCH /admin/v1/members/prin-b HTTP/1.1"
     );
-    assert!(
-        request.contains(r#"{"role":"tenant_admin"}"#),
-        "body not sent: {request}"
+    assert_eq!(request_body(&requests[0]), r#"{"role":"tenant_admin"}"#);
+    // Same output as `member update`: the member as it now stands.
+    assert_eq!(
+        request_line(&requests[1]),
+        "GET /admin/v1/members/prin-b HTTP/1.1"
     );
-    assert!(stdout.contains("tenant_admin"), "{stdout}");
+    serde_json::from_str::<serde_json::Value>(&stdout).expect("stdout is JSON");
 }
 
 #[test]
@@ -210,7 +212,7 @@ fn member_remove_deletes_the_member() {
         request_line(&request),
         "DELETE /admin/v1/members/prin-1 HTTP/1.1"
     );
-    assert!(stdout.contains("removed"), "{stdout}");
+    assert!(stdout.contains("Removed"), "{stdout}");
 }
 
 #[test]
@@ -259,7 +261,7 @@ fn invitation_revoke_deletes_via_the_invite_alias() {
         request_line(&request),
         "DELETE /admin/v1/invitations/7 HTTP/1.1"
     );
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
 }
 
 #[test]
