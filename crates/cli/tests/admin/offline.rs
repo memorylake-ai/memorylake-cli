@@ -650,6 +650,7 @@ fn bad_integration_input_is_rejected_locally() {
             "must not be empty",
         ),
         (with(&["--wait", "--timeout", "soon"]), "invalid value"),
+        (with(&["--wait", "--timeout", "0"]), "invalid value"),
         (with(&[]), "credentials are needed"),
         (
             with(&["--credentials-env", "MLCLI_SURELY_UNSET_IM_CREDS"]),

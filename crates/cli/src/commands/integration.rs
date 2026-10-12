@@ -57,7 +57,7 @@ pub struct WaitArgs {
     wait: bool,
     /// Seconds to keep polling. Only meaningful with `--wait`. Giving up
     /// leaves the integration as it is; follow it with `integration get`.
-    #[arg(long, default_value_t = DEFAULT_WAIT_TIMEOUT_SECS, value_name = "SECS")]
+    #[arg(long, default_value_t = DEFAULT_WAIT_TIMEOUT_SECS, value_name = "SECS", value_parser = clap::value_parser!(u64).range(1..))]
     timeout: u64,
 }
 
