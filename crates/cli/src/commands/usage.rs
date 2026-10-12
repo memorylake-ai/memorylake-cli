@@ -101,6 +101,11 @@ pub fn run(args: UsageArgs, profile: Option<String>, base_url: Option<String>) -
     {
         check_window(*start, *end)?;
     }
+    if args.command.is_none()
+        && let (Some(start), Some(end)) = (&args.report.start_date, &args.report.end_date)
+    {
+        check_date_window(start, end)?;
+    }
 
     let client = api_client(profile, base_url)?;
 
@@ -171,20 +176,67 @@ fn check_window(start: i64, end: i64) -> Result<()> {
     Ok(())
 }
 
-/// A calendar day as the usage report takes it: YYYY-MM-DD.
+/// `--start-date` must not come after `--end-date`, and the report spans
+/// at most 92 days counting both ends, as the server counts them.
+fn check_date_window(start: &str, end: &str) -> Result<()> {
+    let (Some(first), Some(last)) = (day_number(start), day_number(end)) else {
+        return Ok(()); // parse_date already refused anything else
+    };
+    if first > last {
+        bail!("--start-date {start} is after --end-date {end}");
+    }
+    if last - first + 1 > MAX_USAGE_WINDOW_DAYS {
+        bail!(
+            "--start-date {start} to --end-date {end} spans more than {MAX_USAGE_WINDOW_DAYS} days; \
+             report on several periods"
+        );
+    }
+    Ok(())
+}
+
+/// A calendar day as the usage report takes it: YYYY-MM-DD, a day that
+/// exists.
 fn parse_date(raw: &str) -> std::result::Result<String, String> {
+    match day_number(raw) {
+        Some(_) => Ok(raw.to_string()),
+        None => Err(format!("expected a date as YYYY-MM-DD, got `{raw}`")),
+    }
+}
+
+/// Days since 1970-01-01 of a YYYY-MM-DD date, or `None` when it is not
+/// one (wrong shape, or a day the month does not have).
+fn day_number(raw: &str) -> Option<i64> {
     let bytes = raw.as_bytes();
     let shaped = bytes.len() == 10
         && bytes.iter().enumerate().all(|(i, b)| match i {
             4 | 7 => *b == b'-',
             _ => b.is_ascii_digit(),
         });
-    let month = raw.get(5..7).and_then(|m| m.parse::<u8>().ok());
-    let day = raw.get(8..10).and_then(|d| d.parse::<u8>().ok());
-    if !shaped || !matches!(month, Some(1..=12)) || !matches!(day, Some(1..=31)) {
-        return Err(format!("expected a date as YYYY-MM-DD, got `{raw}`"));
+    if !shaped {
+        return None;
     }
-    Ok(raw.to_string())
+    let year: i64 = raw[0..4].parse().ok()?;
+    let month: i64 = raw[5..7].parse().ok()?;
+    let day: i64 = raw[8..10].parse().ok()?;
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let month_days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if !(1..=month_days).contains(&day) {
+        return None;
+    }
+    // Days from civil (Howard Hinnant's algorithm).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
 }
 
 #[cfg(test)]
@@ -194,16 +246,35 @@ mod tests {
     #[test]
     fn dates_must_be_calendar_days() {
         assert_eq!(parse_date("2026-10-01").as_deref(), Ok("2026-10-01"));
+        assert!(parse_date("2028-02-29").is_ok());
         for bad in [
             "2026-1-01",
             "2026/10/01",
             "2026-13-01",
             "2026-10-00",
+            "2026-02-29",
+            "2026-04-31",
             "yesterday",
             "",
         ] {
             assert!(parse_date(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn day_numbers_count_from_the_epoch() {
+        assert_eq!(day_number("1970-01-01"), Some(0));
+        assert_eq!(day_number("2000-03-01"), Some(11_017));
+        assert_eq!(day_number("2026-10-12"), Some(20_738));
+    }
+
+    #[test]
+    fn a_report_period_counts_both_ends() {
+        // 92 days inclusive is the most the server takes.
+        assert!(check_date_window("2026-01-01", "2026-04-02").is_ok());
+        assert!(check_date_window("2026-01-01", "2026-04-03").is_err());
+        assert!(check_date_window("2026-05-02", "2026-05-02").is_ok());
+        assert!(check_date_window("2026-05-03", "2026-05-02").is_err());
     }
 
     #[test]
