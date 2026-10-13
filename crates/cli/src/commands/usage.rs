@@ -115,8 +115,12 @@ pub fn run(args: UsageArgs, profile: Option<String>, base_url: Option<String>) -
                 start_date,
                 end_date,
                 daily,
-                group_by,
+                mut group_by,
             } = args.report;
+            // The server refuses more than two values, so `member,member`
+            // would fail where the same breakdown asked for once succeeds.
+            group_by.sort();
+            group_by.dedup();
             let data = get_usage(
                 &client,
                 &GetUsageParams {
