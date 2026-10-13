@@ -143,6 +143,7 @@ memorylake ws list [--name FUZZY] [--page-size N] [--continuation-token TOKEN]
 memorylake ws create --name "My Workspace" --custom-id my-ws-001
 memorylake ws get <id> [--by-custom-id]
 memorylake ws update <id> [--name NAME] [--description D] [--metadata '{"team":"core"}']
+memorylake ws delete <id> --confirm "My Workspace"
 
 memorylake ws use              # pick a default from a list
 memorylake ws use <id>         # or name one
@@ -151,9 +152,13 @@ memorylake ws use --clear
 ```
 
 `update` changes only the fields you pass. `--metadata` takes a JSON object of
-strings and **replaces** the stored map; `--metadata '{}'` clears it. There is
-deliberately no `ws delete`: deleting a workspace takes everything in it, and
-that is not something to leave one typo away from an agent driving the CLI.
+strings and **replaces** the stored map; `--metadata '{}'` clears it.
+
+`delete` is irreversible and takes everything in the workspace with it, so it
+does not run on an id alone: `--confirm` must repeat the workspace's current
+name exactly (`ws get <id>` shows it), or nothing is deleted. The team's
+default workspace (custom_id `_sys_default_workspace`) is refused. A profile
+that remembered the deleted workspace forgets it.
 
 ### Actors
 

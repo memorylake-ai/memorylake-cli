@@ -163,3 +163,83 @@ fn update_replaces_metadata_and_patches_only_what_is_given() {
 
     let _ = fs::remove_dir_all(&home);
 }
+
+#[test]
+fn delete_needs_the_name_then_removes_and_forgets_the_workspace() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let name = format!("CLI Bin Delete {nanos}");
+    let custom_id = format!("cli-bin-delete-{nanos}");
+    let args = [
+        "ws",
+        "create",
+        "--name",
+        name.as_str(),
+        "--custom-id",
+        custom_id.as_str(),
+    ];
+    let created: serde_json::Value =
+        serde_json::from_str(&assert_success(&run(&home, &args), &args)).expect("create JSON");
+    let id = created["id"].as_str().expect("workspace id").to_string();
+
+    // Remember it, so the delete has something to forget.
+    let args = ["ws", "use", id.as_str()];
+    assert_success(&run(&home, &args), &args);
+
+    // The wrong name is refused and the workspace survives.
+    let args = ["ws", "delete", id.as_str(), "--confirm", "not its name"];
+    let err = crate::common::assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("refusing to delete"), "{err}");
+    let args = ["ws", "get", id.as_str()];
+    assert_success(&run(&home, &args), &args);
+
+    let args = ["ws", "delete", id.as_str(), "--confirm", name.as_str()];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(
+        stdout.contains(&format!("Deleted workspace `{id}`")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("no longer remembers it"), "{stdout}");
+
+    let args = ["ws", "current"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert!(stdout.contains("no workspace set"), "{stdout}");
+
+    let args = ["ws", "get", id.as_str()];
+    let err = crate::common::assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("NOT_FOUND"), "the workspace is gone: {err}");
+
+    // Deleting it again is the server's NOT_FOUND, not a silent success.
+    let args = ["ws", "delete", id.as_str(), "--confirm", name.as_str()];
+    let err = crate::common::assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("NOT_FOUND"), "{err}");
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_default_workspace_is_refused() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let args = ["ws", "get", "_sys_default_workspace", "--by-custom-id"];
+    let default: serde_json::Value =
+        serde_json::from_str(&assert_success(&run(&home, &args), &args)).expect("JSON");
+    let id = default["id"].as_str().expect("id");
+    let name = default["name"].as_str().expect("name");
+
+    let args = ["ws", "delete", id, "--confirm", name];
+    let err = crate::common::assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("default workspace"), "{err}");
+    let args = ["ws", "get", id];
+    assert_success(&run(&home, &args), &args);
+
+    let _ = fs::remove_dir_all(&home);
+}

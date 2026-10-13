@@ -125,11 +125,46 @@ fn update_is_rejected_locally_before_credentials_are_needed() {
 }
 
 #[test]
-fn there_is_no_workspace_delete() {
-    // Deliberately not exposed: a workspace holds everything else.
+fn delete_is_rejected_locally_before_credentials_are_needed() {
     let home = temp_home();
-    let args = ["workspace", "delete", "ws-1"];
+    for (args, expected) in [
+        (vec!["workspace", "delete", "ws-1"], "--confirm <NAME>"),
+        (
+            vec!["workspace", "delete", " ", "--confirm", "Name"],
+            "must not be empty",
+        ),
+        (
+            vec!["workspace", "delete", "ws-1", "--confirm", "  "],
+            "must repeat the workspace's name",
+        ),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+
+    // A well-formed delete needs the API to read the name back.
+    let args = ["workspace", "delete", "ws-1", "--confirm", "Name"];
     let err = assert_failure(&run(&home, &args), &args);
-    assert!(err.contains("unrecognized subcommand"), "{err}");
+    assert!(
+        err.contains("not logged in") || err.contains("resolve API credentials"),
+        "{err}"
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn delete_help_says_how_to_confirm() {
+    let home = temp_home();
+    let args = ["workspace", "delete", "--help"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    for needle in [
+        "Irreversible",
+        "--confirm",
+        "workspace get",
+        "_sys_default_workspace",
+    ] {
+        assert!(stdout.contains(needle), "missing `{needle}`: {stdout}");
+    }
     let _ = fs::remove_dir_all(&home);
 }

@@ -5,10 +5,11 @@
 //! invisible to a unit test of the resolver — they depend on every command
 //! routing its flag through it — so they are pinned here, on the URL.
 
-use crate::common::assert_success;
 use crate::common::stub::{
-    exchange, exchange_with_remembered_workspace, request_body, request_line,
+    exchange, exchange_sequence_with_remembered_workspace, exchange_with_remembered_workspace,
+    request_body, request_line,
 };
+use crate::common::{assert_failure, assert_success};
 
 const EMPTY_PAGE: &str = r#"{"success":true,"data":{"items":[]}}"#;
 const WORKSPACE: &str = r#"{"success":true,"data":{"id":"ws-remembered","name":"Remembered"}}"#;
@@ -131,4 +132,94 @@ fn update_sends_an_empty_metadata_object_to_clear_it() {
     let (request, output) = exchange(WORKSPACE, &args);
     assert_success(&output, &args);
     assert_eq!(request_body(&request), r#"{"metadata":{}}"#);
+}
+
+const DELETED: &str = r#"{"success":true,"data":{}}"#;
+const SCRATCH: &str =
+    r#"{"success":true,"data":{"id":"ws-scratch","name":"Scratch space","custom_id":"scratch"}}"#;
+
+#[test]
+fn delete_reads_the_name_back_then_deletes_and_forgets_it() {
+    let args = [
+        "workspace",
+        "delete",
+        "ws-scratch",
+        "--confirm",
+        "Scratch space",
+    ];
+    let (requests, output, config) =
+        exchange_sequence_with_remembered_workspace(&[SCRATCH, DELETED], "ws-scratch", &args);
+    let stdout = assert_success(&output, &args);
+
+    assert_eq!(
+        request_line(&requests[0]),
+        "GET /api/v3/workspaces/ws-scratch HTTP/1.1",
+        "the name is read back before anything is deleted"
+    );
+    assert_eq!(
+        request_line(&requests[1]),
+        "DELETE /api/v3/workspaces/ws-scratch HTTP/1.1"
+    );
+    assert!(
+        stdout.contains("Deleted workspace `ws-scratch` (Scratch space)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("profile `default` no longer remembers it"),
+        "{stdout}"
+    );
+    assert!(
+        !config.contains("ws-scratch"),
+        "a deleted workspace must not stay remembered:\n{config}"
+    );
+}
+
+#[test]
+fn delete_keeps_a_different_remembered_workspace() {
+    let args = [
+        "workspace",
+        "delete",
+        "ws-scratch",
+        "--confirm",
+        "Scratch space",
+    ];
+    let (_, output, config) =
+        exchange_sequence_with_remembered_workspace(&[SCRATCH, DELETED], "ws-other", &args);
+    let stdout = assert_success(&output, &args);
+    assert!(!stdout.contains("no longer remembers"), "{stdout}");
+    assert!(config.contains("ws-other"), "{config}");
+}
+
+#[test]
+fn delete_refuses_a_name_that_does_not_match() {
+    // One canned response: a DELETE after the GET would find no server and
+    // fail with a connection error, not with the refusal asserted here.
+    for confirm in ["Scratch", "scratch space", "Scratch space ", "ws-scratch"] {
+        let args = ["workspace", "delete", "ws-scratch", "--confirm", confirm];
+        let (request, output) = exchange(SCRATCH, &args);
+        let err = assert_failure(&output, &args);
+        assert_eq!(
+            request_line(&request),
+            "GET /api/v3/workspaces/ws-scratch HTTP/1.1"
+        );
+        assert!(
+            err.contains("refusing to delete `ws-scratch`") && err.contains("\"Scratch space\""),
+            "{confirm:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn delete_refuses_the_default_workspace_even_when_named() {
+    let default = r#"{"success":true,"data":{"id":"ws-default","name":"Default Workspace","custom_id":"_sys_default_workspace"}}"#;
+    let args = [
+        "workspace",
+        "delete",
+        "ws-default",
+        "--confirm",
+        "Default Workspace",
+    ];
+    let (_, output) = exchange(default, &args);
+    let err = assert_failure(&output, &args);
+    assert!(err.contains("default workspace"), "{err}");
 }

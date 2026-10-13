@@ -1,12 +1,14 @@
 //! Workspace v3 API (`/api/v3/workspaces`).
 
 mod create;
+mod delete;
 mod get;
 mod list;
 mod types;
 mod update;
 
 pub use create::{CreateWorkspaceRequest, create_workspace};
+pub use delete::{DEFAULT_WORKSPACE_CUSTOM_ID, delete_workspace};
 pub use get::{get_workspace, get_workspace_by_custom_id};
 pub use list::{ListWorkspacesParams, WorkspaceList, list_workspaces};
 pub use types::Workspace;
