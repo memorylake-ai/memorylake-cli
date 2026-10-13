@@ -527,6 +527,10 @@ keys rather than deep-merging.
 Every agent bound to a workspace answers over the
 [A2A protocol](https://a2a-protocol.org). The CLI speaks A2A v1.0 over
 HTTP+JSON; `--workspace` defaults to the remembered one, as for `agent bind`.
+MemoryLake's [A2A integration guide](https://docs.memorylake.ai/features/memorylake/api-reference/a2a/overview)
+documents what these commands send: the base URL and protocol versions, the
+`metadata.memorylake` extension (memory, identity, run configuration), the
+REST and JSON-RPC transports, streaming, and errors.
 
 ```bash
 memorylake agent card <agent-id> [--workspace <id>]
@@ -930,6 +934,9 @@ fails and says how to supply it.
   actors, how memories are extracted, and traces and conflicts.
 - [Quick start](https://docs.memorylake.ai/quickstart) — sign up, try memory in
   the Playground, and create the API key `auth login` asks for.
+- [A2A integration](https://docs.memorylake.ai/features/memorylake/api-reference/a2a/overview)
+  — the protocol behind `agent send` and `agent task`, for calling MemoryLake
+  agents from any A2A client.
 - [MemoryLake Harness](https://github.com/memorylake-ai/memorylake-harness) — the
   same memory inside your coding agent: Claude Code, Codex, DeepSeek Harness,
   opencode, QwenPaw, QwenWork and WorkBuddy. The plugins drive this CLI and share
