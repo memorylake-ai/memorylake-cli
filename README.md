@@ -783,8 +783,9 @@ where `mode` is `all` or `instances`, and replaces the scope of only the types
 it lists. It also accepts what `scope get` printed, edited: read-only fields
 are dropped. Entries that list no instances must be removed first: leaving a
 type out keeps it as it is, and for an access group mode `all` removes its
-instances. Project instances need their `workspace_id`. `scope set --help` shows
-the whole read-edit-write loop.
+instances. Actions a `scope get` reports as `shadowed_actions` (the role no
+longer grants them) are left out of what is written back, since the server
+refuses them. `scope set --help` shows the whole read-edit-write loop.
 
 Reads that a later write can be checked against (`scope get`, `ag get`) print
 an `ETag: "..."` line on standard error, leaving standard output as plain JSON.
