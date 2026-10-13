@@ -130,7 +130,8 @@ pub fn require_workspace(paths: &Paths, profile: &str, flag: Option<String>) -> 
 /// The server compares strong tags byte for byte, quotes included, so a
 /// shell that ate the quotes (`--if-match "abc"` sends `abc`) would get a
 /// 412 that wrongly says the resource changed. A bare value is quoted again,
-/// and a whole `ETag: "abc"` line is accepted too.
+/// and a whole `ETag: "abc"` line is accepted too. A weak tag (`W/"abc"`)
+/// is refused: strong comparison never matches one, so it could only fail.
 pub fn parse_etag(raw: &str) -> std::result::Result<String, String> {
     let mut value = raw.trim();
     if let Some((name, rest)) = value.split_once(':')
@@ -150,17 +151,18 @@ pub fn parse_etag(raw: &str) -> std::result::Result<String, String> {
         .map(str::trim)
         .filter(|tag| !tag.is_empty())
         .map(|tag| {
-            let (weak, opaque) = match tag.strip_prefix("W/") {
-                Some(rest) => ("W/", rest),
-                None => ("", tag),
-            };
-            if opaque.starts_with('"') {
+            if tag.starts_with("W/") {
+                return Err(format!(
+                    "{tag} is a weak ETag, which never matches; pass the ETag `get` printed"
+                ));
+            }
+            Ok(if tag.starts_with('"') {
                 tag.to_string()
             } else {
-                format!("{weak}\"{opaque}\"")
-            }
+                format!("\"{tag}\"")
+            })
         })
-        .collect();
+        .collect::<std::result::Result<_, _>>()?;
     if tags.is_empty() {
         return Err("must not be empty".to_string());
     }
@@ -190,9 +192,9 @@ mod tests {
         assert_eq!(parse_etag("v7").as_deref(), Ok(r#""v7""#));
         assert_eq!(parse_etag(r#"ETag: "v7""#).as_deref(), Ok(r#""v7""#));
         assert_eq!(parse_etag("etag: v7").as_deref(), Ok(r#""v7""#));
-        assert_eq!(parse_etag(r#"W/"v7""#).as_deref(), Ok(r#"W/"v7""#));
         assert_eq!(parse_etag("*").as_deref(), Ok("*"));
-        assert_eq!(parse_etag("W/v7").as_deref(), Ok(r#"W/"v7""#));
+        assert!(parse_etag(r#"W/"v7""#).unwrap_err().contains("weak"));
+        assert!(parse_etag(r#""a", W/"b""#).unwrap_err().contains("weak"));
         assert_eq!(parse_etag("a, b").as_deref(), Ok(r#""a", "b""#));
         assert_eq!(parse_etag(r#""a", "b""#).as_deref(), Ok(r#""a", "b""#));
         assert!(parse_etag(",").is_err());

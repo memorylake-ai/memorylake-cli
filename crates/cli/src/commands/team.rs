@@ -39,7 +39,7 @@ pub enum TeamCommand {
         issue_api_key: bool,
         /// Display name of that key. Defaults to the team name plus
         /// " API key".
-        #[arg(long, requires = "issue_api_key")]
+        #[arg(long, requires = "issue_api_key", value_parser = parse_non_blank)]
         api_key_name: Option<String>,
         /// Retrying with the same value replays the first result instead of
         /// creating a second team.

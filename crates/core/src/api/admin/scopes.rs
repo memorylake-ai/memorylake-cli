@@ -96,7 +96,9 @@ pub struct ScopeEntryInput {
 pub struct ScopeInstanceInput {
     /// Instance id, as the data API returns it.
     pub id: String,
-    /// Parent workspace — required for project instances.
+    /// Parent workspace of a project instance. The server fills it in from
+    /// its own records when left out, and refuses the write only when it
+    /// cannot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
     /// Allowed actions; omit for every action the role allows.
@@ -109,9 +111,11 @@ pub struct ScopeInstanceInput {
     /// Read-only; accepted for round-tripping and never sent.
     #[serde(default, skip_serializing)]
     pub effective_actions: Option<Value>,
-    /// Read-only; accepted for round-tripping and never sent.
+    /// Read-only: actions in `actions` the role no longer grants. Never sent;
+    /// they are taken out of `actions` instead, since the server refuses a
+    /// write that lists them.
     #[serde(default, skip_serializing)]
-    pub shadowed_actions: Option<Value>,
+    pub shadowed_actions: Option<Vec<String>>,
     /// Read-only; accepted for round-tripping and never sent.
     #[serde(default, skip_serializing)]
     pub permission_level: Option<Value>,
@@ -136,9 +140,15 @@ pub struct ScopeInputError(String);
 /// carrying them under `scopes` (the shape every `scope get` prints).
 ///
 /// Checks what the server would otherwise refuse after a round trip: an
-/// unknown mode, instances under `all`, `instances` with none listed, a
-/// project instance without its workspace, and a resource type listed
-/// twice.
+/// unknown mode, instances under `all`, `instances` with none listed, and a
+/// resource type listed twice.
+///
+/// A `scope get` reports, under `shadowed_actions`, the stored actions the
+/// role no longer grants, while still listing them in `actions`; the server
+/// refuses a write naming any of them. They are taken out of `actions` so the
+/// printed scope can be written back. An instance left with none is refused
+/// rather than sent with an empty list, which the server would read as every
+/// action the role allows.
 ///
 /// An access group's `scope get` prints `instances` with none listed for a
 /// type the group adds nothing to, yet writing that back is refused
@@ -157,7 +167,7 @@ pub fn parse_scope_entries(json: &str) -> Result<Vec<ScopeEntryInput>, ScopeInpu
             ));
         }
     };
-    let entries: Vec<ScopeEntryInput> = serde_json::from_value(list)
+    let mut entries: Vec<ScopeEntryInput> = serde_json::from_value(list)
         .map_err(|err| ScopeInputError(format!("invalid scope entry: {err}")))?;
     if entries.is_empty() {
         return Err(ScopeInputError("no scope entries given".into()));
@@ -175,16 +185,7 @@ pub fn parse_scope_entries(json: &str) -> Result<Vec<ScopeEntryInput>, ScopeInpu
                 )));
             }
             ("all", _) => {}
-            ("instances", Some(instances)) if !instances.is_empty() => {
-                if kind == "memorylake:project"
-                    && let Some(bare) = instances.iter().find(|i| i.workspace_id.is_none())
-                {
-                    return Err(ScopeInputError(format!(
-                        "`{kind}`: instance `{}` needs its `workspace_id`",
-                        bare.id
-                    )));
-                }
-            }
+            ("instances", Some(instances)) if !instances.is_empty() => {}
             ("instances", _) => {
                 return Err(ScopeInputError(format!(
                     "`{kind}`: mode `instances` needs at least one instance. Leave the \
@@ -195,6 +196,28 @@ pub fn parse_scope_entries(json: &str) -> Result<Vec<ScopeEntryInput>, ScopeInpu
             (other, _) => {
                 return Err(ScopeInputError(format!(
                     "`{kind}`: mode must be `all` or `instances`, not `{other}`"
+                )));
+            }
+        }
+    }
+    for entry in &mut entries {
+        for instance in entry.instances.iter_mut().flatten() {
+            let (Some(actions), Some(shadowed)) =
+                (&mut instance.actions, &instance.shadowed_actions)
+            else {
+                continue;
+            };
+            if shadowed.is_empty() || actions.is_empty() {
+                continue;
+            }
+            actions.retain(|action| !shadowed.contains(action));
+            if actions.is_empty() {
+                return Err(ScopeInputError(format!(
+                    "`{}`: instance `{}` lists only actions its role no longer grants \
+                     ({}); remove the instance, or list actions from `available_actions`",
+                    entry.resource_type,
+                    instance.id,
+                    shadowed.join(", ")
                 )));
             }
         }
@@ -228,6 +251,20 @@ mod tests {
     }
 
     #[test]
+    fn shadowed_actions_are_taken_out_of_what_is_written_back() {
+        let printed = r#"[{"resource_type":"memorylake:project","mode":"instances",
+            "instances":[{"id":"proj-1","actions":["project:read","project:write"],
+                          "effective_actions":["project:read"],
+                          "shadowed_actions":["project:write"]}]}]"#;
+        let sent = serde_json::to_string(&parse_scope_entries(printed).unwrap()).unwrap();
+        assert_eq!(
+            sent,
+            r#"[{"resource_type":"memorylake:project","mode":"instances","instances":[{"id":"proj-1","actions":["project:read"]}]}]"#,
+            "a project without its workspace is left for the server to fill in"
+        );
+    }
+
+    #[test]
     fn what_the_server_would_refuse_is_refused_here() {
         for (json, needle) in [
             ("{}", "`scopes` array"),
@@ -250,8 +287,8 @@ mod tests {
                 "takes no instances",
             ),
             (
-                r#"[{"resource_type":"memorylake:project","mode":"instances","instances":[{"id":"p"}]}]"#,
-                "workspace_id",
+                r#"[{"resource_type":"t","mode":"instances","instances":[{"id":"a","actions":["x:r"],"shadowed_actions":["x:r"]}]}]"#,
+                "no longer grants",
             ),
             (
                 r#"[{"resource_type":"t","mode":"all"},{"resource_type":"t","mode":"all"}]"#,

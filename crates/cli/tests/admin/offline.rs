@@ -86,6 +86,18 @@ fn bad_input_is_rejected_locally_before_credentials_are_needed() {
             "--issue-api-key",
         ),
         (vec!["team", "create", "--name", " "], "must not be empty"),
+        (
+            vec![
+                "team",
+                "create",
+                "--name",
+                "Lab",
+                "--issue-api-key",
+                "--api-key-name",
+                "",
+            ],
+            "must not be empty",
+        ),
         (vec!["team", "delete"], "--confirm"),
         (
             vec!["team", "transfer-ownership", "--to", "prin-2"],
@@ -187,8 +199,8 @@ fn bad_access_control_input_is_rejected_locally() {
     let too_many: Vec<String> = (0..201).map(|i| format!("prin-{i}")).collect();
     let mut add_too_many = vec!["ag", "member", "add", "g-1"];
     add_too_many.extend(too_many.iter().map(String::as_str));
-    let project_without_workspace =
-        r#"[{"resource_type":"memorylake:project","mode":"instances","instances":[{"id":"p-1"}]}]"#;
+    let only_shadowed = r#"[{"resource_type":"memorylake:project","mode":"instances","instances":[{"id":"p-1","actions":["project:write"],"shadowed_actions":["project:write"]}]}]"#;
+    let all_projects = r#"[{"resource_type":"memorylake:project","mode":"all"}]"#;
     for (args, expected) in [
         // `access`: the --workspace rule and the subject.
         (
@@ -334,11 +346,26 @@ fn bad_access_control_input_is_rejected_locally() {
                 "set",
                 "tenant_member",
                 "--scopes",
-                project_without_workspace,
+                only_shadowed,
                 "--reason",
                 "r",
             ],
-            "workspace_id",
+            "no longer grants",
+        ),
+        (
+            vec![
+                "role",
+                "scope",
+                "set",
+                "tenant_member",
+                "--scopes",
+                all_projects,
+                "--reason",
+                "r",
+                "--if-match",
+                r#"W/"v1""#,
+            ],
+            "weak ETag",
         ),
         (
             vec![
