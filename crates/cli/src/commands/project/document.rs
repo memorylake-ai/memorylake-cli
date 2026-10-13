@@ -10,11 +10,9 @@
 //! without a network or a real clock.
 
 use std::collections::BTreeSet;
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::commands::download::{SaveTo, save_download};
 use crate::commands::require_workspace;
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
@@ -268,13 +266,15 @@ pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentComma
             force,
         } => {
             let workspace = require_workspace(paths, profile, workspace)?;
-            run_download(
-                client,
-                &workspace,
-                &project,
+            save_download(
+                SaveTo {
+                    output: output.as_deref(),
+                    force,
+                    default_name: None,
+                },
+                &format!("document `{document_id}`"),
                 &document_id,
-                output.as_deref(),
-                force,
+                |mut out| download_document(client, &workspace, &project, &document_id, &mut out),
             )
         }
         DocumentCommand::Inspect {
@@ -560,122 +560,6 @@ fn push_unique(files: &mut Vec<String>, seen: &mut BTreeSet<String>, id: String)
     if seen.insert(id.clone()) {
         files.push(id);
     }
-}
-
-/// Write a document to stdout, or to a file chosen from `--output` and the
-/// name the server reports.
-///
-/// Downloads to a temporary file in the destination directory and renames it
-/// into place, so an interrupted transfer leaves no half-written file where a
-/// complete one is expected. Streaming to stdout skips all of that: the caller
-/// is piping, and there is nothing to name or rename.
-fn run_download(
-    client: &Client,
-    workspace: &str,
-    project: &str,
-    document_id: &str,
-    output: Option<&str>,
-    force: bool,
-) -> Result<()> {
-    if output == Some("-") {
-        let stdout = std::io::stdout();
-        let mut handle = stdout.lock();
-        let downloaded = download_document(client, workspace, project, document_id, &mut handle)
-            .with_context(|| format!("download document `{document_id}`"))?;
-        handle.flush().context("flush stdout")?;
-        // The bytes are the output, so the summary goes to stderr where it
-        // cannot corrupt a pipe.
-        eprintln!("wrote {} bytes to stdout", downloaded.bytes);
-        return Ok(());
-    }
-
-    // Work out the directory up front: the temporary file has to live on the
-    // same filesystem as the destination for the rename to be atomic.
-    let requested = output.map(PathBuf::from);
-    let explicit_file = match &requested {
-        Some(path) if path.is_dir() => None,
-        Some(path) => Some(path.clone()),
-        None => None,
-    };
-    let directory = match (&requested, &explicit_file) {
-        (Some(path), None) => path.clone(),
-        (_, Some(file)) => file.parent().map(Path::to_path_buf).unwrap_or_default(),
-        (None, None) => PathBuf::from("."),
-    };
-    let directory = if directory.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        directory
-    };
-
-    // Fail before transferring anything when the destination is already known
-    // and taken.
-    if let Some(file) = &explicit_file {
-        refuse_existing(file, force)?;
-    }
-
-    fs::create_dir_all(&directory)
-        .with_context(|| format!("create directory {}", directory.display()))?;
-
-    let temporary = directory.join(format!(".{document_id}.download.{}", std::process::id()));
-    let downloaded = {
-        let mut file = fs::File::create(&temporary)
-            .with_context(|| format!("create {}", temporary.display()))?;
-        let result = download_document(client, workspace, project, document_id, &mut file)
-            .with_context(|| format!("download document `{document_id}`"));
-        // Remove the partial file on any failure, including a mid-transfer one.
-        match result {
-            Ok(downloaded) => downloaded,
-            Err(err) => {
-                let _ = fs::remove_file(&temporary);
-                return Err(err);
-            }
-        }
-    };
-
-    let destination = match explicit_file {
-        Some(file) => file,
-        None => match &downloaded.filename {
-            Some(name) => directory.join(name),
-            None => {
-                let _ = fs::remove_file(&temporary);
-                bail!(
-                    "the server did not say what this file is called; \
-                     pass --output <path> to name it"
-                );
-            }
-        },
-    };
-
-    if let Err(err) = refuse_existing(&destination, force) {
-        let _ = fs::remove_file(&temporary);
-        return Err(err);
-    }
-
-    fs::rename(&temporary, &destination).with_context(|| {
-        format!(
-            "move the downloaded file into place at {}",
-            destination.display()
-        )
-    })?;
-
-    println!(
-        "downloaded {} ({} bytes)",
-        destination.display(),
-        downloaded.bytes
-    );
-    Ok(())
-}
-
-/// Refuse to clobber an existing destination unless `--force` was given.
-fn refuse_existing(path: &Path, force: bool) -> Result<()> {
-    if force || !path.exists() {
-        return Ok(());
-    }
-    bail!(
-        "{} already exists; pass --force to overwrite it",
-        path.display()
-    )
 }
 
 /// What the wait loop needs from the outside world.

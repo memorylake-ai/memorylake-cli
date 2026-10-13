@@ -15,8 +15,10 @@ pub struct Page<T> {
     #[serde(default = "Vec::new")]
     pub items: Vec<T>,
     /// Total items matching the filter across all pages, when the server
-    /// reports one.
-    #[serde(default)]
+    /// reports one. Some lists (audit logs, credit transactions, usage
+    /// records) never do; the field is then left out of the output rather
+    /// than printed as a misleading `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<i64>,
     /// Token for the next page; absent on the last page. Opaque — do not
     /// construct or parse it.

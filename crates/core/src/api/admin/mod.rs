@@ -3,7 +3,7 @@
 //! Governs the team the API key belongs to: the team itself, its API keys,
 //! members, invitations, and usage — plus creating new teams — and who may
 //! do what in it: roles, access groups, permission rules, access scopes, and
-//! per-instance access. Same base URL and same key as every other
+//! per-instance access. It also reads the team's billing and audit log. Same base URL and same key as every other
 //! module here — the management endpoints simply live under `/admin/v1`
 //! instead of `/api/v1`. The team is fixed by the key; nothing in a request
 //! can address a different one.
@@ -17,6 +17,8 @@
 mod access;
 mod access_groups;
 mod api_keys;
+mod audit_logs;
+mod billing;
 mod invitations;
 mod members;
 mod path;
@@ -53,6 +55,22 @@ pub use scopes::{
 pub use api_keys::{
     CreateApiKeyRequest, ListApiKeysParams, UpdateApiKeyRequest, create_api_key, get_api_key,
     list_api_keys, revoke_api_key, rotate_api_key, update_api_key,
+};
+pub use audit_logs::{
+    AuditLogEntry, ListAuditLogsParams, MAX_AUDIT_ACTIONS, MAX_AUDIT_ACTORS, MAX_AUDIT_TARGET_ID,
+    MAX_AUDIT_TARGET_TYPE, MAX_AUDIT_WINDOW_SECS, list_audit_logs,
+};
+pub use billing::{
+    AlertChannel, AlertThreshold, AutoTopup, AutoTopupAttempt, BalanceAlert, BalanceAlertEvent,
+    BillingDetails, CreditBalance, CreditTransaction, Invoice, ListCreditTransactionsParams,
+    ListOrdersParams, MAX_ALERT_PERCENT, MAX_ALERT_RECIPIENTS, MAX_ALERT_THRESHOLDS,
+    MAX_ALERT_TOKENS, MAX_BILLING_ADDRESS, MAX_BILLING_FIELD, MAX_BILLING_TAX_ID, Money, Order,
+    PaymentMethod, PlanChangePreview, SetBalanceAlertRequest, SetBillingDetailsRequest,
+    Subscription, download_invoice_pdf, get_auto_topup, get_balance_alert, get_billing_details,
+    get_credit_balance, get_invoice, get_order, get_subscription, list_auto_topup_attempts,
+    list_balance_alert_events, list_credit_transactions, list_invoices, list_orders,
+    list_payment_methods, preview_plan_change, reset_balance_alert, set_balance_alert,
+    set_billing_details,
 };
 pub use invitations::{
     CreateInvitationRequest, ListInvitationsParams, create_invitation, get_invitation,

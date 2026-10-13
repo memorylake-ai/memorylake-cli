@@ -22,6 +22,8 @@ fn every_management_command_family_requires_login() {
         ["access-group", "list"].as_slice(),
         ["permission", "me"].as_slice(),
         ["access", "show", "workspace", "ws-1"].as_slice(),
+        ["billing", "balance"].as_slice(),
+        ["audit-log", "list"].as_slice(),
         // 0 is a valid expiry: "never". It must reach the credential check.
         ["api-key", "create", "--name", "k", "--expires-at", "0"].as_slice(),
     ] {
@@ -451,6 +453,179 @@ fn bad_access_control_input_is_rejected_locally() {
                 "memorylake:actor::create",
             ],
             "is not <resource_type>:<action>",
+        ),
+    ] {
+        let err = assert_failure(&run(&home, &args), &args);
+        assert!(err.contains(expected), "{args:?}: {err}");
+        assert!(!err.contains("not logged in"), "{args:?}: {err}");
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn bad_billing_and_audit_input_is_rejected_locally() {
+    let too_many_actions = (0..51)
+        .map(|i| format!("a:{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let long_target_type = "t".repeat(33);
+    let home = temp_home();
+    let six_recipients = "a@x,b@x,c@x,d@x,e@x,f@x";
+    let long_address = "a".repeat(501);
+    for (args, expected) in [
+        (vec!["billing", "alert", "set"], "required"),
+        (
+            vec![
+                "billing",
+                "alert",
+                "set",
+                "--percent-used",
+                "50",
+                "--tokens-remaining",
+                "10",
+            ],
+            "cannot be used with",
+        ),
+        (
+            vec!["billing", "alert", "set", "--percent-used", "100"],
+            "invalid value",
+        ),
+        (
+            vec!["billing", "alert", "set", "--tokens-remaining", "0"],
+            "invalid value",
+        ),
+        (
+            vec!["billing", "alert", "set", "--percent-used", "1,2,3,4,5,6"],
+            "at most 5 alert levels",
+        ),
+        (
+            vec![
+                "billing",
+                "alert",
+                "set",
+                "--percent-used",
+                "50",
+                "--recipient",
+                six_recipients,
+            ],
+            "at most 5 recipients",
+        ),
+        (
+            vec![
+                "billing",
+                "transactions",
+                "--start-time",
+                "200",
+                "--end-time",
+                "100",
+            ],
+            "before --end-time",
+        ),
+        (
+            vec!["billing", "invoice", "list", "--status", "unpaid"],
+            "invalid value",
+        ),
+        (
+            vec![
+                "billing",
+                "invoice",
+                "details",
+                "set",
+                "in_1",
+                "--type",
+                "individual",
+                "--address",
+                "1 Main St",
+            ],
+            "needs --name",
+        ),
+        (
+            vec![
+                "billing",
+                "invoice",
+                "details",
+                "set",
+                "in_1",
+                "--type",
+                "business",
+                "--address",
+                "1 Main St",
+            ],
+            "needs --company",
+        ),
+        (
+            vec![
+                "billing",
+                "invoice",
+                "details",
+                "set",
+                "in_1",
+                "--type",
+                "business",
+                "--company",
+                "Acme",
+                "--address",
+                long_address.as_str(),
+            ],
+            "at most 500",
+        ),
+        (
+            vec!["billing", "order", "list", "--status", "paid"],
+            "invalid value",
+        ),
+        (
+            vec!["billing", "subscription", "preview-change", "--plan", "0"],
+            "invalid value",
+        ),
+        (vec!["audit", "list", "--result", "ok"], "invalid value"),
+        (vec!["audit", "list", "--page-size", "101"], "invalid value"),
+        (
+            vec!["audit", "list", "--start-time", "200", "--end-time", "100"],
+            "before --end-time",
+        ),
+        (
+            vec![
+                "audit",
+                "list",
+                "--start-time",
+                "1",
+                "--end-time",
+                "7948802",
+            ],
+            "more than 92 days apart",
+        ),
+        // The server reads 0 as "not given", so it is refused rather than
+        // silently becoming the default window.
+        (vec!["audit", "list", "--start-time", "0"], "invalid value"),
+        (
+            vec!["billing", "transactions", "--end-time", "0"],
+            "invalid value",
+        ),
+        (
+            vec!["audit", "list", "--action", too_many_actions.as_str()],
+            "at most 50 --action",
+        ),
+        (
+            vec!["audit", "list", "--target-type", long_target_type.as_str()],
+            "at most 32 characters",
+        ),
+        (vec!["billing", "invoice", "get", ""], "must not be empty"),
+        (vec!["billing", "order", "get", " "], "must not be empty"),
+        (
+            vec![
+                "billing",
+                "invoice",
+                "details",
+                "set",
+                "in_1",
+                "--type",
+                "individual",
+                "--address",
+                "1 Main St",
+                "--name",
+                "",
+            ],
+            "must not be empty",
         ),
     ] {
         let err = assert_failure(&run(&home, &args), &args);
