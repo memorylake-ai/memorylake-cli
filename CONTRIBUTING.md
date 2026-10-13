@@ -41,8 +41,9 @@ Tests come in three layers:
   `cargo test -p memorylake-cli -- --skip live`.
 
 Live tests create real objects and clean up after themselves, several from
-`Drop` so a mid-test panic still tidies up. Scratch workspaces are the exception
-— the CLI has no `workspace delete` — so they accumulate; see issue #15.
+`Drop` so a mid-test panic still tidies up. A test that needs a workspace of its
+own creates it through `OwnedWorkspace`, which deletes it again; the rest share
+one long-lived scratch workspace (`scratch_workspace`).
 
 CLI tests isolate state through `MEMORYLAKE_CONFIG_DIR`. Redirecting `HOME` is
 not enough: on Windows `dirs::home_dir()` calls

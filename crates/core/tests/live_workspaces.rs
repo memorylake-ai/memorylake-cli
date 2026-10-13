@@ -51,6 +51,7 @@ fn create_and_list_workspace() {
         },
     )
     .expect("create workspace");
+    let _guard = common::OwnedWorkspace::adopt(&client, created.id.clone());
 
     assert!(!created.id.is_empty());
     assert_eq!(created.name, name);
@@ -93,6 +94,7 @@ fn get_workspace_by_id_and_custom_id() {
         },
     )
     .expect("create workspace");
+    let _guard = common::OwnedWorkspace::adopt(&client, created.id.clone());
 
     let by_id = get_workspace(&client, &created.id).expect("get by id");
     assert_eq!(by_id.id, created.id);

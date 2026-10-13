@@ -12,8 +12,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::common::{
-    assert_failure, assert_success, live_base_url, login_args, require_api_key, run, temp_home,
-    unique_name,
+    OwnedWorkspace, assert_failure, assert_success, live_base_url, login_args, require_api_key,
+    run, temp_home, unique_name,
 };
 
 fn login_default(home: &Path, api_key: &str) {
@@ -22,26 +22,10 @@ fn login_default(home: &Path, api_key: &str) {
     assert_success(&run(home, &args), &args);
 }
 
-/// Create a workspace to search in and return its id.
-///
-/// The workspace is left behind: `workspace delete` is not implemented.
-fn create_workspace(home: &Path) -> String {
+/// Create a workspace to search in, deleted again when the guard drops.
+fn create_workspace(home: &Path) -> OwnedWorkspace {
     let name = unique_name("search-ws");
-    let args = [
-        "workspace",
-        "create",
-        "--name",
-        name.as_str(),
-        "--custom-id",
-        name.as_str(),
-    ];
-    let stdout = assert_success(&run(home, &args), &args);
-    let created: Value = serde_json::from_str(&stdout).expect("parse workspace create JSON");
-    created
-        .get("id")
-        .and_then(Value::as_str)
-        .expect("workspace create response has id")
-        .to_string()
+    OwnedWorkspace::create(home, &name, &name)
 }
 
 #[test]

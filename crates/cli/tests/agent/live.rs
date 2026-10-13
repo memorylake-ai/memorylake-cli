@@ -11,7 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::common::{
-    assert_failure, assert_success, live_base_url, login_args, require_api_key, run, temp_home,
+    OwnedWorkspace, assert_failure, assert_success, live_base_url, login_args, require_api_key,
+    run, temp_home,
 };
 
 fn login_default(home: &Path, api_key: &str) {
@@ -242,6 +243,7 @@ fn full_lifecycle() {
         "workspace create",
     );
     let workspace_id = str_field(&workspace, "id", "workspace create").to_string();
+    let _workspace = OwnedWorkspace::adopt(&home, &workspace_id, &workspace_custom_id);
 
     let bind_args = [
         "agent",

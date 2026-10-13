@@ -14,7 +14,7 @@ use memorylake_core::api::actors::{
     delete_actor, get_actor, get_actor_by_custom_id, list_actors, list_workspace_actors,
     unbind_actor, update_actor,
 };
-use memorylake_core::api::workspaces::{CreateWorkspaceRequest, create_workspace};
+use memorylake_core::api::workspaces::CreateWorkspaceRequest;
 use serde_json::{Map, Value};
 
 use common::live_client;
@@ -225,17 +225,14 @@ fn bind_list_and_unbind_workspace_actors() {
     let created = create_live_actor(&client, &suffix);
     let mut guard = ActorGuard::new(&client, &created.id);
 
-    // No delete-workspace endpoint is exposed, so — like the existing workspace
-    // live tests — this workspace is left behind.
-    let workspace = create_workspace(
+    let workspace = common::OwnedWorkspace::create(
         &client,
         &CreateWorkspaceRequest {
             name: format!("CLI Live Actor WS {suffix}"),
             custom_id: format!("cli-live-actor-ws-{suffix}"),
             description: None,
         },
-    )
-    .expect("create workspace");
+    );
 
     let binding = bind_actor(&client, &workspace.id, &created.id).expect("bind actor");
     assert_eq!(binding.actor_id, created.id);

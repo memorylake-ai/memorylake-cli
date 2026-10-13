@@ -13,9 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use memorylake_core::Client;
 use memorylake_core::api::search::{MemoryType, SearchMemoriesRequest, search_memories};
-use memorylake_core::api::workspaces::{CreateWorkspaceRequest, create_workspace};
+use memorylake_core::api::workspaces::CreateWorkspaceRequest;
 
-use common::live_client;
+use common::{OwnedWorkspace, live_client};
 
 fn nanos() -> u128 {
     SystemTime::now()
@@ -24,12 +24,10 @@ fn nanos() -> u128 {
         .as_nanos()
 }
 
-/// Create a workspace to search in and return its id.
-///
-/// The workspace is left behind: `delete_workspace` is not implemented.
-fn host_workspace(client: &Client, label: &str) -> String {
+/// Create a workspace to host the test, deleted again when the guard drops.
+fn host_workspace(client: &Client, label: &str) -> OwnedWorkspace {
     let stamp = nanos();
-    create_workspace(
+    OwnedWorkspace::create(
         client,
         &CreateWorkspaceRequest {
             name: format!("Core Live search {label} {stamp}"),
@@ -37,8 +35,6 @@ fn host_workspace(client: &Client, label: &str) -> String {
             description: Some("created by memorylake-core search live test".into()),
         },
     )
-    .expect("create host workspace")
-    .id
 }
 
 #[test]

@@ -3,7 +3,9 @@
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::common::{assert_success, live_base_url, login_args, require_api_key, run, temp_home};
+use crate::common::{
+    OwnedWorkspace, assert_success, live_base_url, login_args, require_api_key, run, temp_home,
+};
 
 fn login_default(home: &std::path::Path, api_key: &str) {
     let base_url = live_base_url();
@@ -41,6 +43,8 @@ fn list_and_create() {
         "created by memorylake-cli binary live test",
     ];
     let stdout = assert_success(&run(&home, &args), &args);
+    let created: serde_json::Value = serde_json::from_str(&stdout).expect("parse create JSON");
+    let _workspace = OwnedWorkspace::adopt(&home, created["id"].as_str().expect("id"), &name);
     assert!(
         stdout.contains(&custom_id),
         "create JSON missing custom_id: {stdout}"
@@ -78,6 +82,7 @@ fn get_by_id_and_custom_id() {
         .and_then(|v| v.as_str())
         .expect("create response has id")
         .to_string();
+    let _workspace = OwnedWorkspace::adopt(&home, &id, &name);
 
     let by_id_args = ["ws", "get", id.as_str()];
     let stdout = assert_success(&run(&home, &by_id_args), &by_id_args);
@@ -98,8 +103,8 @@ fn get_by_id_and_custom_id() {
     let _ = fs::remove_dir_all(&home);
 }
 
-/// `update` against the shared scratch workspace: only the scratch workspace
-/// is touched, because workspaces cannot be deleted to clean up after a test.
+/// `update` against the shared scratch workspace, so no workspace is created
+/// just to be renamed.
 #[test]
 fn update_replaces_metadata_and_patches_only_what_is_given() {
     let api_key = require_api_key();

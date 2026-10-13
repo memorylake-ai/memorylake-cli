@@ -1,10 +1,9 @@
 //! Live `fact` tests (require `MEMORYLAKE_API_KEY`).
 //!
-//! Both tests run in one scratch workspace, created on first use and shared
-//! through [`shared_workspace`]: a workspace cannot be deleted (there is no
-//! `workspace delete`), so every extra one is left behind for good. Each test
-//! then creates its own project — and, for the agent scope, its own agent —
-//! under a [`Scratch`] guard that removes them however the test ends.
+//! Both tests run in the shared scratch workspace
+//! ([`crate::common::scratch_workspace`]). Each test then creates its own
+//! project — and, for the agent scope, its own agent — under a [`Scratch`]
+//! guard that removes them however the test ends.
 //! Actors are not used: they are account-wide.
 //!
 //! Conflict *resolution* is not exercised live: detection is asynchronous and
@@ -13,7 +12,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use serde_json::Value;
 
@@ -25,28 +23,6 @@ fn login_default(home: &Path, api_key: &str) {
     let base_url = live_base_url();
     let args = login_args(api_key, "default", base_url.as_deref());
     assert_success(&run(home, &args), &args);
-}
-
-/// The scratch workspace every test in this module shares, created by the
-/// first caller. Left behind — there is no delete.
-fn shared_workspace(home: &Path) -> String {
-    static WORKSPACE: OnceLock<String> = OnceLock::new();
-    WORKSPACE
-        .get_or_init(|| {
-            let name = unique_name("fact-ws");
-            id_of(&run_json(
-                home,
-                &[
-                    "workspace",
-                    "create",
-                    "--name",
-                    name.as_str(),
-                    "--custom-id",
-                    name.as_str(),
-                ],
-            ))
-        })
-        .clone()
 }
 
 /// A logged-in temp `$HOME` in the shared workspace, plus the scratch objects
@@ -73,7 +49,7 @@ impl Scratch {
             agent: None,
         };
         login_default(&scratch.home, &api_key);
-        scratch.workspace = shared_workspace(&scratch.home);
+        scratch.workspace = crate::common::scratch_workspace(&scratch.home);
         scratch
     }
 
