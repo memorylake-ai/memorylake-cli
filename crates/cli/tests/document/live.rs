@@ -1,9 +1,8 @@
 //! Live `project document` tests (require `MEMORYLAKE_API_KEY`).
 //!
 //! Each test builds its own scratch Library folder and project and removes both
-//! on the normal path. Cleanup is deliberately not run on failure so the state
-//! can be inspected. The workspace itself is left behind: `workspace delete` is
-//! not implemented.
+//! on the normal path, in a workspace of its own that is deleted after it.
+//! Cleanup is deliberately not run on failure so the state can be inspected.
 
 use std::fs;
 use std::path::Path;
@@ -12,8 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::common::{
-    assert_failure, assert_success, live_base_url, login_args, require_api_key, run,
-    scratch_text_file, temp_home, unique_name,
+    OwnedWorkspace, assert_failure, assert_success, live_base_url, login_args, require_api_key,
+    run, scratch_text_file, temp_home, unique_name,
 };
 
 /// Seconds to let the server finish indexing under `--wait`.
@@ -47,20 +46,12 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("expected a string `{key}` in {value}"))
 }
 
-/// Create a workspace to host the project under test and return its id.
-fn create_workspace(home: &Path, label: &str) -> String {
+/// Create a workspace to host the project under test, deleted again when the
+/// guard drops.
+fn create_workspace(home: &Path, label: &str) -> OwnedWorkspace {
     let name = format!("CLI Live {label} {}", nanos());
     let custom_id = format!("cli-live-{label}-{}", nanos());
-    let args = [
-        "workspace",
-        "create",
-        "--name",
-        name.as_str(),
-        "--custom-id",
-        custom_id.as_str(),
-    ];
-    let created = json(&assert_success(&run(home, &args), &args));
-    field(&created, "id").to_string()
+    OwnedWorkspace::create(home, &name, &custom_id).keep_on_failure()
 }
 
 /// Create a project inside `workspace` and return its id.

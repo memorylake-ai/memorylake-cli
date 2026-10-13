@@ -1,17 +1,19 @@
 //! `memorylake workspace` / `ws` commands.
 //!
-//! There is deliberately no `workspace delete`: the API offers one, but a
-//! workspace holds everything else, and an agent driving this CLI should not
-//! be one command away from erasing it.
+//! `workspace delete` erases everything a workspace holds, so it will not run
+//! on an id alone: `--confirm` has to repeat the workspace's name, which the
+//! command reads back before deleting. A caller that never looked at the
+//! workspace cannot name it, and one that looked at the wrong one is caught.
 
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::workspaces::{
-    CreateWorkspaceRequest, ListWorkspacesParams, UpdateWorkspaceRequest,
-    WORKSPACE_DESCRIPTION_MAX_CHARS, WORKSPACE_NAME_MAX_CHARS, Workspace, create_workspace,
-    get_workspace, get_workspace_by_custom_id, list_workspaces, update_workspace,
+    CreateWorkspaceRequest, DEFAULT_WORKSPACE_CUSTOM_ID, ListWorkspacesParams,
+    UpdateWorkspaceRequest, WORKSPACE_DESCRIPTION_MAX_CHARS, WORKSPACE_NAME_MAX_CHARS, Workspace,
+    create_workspace, delete_workspace, get_workspace, get_workspace_by_custom_id, list_workspaces,
+    update_workspace,
 };
 use memorylake_core::{
     Client, DEFAULT_PROFILE, Paths, ResolveOverrides, clear_profile_workspace, load_file_config,
@@ -74,6 +76,23 @@ pub enum WorkspaceCommand {
         /// e.g. '{"team":"core"}'.
         #[arg(long, value_name = "JSON", value_parser = super::parse_string_map)]
         metadata: Option<BTreeMap<String, String>>,
+    },
+    /// Permanently delete a workspace and everything in it.
+    ///
+    /// Irreversible: its projects, documents and memories go with it. There
+    /// is no prompt; instead `--confirm` must
+    /// repeat the workspace's current name exactly, as `workspace get <id>`
+    /// prints it, or nothing is deleted. The team's default workspace
+    /// (custom_id `_sys_default_workspace`) is refused.
+    ///
+    /// A profile that remembered this workspace (`workspace use`) forgets it.
+    Delete {
+        /// Workspace id (`ws-...`, from `workspace list`).
+        #[arg(value_parser = super::parse_non_blank)]
+        id: String,
+        /// The workspace's current name, repeated exactly.
+        #[arg(long, value_name = "NAME", value_parser = parse_confirm_name)]
+        confirm: String,
     },
     /// Remember a workspace so other commands can omit `--workspace`.
     ///
@@ -184,6 +203,16 @@ pub fn run(
             .with_context(|| format!("update workspace `{id}`"))?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
+        WorkspaceCommand::Delete { id, confirm } => {
+            let workspace = get_workspace(&client, &id)
+                .with_context(|| format!("read workspace `{id}` to confirm against"))?;
+            check_deletable(&workspace, &confirm)?;
+            delete_workspace(&client, &id).with_context(|| format!("delete workspace `{id}`"))?;
+            println!("Deleted workspace `{id}` ({})", workspace.name);
+            for profile in forget_everywhere(&paths, &id)? {
+                println!("profile `{profile}` no longer remembers it");
+            }
+        }
         WorkspaceCommand::Use { id, .. } => {
             // `--clear` returned earlier, before credentials were needed.
             let chosen = match id {
@@ -225,6 +254,54 @@ fn parse_workspace_description(raw: &str) -> std::result::Result<String, String>
         ));
     }
     Ok(raw.to_string())
+}
+
+/// Accept a `--confirm` name: anything but blank, kept exactly as typed so
+/// it is compared with the name character for character.
+fn parse_confirm_name(raw: &str) -> std::result::Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("must repeat the workspace's name".to_string());
+    }
+    Ok(raw.to_string())
+}
+
+/// Refuse to delete `workspace` unless `confirm` repeats its name and it is
+/// not the team's default workspace.
+fn check_deletable(workspace: &Workspace, confirm: &str) -> Result<()> {
+    if workspace.custom_id.as_deref() == Some(DEFAULT_WORKSPACE_CUSTOM_ID) {
+        bail!(
+            "refusing to delete `{}`: it is the team's default workspace \
+             (custom_id {DEFAULT_WORKSPACE_CUSTOM_ID}), which other services look up",
+            workspace.id
+        );
+    }
+    if workspace.name != confirm {
+        bail!(
+            "refusing to delete `{}`: --confirm {confirm:?} does not match its name {:?}",
+            workspace.id,
+            workspace.name
+        );
+    }
+    Ok(())
+}
+
+/// Forget a deleted workspace on every profile that remembered it, and name
+/// those profiles.
+///
+/// A remembered id that no longer exists would fail every later command that
+/// leans on it. Workspace ids are unique, so a match on another profile is the
+/// same, now deleted, workspace.
+fn forget_everywhere(paths: &Paths, id: &str) -> Result<Vec<String>> {
+    let config = load_file_config(paths).context("read local config")?;
+    let mut forgotten = Vec::new();
+    for (profile, settings) in &config.profiles {
+        if settings.workspace.as_deref() == Some(id) {
+            clear_profile_workspace(paths, profile)
+                .with_context(|| format!("forget the deleted workspace on profile `{profile}`"))?;
+            forgotten.push(profile.clone());
+        }
+    }
+    Ok(forgotten)
 }
 
 /// Resolve which profile to act on without requiring credentials.

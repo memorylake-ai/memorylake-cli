@@ -2,8 +2,7 @@
 //!
 //! Read-only and error paths only: a datasource needs a working database
 //! connection, which production could not provide (2026-10-09). The tests use
-//! the account's default workspace rather than creating one, since workspaces
-//! cannot be deleted.
+//! the account's default workspace rather than creating one.
 
 use std::fs;
 use std::path::Path;

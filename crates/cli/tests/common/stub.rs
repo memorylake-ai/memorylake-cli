@@ -308,6 +308,24 @@ pub fn exchange_with_response_headers(
 ///
 /// For commands that poll: the request count is pinned by the length of
 /// `responses`, so an extra or missing round trip fails the test.
+/// [`exchange_sequence`] from a `$HOME` that already remembers `workspace`.
+/// Also hands back `config.toml` as the run left it, for commands that change
+/// what is remembered.
+pub fn exchange_sequence_with_remembered_workspace(
+    responses: &[&str],
+    workspace: &str,
+    args: &[&str],
+) -> (Vec<String>, Output, String) {
+    let server = StubServer::with_responses(responses);
+    let home = logged_in_home_with_workspace(&server.base_url, workspace);
+    let output = run(&home, args);
+    let requests = server.received_all(responses.len());
+    let config =
+        fs::read_to_string(home.join(".memorylake").join("config.toml")).expect("read config.toml");
+    let _ = fs::remove_dir_all(&home);
+    (requests, output, config)
+}
+
 pub fn exchange_sequence(responses: &[&str], args: &[&str]) -> (Vec<String>, Output) {
     let server = StubServer::with_responses(responses);
     let home = logged_in_home(&server.base_url);

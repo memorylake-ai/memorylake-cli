@@ -12,9 +12,9 @@ use memorylake_core::api::projects::{
     CreateProjectRequest, ListProjectsParams, UpdateProjectRequest, create_project, delete_project,
     get_project, get_project_by_custom_id, list_projects, update_project,
 };
-use memorylake_core::api::workspaces::{CreateWorkspaceRequest, create_workspace};
+use memorylake_core::api::workspaces::CreateWorkspaceRequest;
 
-use common::live_client;
+use common::{OwnedWorkspace, live_client};
 
 fn nanos() -> u128 {
     SystemTime::now()
@@ -23,12 +23,10 @@ fn nanos() -> u128 {
         .as_nanos()
 }
 
-/// Create a workspace to host the projects under test and return its id.
-///
-/// The workspace itself is left behind: `workspace delete` is not implemented.
-fn host_workspace(client: &Client, label: &str) -> String {
+/// Create a workspace to host the test, deleted again when the guard drops.
+fn host_workspace(client: &Client, label: &str) -> OwnedWorkspace {
     let stamp = nanos();
-    create_workspace(
+    OwnedWorkspace::create(
         client,
         &CreateWorkspaceRequest {
             name: format!("Core Live {label} {stamp}"),
@@ -36,8 +34,6 @@ fn host_workspace(client: &Client, label: &str) -> String {
             description: Some("created by memorylake-core project live test".into()),
         },
     )
-    .expect("create host workspace")
-    .id
 }
 
 #[test]

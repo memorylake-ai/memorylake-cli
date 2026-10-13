@@ -1,9 +1,8 @@
 //! Live `conversation` tests (require `MEMORYLAKE_API_KEY`).
 //!
 //! Two tests share one setup shape ([`Live`]): a scratch workspace holding a
-//! scratch project and a bound actor. The project and actor are removed
-//! however the test ends, including a mid-test panic; the workspace is left
-//! behind because `workspace delete` is not implemented.
+//! scratch project and a bound actor. All three are removed however the test
+//! ends, including a mid-test panic.
 //!
 //! * `conversation_lifecycle_create_append_read_delete` walks the common path.
 //! * `conversation_options_reach_the_server` covers the flags the first test
@@ -19,7 +18,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::common::{
-    assert_success, live_base_url, login_args, require_api_key, run, temp_home, unique_name,
+    OwnedWorkspace, assert_success, live_base_url, login_args, require_api_key, run, temp_home,
+    unique_name,
 };
 
 /// A logged-in temp `$HOME` plus the scratch objects a conversation needs.
@@ -32,6 +32,10 @@ struct Live {
     workspace: String,
     project: String,
     actor: String,
+    /// The workspace `start` created, deleted after the project and actor —
+    /// fields drop after `Drop::drop` has run. `None` in the shared scratch
+    /// workspace, which stays.
+    _owned: Option<OwnedWorkspace>,
 }
 
 impl Live {
@@ -44,21 +48,10 @@ impl Live {
         assert_success(&run(&home, &args), &args);
 
         let workspace_name = unique_name(&format!("{tag}-ws"));
-        let workspace = id_of(
-            &json_of(
-                &home,
-                &[
-                    "workspace",
-                    "create",
-                    "--name",
-                    workspace_name.as_str(),
-                    "--custom-id",
-                    workspace_name.as_str(),
-                ],
-            ),
-            "workspace create",
-        );
-        Self::populate(home, workspace, tag)
+        let owned = OwnedWorkspace::create(&home, &workspace_name, &workspace_name);
+        let mut live = Self::populate(home, owned.to_string(), tag);
+        live._owned = Some(owned);
+        live
     }
 
     /// Log in, then create a project and a bound actor in the shared scratch
@@ -83,6 +76,7 @@ impl Live {
             workspace,
             project: String::new(),
             actor: String::new(),
+            _owned: None,
         };
         let home = live.home.clone();
         let workspace = live.workspace.clone();

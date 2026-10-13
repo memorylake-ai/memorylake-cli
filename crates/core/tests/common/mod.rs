@@ -12,6 +12,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use memorylake_core::api::workspaces::{
+    CreateWorkspaceRequest, create_workspace, delete_workspace,
+};
 use memorylake_core::{Client, DEFAULT_BASE_URL, ENV_API_KEY, ENV_BASE_URL};
 
 /// Load repo-root / crate `.env` into the process environment (best-effort).
@@ -96,4 +99,47 @@ pub fn write_temp_file(tag: &str, size: u64) -> (PathBuf, PathBuf) {
     writer.flush().expect("flush scratch file");
 
     (dir, path)
+}
+
+/// A workspace a live test created for itself, deleted again when the guard
+/// drops — however the test ends, including a mid-test panic. Derefs to the
+/// workspace id.
+pub struct OwnedWorkspace {
+    client: Client,
+    pub id: String,
+}
+
+impl OwnedWorkspace {
+    pub fn create(client: &Client, request: &CreateWorkspaceRequest) -> Self {
+        let id = create_workspace(client, request)
+            .expect("create workspace")
+            .id;
+        Self::adopt(client, id)
+    }
+
+    /// Take charge of a workspace the test created itself.
+    pub fn adopt(client: &Client, id: String) -> Self {
+        Self {
+            client: client.clone(),
+            id,
+        }
+    }
+}
+
+impl std::ops::Deref for OwnedWorkspace {
+    type Target = String;
+
+    fn deref(&self) -> &String {
+        &self.id
+    }
+}
+
+impl Drop for OwnedWorkspace {
+    fn drop(&mut self) {
+        // Best effort: a panic here, during an unwind, would abort the run and
+        // bury the failure that started it.
+        if let Err(err) = delete_workspace(&self.client, &self.id) {
+            eprintln!("WARNING: leaking workspace {}: {err}", self.id);
+        }
+    }
 }

@@ -1,8 +1,7 @@
 //! Live `boundary` tests (require `MEMORYLAKE_API_KEY`).
 //!
 //! Boundaries are created in the account's default workspace rather than a
-//! fresh one: workspaces cannot be deleted, so every scratch workspace would
-//! be left behind. The boundary itself is deleted again, including when an
+//! fresh one. The boundary itself is deleted again, including when an
 //! intermediate assertion fails.
 
 use std::fs;

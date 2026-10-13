@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::common::{
-    assert_failure, assert_success, live_base_url, login_args, require_api_key, run, temp_home,
+    OwnedWorkspace, assert_failure, assert_success, live_base_url, login_args, require_api_key,
+    run, temp_home,
 };
 
 /// Deletes the actor it guards when the test ends, so a failed assertion cannot
@@ -82,25 +83,11 @@ fn json_of(home: &Path, args: &[&str]) -> Value {
         .unwrap_or_else(|err| panic!("parse JSON from memorylake {}: {err}", args.join(" ")))
 }
 
-/// Create a workspace to bind into.
-///
-/// The CLI has no delete-workspace command, so — like the existing workspace
-/// live tests — this leaves the workspace behind.
-fn create_workspace(home: &Path, suffix: &str) -> String {
+/// Create a workspace to bind into, deleted again when the guard drops.
+fn create_workspace(home: &Path, suffix: &str) -> OwnedWorkspace {
     let name = format!("CLI Bin Actor WS {suffix}");
     let custom_id = format!("cli-bin-actor-ws-{suffix}");
-    let args = [
-        "workspace",
-        "create",
-        "--name",
-        name.as_str(),
-        "--custom-id",
-        custom_id.as_str(),
-    ];
-    json_of(home, &args)["id"]
-        .as_str()
-        .expect("workspace create returns an id")
-        .to_string()
+    OwnedWorkspace::create(home, &name, &custom_id)
 }
 
 #[test]

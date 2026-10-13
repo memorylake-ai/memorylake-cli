@@ -250,10 +250,9 @@ const SCRATCH_WORKSPACE_CUSTOM_ID: &str = "mlcli-live-scratch";
 
 /// The shared scratch workspace's id, created the first time it is missing.
 ///
-/// Workspaces cannot be deleted through this CLI (see issue #15), so a test
-/// that creates one per run leaves the account a little more cluttered every
-/// time. Tests that only need somewhere to put their own projects, folders or
-/// conversations look this one up by a fixed custom id instead. `home` must
+/// Tests that only need somewhere to put their own projects, folders or
+/// conversations look this one up by a fixed custom id instead of creating
+/// (and deleting) a workspace of their own. `home` must
 /// already be logged in.
 ///
 /// The id is resolved once per test process: `OnceLock::get_or_init` blocks
@@ -306,6 +305,95 @@ pub fn scratch_workspace(home: &Path) -> String {
         lookup().expect("the workspace that conflicted is now found")
     })
     .clone()
+}
+
+/// A workspace a live test created for itself, deleted again when the guard
+/// drops — however the test ends, including a mid-test panic.
+///
+/// The guard keeps its own copy of the login it was created with, so it does
+/// not matter whether the test removes its `$HOME` first.
+pub struct OwnedWorkspace {
+    id: String,
+    name: String,
+    home: PathBuf,
+    keep_on_failure: bool,
+}
+
+impl OwnedWorkspace {
+    /// Create a workspace named `name` with custom id `custom_id`, using the
+    /// login in `home`.
+    pub fn create(home: &Path, name: &str, custom_id: &str) -> Self {
+        let args = ["ws", "create", "--name", name, "--custom-id", custom_id];
+        let id = id_in(assert_success(&run(home, &args), &args).as_bytes());
+        Self::adopt(home, &id, name)
+    }
+
+    /// Take charge of a workspace the test created itself, as `name`.
+    pub fn adopt(home: &Path, id: &str, name: &str) -> Self {
+        let own = temp_home();
+        let from = home.join(".memorylake");
+        let to = own.join(".memorylake");
+        fs::create_dir_all(&to).expect("create the guard's config dir");
+        for file in ["config.toml", "credentials.toml"] {
+            fs::copy(from.join(file), to.join(file))
+                .unwrap_or_else(|err| panic!("copy {file} for the workspace guard: {err}"));
+        }
+        Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            home: own,
+            keep_on_failure: false,
+        }
+    }
+
+    /// Leave the workspace in place when the test fails, so what it holds can
+    /// be inspected; it is still deleted when the test passes.
+    pub fn keep_on_failure(mut self) -> Self {
+        self.keep_on_failure = true;
+        self
+    }
+}
+
+impl std::ops::Deref for OwnedWorkspace {
+    type Target = String;
+
+    fn deref(&self) -> &String {
+        &self.id
+    }
+}
+
+impl std::fmt::Display for OwnedWorkspace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.id)
+    }
+}
+
+impl Drop for OwnedWorkspace {
+    fn drop(&mut self) {
+        if self.keep_on_failure && std::thread::panicking() {
+            eprintln!("keeping workspace {} for inspection", self.id);
+            let _ = fs::remove_dir_all(&self.home);
+            return;
+        }
+        let args = [
+            "ws",
+            "delete",
+            self.id.as_str(),
+            "--confirm",
+            self.name.as_str(),
+        ];
+        let output = run(&self.home, &args);
+        // Best effort: a panic here, during an unwind, would abort the run and
+        // bury the failure that started it.
+        if !output.status.success() {
+            eprintln!(
+                "WARNING: leaking workspace {} — `ws delete` failed:\n{}",
+                self.id,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let _ = fs::remove_dir_all(&self.home);
+    }
 }
 
 fn id_in(stdout: &[u8]) -> String {
