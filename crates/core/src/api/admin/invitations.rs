@@ -6,7 +6,7 @@ use crate::client::Client;
 use crate::error::Result;
 
 use super::path;
-use super::types::{Invitation, Page, push_page_query};
+use super::types::{Invitation, Page, push_each, push_opt, push_page_query};
 use super::{EmptyData, idempotency_headers};
 
 /// Request body for inviting someone to the team.
@@ -30,6 +30,9 @@ pub struct ListInvitationsParams {
     /// Only return invitations in this state: `pending`, `accepted`,
     /// `rejected`, `expired`, or `revoked`.
     pub status: Option<String>,
+    /// Only invitations for these addresses (case-insensitive), sent as one
+    /// repeated `email` parameter each.
+    pub emails: Vec<String>,
 }
 
 /// Invite someone by email. Re-inviting is revoke + create; there is no
@@ -57,10 +60,15 @@ pub fn list_invitations(
         params.page_size,
         params.continuation_token.as_deref(),
     );
-    if let Some(status) = &params.status {
-        query.push(("status", status.clone()));
-    }
+    push_opt(&mut query, "status", params.status.as_ref());
+    push_each(&mut query, "email", &params.emails);
     client.get_data(path::INVITATIONS, &query)
+}
+
+/// Return one invitation. A pending invitation past its deadline reads as
+/// `expired`; invitations of other teams are reported as not found.
+pub fn get_invitation(client: &Client, id: &str) -> Result<Invitation> {
+    client.get_data(&path::invitation(id), &[])
 }
 
 /// Revoke a pending invitation; its email link stops working. Accepted

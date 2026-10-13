@@ -1,6 +1,7 @@
 //! Roles of the team (`/admin/v1/roles`).
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::client::Client;
 use crate::error::Result;
@@ -14,6 +15,10 @@ pub struct RoleList {
     /// Every role of the team.
     #[serde(default = "Vec::new")]
     pub roles: Vec<Role>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One role. Its `key` is what the `--role` flags of `member` and
@@ -31,13 +36,22 @@ pub struct Role {
     /// true for the three roles every team has.
     pub built_in: bool,
     /// Whether member and invitation writes accept this role. The owner role
-    /// never is — ownership transfer stays in the console.
+    /// never is — the owner changes only through an ownership transfer.
     pub assignable: bool,
     /// When true, only a caller whose own role is owner or admin may grant it.
     pub admin_grant_only: bool,
-    /// For custom roles: the role its policies were copied from at creation.
+    /// For custom roles: the role whose permission rules were copied into
+    /// this one at creation. Absent on built-ins and on custom roles created
+    /// without a base.
+    #[serde(default)]
+    pub base_role_key: Option<String>,
+    /// Same value as `base_role_key`; the server keeps it for older clients.
     #[serde(default)]
     pub parent_role_key: Option<String>,
+    /// Fields the CLI does not model yet, kept so printing this never drops
+    /// what the server sent.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// List the team's roles. Any member may read this.

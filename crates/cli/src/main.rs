@@ -140,7 +140,7 @@ enum Commands {
         #[command(subcommand)]
         command: OpendataCommand,
     },
-    /// Show and rename the team this API key belongs to.
+    /// Show, rename, create, delete, or hand over teams.
     Team {
         #[command(subcommand)]
         command: TeamCommand,
@@ -167,7 +167,7 @@ enum Commands {
         #[command(subcommand)]
         command: InvitationCommand,
     },
-    /// Show the team's quota and usage.
+    /// Show the team's quota, usage, and individual usage records.
     Usage(UsageArgs),
     /// Print the CLI version.
     Version,

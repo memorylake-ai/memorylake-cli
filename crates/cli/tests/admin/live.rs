@@ -216,7 +216,8 @@ fn usage_honours_the_period_and_its_cap() {
     assert_eq!(str_field(period, "start_date"), "2026-08-01");
     assert_eq!(str_field(period, "end_date"), "2026-08-27");
 
-    // A window over 92 days is a client error, surfaced with its error code.
+    // A period over 92 days is refused before anything is sent; the
+    // longest one the server takes still goes through.
     let args = [
         "usage",
         "--start-date",
@@ -226,9 +227,17 @@ fn usage_honours_the_period_and_its_cap() {
     ];
     let err = assert_failure(&run(&home, &args), &args);
     assert!(
-        err.contains("92") && err.contains("INVALID_ARGUMENT"),
+        err.contains("more than 92 days"),
         "cap violation not surfaced: {err}"
     );
+    let args = [
+        "usage",
+        "--start-date",
+        "2026-01-01",
+        "--end-date",
+        "2026-04-02",
+    ];
+    assert_success(&run(&home, &args), &args);
 
     let _ = fs::remove_dir_all(&home);
 }
@@ -285,7 +294,7 @@ fn a_key_works_until_rotated_away_and_dies_on_revoke() {
     // Revoke: the id is gone and the material no longer authenticates.
     let revoke_args = ["api-key", "revoke", id.as_str()];
     let stdout = assert_success(&run(&home, &revoke_args), &revoke_args);
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
     assert_failure(&run(&home, &get_args), &get_args);
     assert_key_rejected(&second_key);
 
@@ -357,6 +366,56 @@ fn a_virtual_members_key_acts_as_that_member() {
         "set-role did not stick"
     );
 
+    // A usage cap set by `member update` is what `member get` then reports,
+    // and 0 removes it again.
+    let cap_args = [
+        "member",
+        "update",
+        principal_id.as_str(),
+        "--max-tokens",
+        "5000",
+    ];
+    let stdout = assert_success(&run(&home, &cap_args), &cap_args);
+    assert_eq!(
+        parse(&stdout, "member update").get("max_tokens"),
+        Some(&serde_json::json!(5000)),
+        "update did not report the cap: {stdout}"
+    );
+    let get_args = ["member", "get", principal_id.as_str()];
+    let stdout = assert_success(&run(&home, &get_args), &get_args);
+    assert_eq!(
+        parse(&stdout, "member get").get("max_tokens"),
+        Some(&serde_json::json!(5000)),
+        "cap did not stick: {stdout}"
+    );
+    let uncap_args = [
+        "member",
+        "update",
+        principal_id.as_str(),
+        "--max-tokens",
+        "0",
+    ];
+    let stdout = assert_success(&run(&home, &uncap_args), &uncap_args);
+    assert!(
+        parse(&stdout, "member uncap")
+            .get("max_tokens")
+            .is_none_or(|v| v.is_null()),
+        "0 did not remove the cap: {stdout}"
+    );
+    let virtual_args = [
+        "member",
+        "list",
+        "--type",
+        "virtual",
+        "--name",
+        name.as_str(),
+    ];
+    let stdout = assert_success(&run(&home, &virtual_args), &virtual_args);
+    assert!(
+        stdout.contains(&principal_id),
+        "--type virtual missed it: {stdout}"
+    );
+
     // …issue it a key, and prove the key acts AS THE MEMBER: it carries the
     // member's role, and it hits the member's ceiling — team rename is
     // owner-only, so the admin-role key must be refused. The attempted name is
@@ -401,7 +460,7 @@ fn a_virtual_members_key_acts_as_that_member() {
     // what's tested.
     let remove_args = ["member", "remove", principal_id.as_str()];
     let stdout = assert_success(&run(&home, &remove_args), &remove_args);
-    assert!(stdout.contains("removed"), "{stdout}");
+    assert!(stdout.contains("Removed"), "{stdout}");
     assert_key_rejected(&vm_key);
 
     let stdout = assert_success(&run(&home, &list_args), &list_args);
@@ -601,6 +660,17 @@ fn an_invitation_is_created_pending_and_dies_on_revoke() {
         "invitation response must not carry the accept token: {stdout}"
     );
 
+    // It reads back by id, and the email filter finds it.
+    let get_args = ["invitation", "get", id.as_str()];
+    let stdout = assert_success(&run(&home, &get_args), &get_args);
+    assert_eq!(
+        str_field(&parse(&stdout, "invitation get"), "status"),
+        "pending"
+    );
+    let email_args = ["invitation", "list", "--email", email.as_str()];
+    let stdout = assert_success(&run(&home, &email_args), &email_args);
+    assert!(stdout.contains(&id), "email filter missed it: {stdout}");
+
     // It shows up under the pending filter…
     let list_args = ["invitation", "list", "--status", "pending"];
     let stdout = assert_success(&run(&home, &list_args), &list_args);
@@ -609,7 +679,7 @@ fn an_invitation_is_created_pending_and_dies_on_revoke() {
     // …revoke kills it, and the state filters agree.
     let revoke_args = ["invitation", "revoke", id.as_str()];
     let stdout = assert_success(&run(&home, &revoke_args), &revoke_args);
-    assert!(stdout.contains("revoked"), "{stdout}");
+    assert!(stdout.contains("Revoked"), "{stdout}");
     let stdout = assert_success(&run(&home, &list_args), &list_args);
     assert!(
         !stdout.contains(&id),
@@ -651,5 +721,229 @@ fn team_rename_roundtrip() {
     );
     assert_eq!(str_field(&restored, "name"), original);
 
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn an_api_key_update_changes_what_the_key_may_do() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+    let name = unique_name("upd");
+
+    let args = ["api-key", "create", "--name", name.as_str()];
+    let stdout = assert_success(&run(&home, &args), &args);
+    let created = parse(&stdout, "api-key create");
+    let id = str_field(&created, "id");
+    let key = str_field(&created, "key");
+    assert_key_authenticates(&key);
+
+    // Pinned to a documentation-only address (RFC 5737), the key must stop
+    // working from here; lifting the restriction must bring it back. Each
+    // write is asserted only after the next one has undone it, so a failure
+    // cannot strand the key locked out.
+    let pin_args = [
+        "api-key",
+        "update",
+        id.as_str(),
+        "--allowed-ip",
+        "192.0.2.1",
+    ];
+    let pinned = run(&home, &pin_args);
+    let probe_home = temp_home();
+    let pinned_works = login(&probe_home, &key, "probe").status.success();
+    let _ = fs::remove_dir_all(&probe_home);
+    let lift_args = ["api-key", "update", id.as_str(), "--no-ip-restriction"];
+    let lifted = run(&home, &lift_args);
+    let stdout = assert_success(&pinned, &pin_args);
+    assert!(
+        stdout.contains("192.0.2.1"),
+        "restriction not echoed: {stdout}"
+    );
+    assert!(!pinned_works, "an IP-restricted key still authenticated");
+    let stdout = assert_success(&lifted, &lift_args);
+    assert_eq!(
+        parse(&stdout, "lifted").get("allowed_ips"),
+        Some(&serde_json::json!([])),
+        "{stdout}"
+    );
+    assert_key_authenticates(&key);
+
+    // Disabled, the key is refused; enabled again, it works.
+    let disable_args = ["api-key", "update", id.as_str(), "--status", "disabled"];
+    let stdout = assert_success(&run(&home, &disable_args), &disable_args);
+    assert_eq!(str_field(&parse(&stdout, "disabled"), "status"), "disabled");
+    assert_key_rejected(&key);
+    let list_args = [
+        "api-key",
+        "list",
+        "--status",
+        "disabled",
+        "--name",
+        name.as_str(),
+    ];
+    let stdout = assert_success(&run(&home, &list_args), &list_args);
+    assert!(
+        stdout.contains(&id),
+        "--status disabled missed it: {stdout}"
+    );
+    let enable_args = ["api-key", "update", id.as_str(), "--status", "enabled"];
+    assert_success(&run(&home, &enable_args), &enable_args);
+    assert_key_authenticates(&key);
+
+    // A rename is what `get` reports afterwards.
+    let renamed = format!("{name}-r");
+    let rename_args = ["api-key", "update", id.as_str(), "--name", renamed.as_str()];
+    assert_success(&run(&home, &rename_args), &rename_args);
+    let get_args = ["api-key", "get", id.as_str()];
+    let stdout = assert_success(&run(&home, &get_args), &get_args);
+    let fetched = parse(&stdout, "api-key get");
+    assert_eq!(str_field(&fetched, "name"), renamed);
+    assert_eq!(
+        str_field(&fetched, "key_suffix"),
+        key[key.len() - 4..],
+        "key_suffix does not match the key"
+    );
+
+    let revoke_args = ["api-key", "revoke", id.as_str()];
+    assert_success(&run(&home, &revoke_args), &revoke_args);
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn usage_summary_records_and_the_daily_series_agree_on_shape() {
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let args = ["usage", "summary"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    let summary = parse(&stdout, "usage summary");
+    assert!(
+        matches!(str_field(&summary, "scope").as_str(), "team" | "self"),
+        "{stdout}"
+    );
+    for window in ["today", "last_7_days", "month_to_date"] {
+        assert!(
+            summary
+                .get(window)
+                .and_then(|w| w.get("used_tokens"))
+                .is_some(),
+            "{window} missing: {stdout}"
+        );
+    }
+
+    // A three-day period with a daily series has exactly three buckets, idle
+    // days included — the documented promise.
+    let args = [
+        "usage",
+        "--start-date",
+        "2026-10-01",
+        "--end-date",
+        "2026-10-03",
+        "--daily",
+    ];
+    let stdout = assert_success(&run(&home, &args), &args);
+    let report = parse(&stdout, "usage --daily");
+    let buckets = report.get("buckets").and_then(|v| v.as_array()).unwrap();
+    let dates: Vec<_> = buckets.iter().map(|b| str_field(b, "date")).collect();
+    assert_eq!(dates, ["2026-10-01", "2026-10-02", "2026-10-03"]);
+
+    let args = ["usage", "records", "--page-size", "1"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    let page = parse(&stdout, "usage records");
+    assert!(page.get("items").is_some_and(|v| v.is_array()), "{stdout}");
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_created_team_dies_by_its_own_key() {
+    // Opt-in: every run creates a real org team, which counts toward the
+    // owner's team limit until it is deleted. Set
+    // MEMORYLAKE_LIVE_TEAM_LIFECYCLE=1 (env or .env) to run it.
+    crate::common::load_dotenv();
+    if std::env::var("MEMORYLAKE_LIVE_TEAM_LIFECYCLE").as_deref() != Ok("1") {
+        eprintln!("MEMORYLAKE_LIVE_TEAM_LIFECYCLE not set; skipping the team lifecycle live test");
+        return;
+    }
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+    let args = ["team", "get"];
+    let own_team = str_field(
+        &parse(&assert_success(&run(&home, &args), &args), "team"),
+        "id",
+    );
+
+    let name = format!("mlcli-team-{}", unix_now() % 10_000_000_000);
+    let args = ["team", "create", "--name", name.as_str(), "--issue-api-key"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    let created = parse(&stdout, "team create");
+    let team = created.get("team").expect("team");
+    let team_id = str_field(team, "id");
+    assert_eq!(str_field(team, "type"), "org");
+    assert_ne!(team_id, own_team, "create returned the caller's own team");
+    let team_key = str_field(created.get("api_key").expect("api_key"), "key");
+
+    // The issued key lands in the NEW team as its owner…
+    let seen = assert_key_authenticates(&team_key);
+    assert_eq!(str_field(&seen, "id"), team_id);
+    assert_eq!(str_field(&seen, "caller_role"), "tenant_owner");
+
+    // …and deleting through it takes the team and the key with it, while
+    // the creating key's own team is untouched.
+    let team_home = temp_home();
+    assert_success(&login(&team_home, &team_key, "lab"), &["login lab"]);
+
+    // Ownership can only go to another human member, which a test team
+    // never has; what can be proven is that the endpoint is reached and
+    // refuses a virtual member, after the local --confirm check passed.
+    let wrong = [
+        "team",
+        "transfer-ownership",
+        "--to",
+        "prin-mlcli-none",
+        "--confirm",
+        own_team.as_str(),
+    ];
+    let err = assert_failure(&run(&team_home, &wrong), &wrong);
+    assert!(err.contains("does not match"), "{err}");
+    let args = [
+        "member",
+        "create",
+        "--name",
+        "mlcli bot",
+        "--role",
+        "tenant_member",
+    ];
+    let bot = parse(&assert_success(&run(&team_home, &args), &args), "member");
+    let bot_id = str_field(&bot, "principal_id");
+    let args = [
+        "team",
+        "transfer-ownership",
+        "--to",
+        bot_id.as_str(),
+        "--confirm",
+        team_id.as_str(),
+    ];
+    let err = assert_failure(&run(&team_home, &args), &args);
+    assert!(err.contains("human member"), "{err}");
+
+    let wrong = ["team", "delete", "--confirm", own_team.as_str()];
+    let err = assert_failure(&run(&team_home, &wrong), &wrong);
+    assert!(err.contains("does not match"), "{err}");
+    let args = ["team", "delete", "--confirm", team_id.as_str()];
+    let stdout = assert_success(&run(&team_home, &args), &args);
+    assert_eq!(
+        str_field(&parse(&stdout, "team delete"), "tenant_id"),
+        team_id
+    );
+    assert_key_rejected(&team_key);
+    let _ = fs::remove_dir_all(&team_home);
+
+    let args = ["team", "get"];
+    let stdout = assert_success(&run(&home, &args), &args);
+    assert_eq!(str_field(&parse(&stdout, "team"), "id"), own_team);
     let _ = fs::remove_dir_all(&home);
 }

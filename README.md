@@ -661,38 +661,67 @@ authorized by what the key's creator may do in the console.
 ```bash
 memorylake team get
 memorylake team rename --name "New Name"        # owner only
+memorylake team create --name Lab [--issue-api-key [--api-key-name NAME]]
+memorylake team transfer-ownership --to <principal-id> --confirm <team-id>   # owner only
+memorylake team delete --confirm <team-id>      # owner only, PERMANENT
 
-memorylake key list [--name FUZZY] [--page-size N] [--continuation-token TOKEN]
+memorylake key list [--name FUZZY] [--status enabled|disabled|expired] [--owner <principal-id>]
+                    [--page-size N] [--continuation-token TOKEN]
 memorylake key get <id>
 memorylake key create --name ci [--member <principal-id>] [--expires-at UNIX_SECONDS]
+                      [--allowed-ip IP_OR_CIDR]... [--group G] [--backup-group G]
+memorylake key update <id> [--name N] [--status enabled|disabled] [--expires-at UNIX_SECONDS|0]
+                      [--allowed-ip IP_OR_CIDR... | --no-ip-restriction] [--group G] [--backup-group G]
 memorylake key rotate <id>
-memorylake key revoke <id>
+memorylake key revoke <id>                      # alias: key delete
 
 memorylake role list                    # what --role below accepts
-memorylake member list [--name FUZZY] [--page-size N]
+memorylake member list [--name FUZZY] [--role KEY] [--email ADDR]... [--type human|virtual] [--page-size N]
+memorylake member get <principal-id>
 memorylake member create --name "CI Bot" --role tenant_member   # virtual member
+memorylake member update <principal-id> [--role KEY] [--max-tokens N|0]
 memorylake member set-role <principal-id> --role tenant_admin
-memorylake member remove <principal-id>
+memorylake member remove <principal-id>         # alias: member delete
 
 memorylake invite create --email person@example.com --role tenant_member
-memorylake invite list [--status pending|accepted|rejected|expired|revoked]
-memorylake invite revoke <id>
+memorylake invite list [--status pending|accepted|rejected|expired|revoked] [--email ADDR]...
+memorylake invite get <id>
+memorylake invite revoke <id>                   # alias: invite delete
 
-memorylake usage [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
+memorylake usage [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--daily] [--group-by member,model]
+memorylake usage summary                # today, last 7 days, month to date
+memorylake usage records [--start-time UNIX] [--end-time UNIX] [--model M]... [--kind model_call|platform_task]
+                         [--member <principal-id>]... [--request-id ID] [--page-size N]
 ```
 
 `key create` and `key rotate` print the full key **exactly once** — list and get
 only ever return its prefix, and an idempotent replay omits it too, so capture
-it from the first response.
+it from the first response. When a response carries no key, a note on standard
+error says so and how to get a new one. To tell which key a profile runs with,
+compare the last four characters `auth status` shows with `key_suffix` in
+`key list`: that key cannot revoke or disable itself.
 
 A *virtual member* is a login-less identity for automations: create one with
 `member create`, then issue it a key with `key create --member <principal-id>`.
 That key acts with the virtual member's role instead of yours, so a CI job can
 hold exactly the permissions it needs.
 
-Every write takes `--idempotency-key VALUE`. Retrying with the same value
-replays the first result instead of repeating the write — no duplicate key,
-member, or invitation email.
+Creates, renames, role changes, removals and revocations take
+`--idempotency-key VALUE`. Retrying with the same value replays the first result
+instead of repeating the write — no duplicate key, member, team, or invitation
+email. (`key update` and `team delete` take none: the API documents none.)
+
+`team delete` and `team transfer-ownership` cannot be undone. Both read the team
+first and refuse unless `--confirm` repeats the id `team get` reports, so a
+command copied into the wrong profile does not hit whichever team that profile's
+key belongs to. Deleting the team stops every key of it at once — including the
+one that ran the command. `team create --issue-api-key` prints the new team's
+owner key exactly once; the key you ran it with stays in its own team.
+
+`usage` reports for the whole team when you may view it, otherwise for you
+alone; `scope` says which. A report or a `usage records` window spans at most 92
+days, both ends counted; when both ends are given, that is checked before
+anything is sent. `used_tokens` is what is charged against the balance.
 
 ## Configuration
 
