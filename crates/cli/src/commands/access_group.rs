@@ -203,7 +203,7 @@ pub enum ScopeCommand {
     },
     /// Replace, per listed resource type, the instances the group gives
     /// access to. Mode `all` removes the type's instances: a group never
-    /// limits anyone. Project instances need their workspace_id.
+    /// limits anyone.
     #[command(after_long_help = SCOPE_SET_HELP)]
     Set {
         /// Access group id (from `access-group list`).

@@ -129,8 +129,7 @@ pub enum ScopeCommand {
     },
     /// Replace the scope of each listed resource type. A scope limits a
     /// member; it never grants more than their role allows, and a limited
-    /// type must leave them at least one instance. Project instances need
-    /// their workspace_id.
+    /// type must leave them at least one instance.
     #[command(after_long_help = SCOPE_SET_HELP)]
     Set {
         /// Member principal id (from `member list`).
