@@ -119,11 +119,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # Everything that needs no network. The live tests run once, in `coverage` —
-  # see the note there.
+  # Everything that needs no network. CI runs no live tests at all: they share
+  # one production account, so its quota, rate limit or expiry failed runs that
+  # had nothing to do with the change. Run them locally (see CONTRIBUTING.md).
   #
   # No API key is set, so a live test that slipped in here would fail loudly
-  # rather than quietly reaching production from two jobs at once.
+  # rather than quietly reaching production.
   test:
     name: test
     runs-on: ubuntu-latest
@@ -257,16 +258,6 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
-    # Every run's live tests share one production team and its per-key rate
-    # limit. Merging a few pull requests in a row used to start as many runs
-    # at once and fail them all with 429, so these jobs queue instead: one at
-    # a time across every branch. A run still waiting when a newer one queues
-    # is superseded rather than run.
-    concurrency:
-      group: live-api
-      cancel-in-progress: false
-    env:
-      MEMORYLAKE_API_KEY: ${{ secrets.MEMORYLAKE_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -274,18 +265,14 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # The only job that runs the live tests, and so the only one that talks to
-      # production. They used to run here *and* in `test`, concurrently, against
-      # the same account — which failed at the connection level often enough to
-      # need a rerun most times. Running them once fixes that and halves the
-      # scratch state each CI run leaves behind (see #15).
-      #
-      # They stay in this job rather than the other because they are worth ~9
-      # points of coverage: they reach paging, chunked upload and error paths
-      # that the stub-backed tests do not. A live failure therefore surfaces
-      # here — that is deliberate, not a misplaced test.
-      - name: Generate coverage (includes the live tests)
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      # The same tests as `test`, no network: the live tests are left out here
+      # too, so this measures what the unit and wire tests reach. Run
+      # `cargo llvm-cov --workspace` locally with a key to include them.
+      - name: Generate coverage (no network)
+        run: |
+          cargo llvm-cov --no-report -p memorylake-core --lib
+          cargo llvm-cov --no-report -p memorylake-cli -- --skip live
+          cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:

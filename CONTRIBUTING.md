@@ -40,6 +40,11 @@ Tests come in three layers:
   pass. To run everything else: `cargo test -p memorylake-core --lib` and
   `cargo test -p memorylake-cli -- --skip live`.
 
+  CI runs only that second set, never the live tests: they share one production
+  account, and its quota, rate limit or expiry failed runs for reasons unrelated
+  to the change. Run them locally before merging a change that touches an API
+  call.
+
 Live tests create real objects and clean up after themselves, several from
 `Drop` so a mid-test panic still tidies up. A test that needs a workspace of its
 own creates it through `OwnedWorkspace`, which deletes it again; the rest share
@@ -50,10 +55,6 @@ not enough: on Windows `dirs::home_dir()` calls
 `SHGetKnownFolderPath(FOLDERID_Profile)`, which ignores both `HOME` and
 `USERPROFILE`, so a test that only sets those reads the real user's config.
 
-Fork-based pull requests cannot pass `test` / `coverage`: GitHub does not expose
-secrets to `pull_request` runs from a fork, so `MEMORYLAKE_API_KEY` is empty and
-the live tests fail. Branch from this repository instead.
-
 ## Coverage
 
 ```bash
@@ -62,7 +63,8 @@ cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo llvm-cov --workspace --html --open
 ```
 
-CI uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli)
+Locally this includes the live tests (with a key). CI measures the unit and wire
+tests only, and uploads `lcov.info` to [Codecov](https://codecov.io/gh/memorylake-ai/memorylake-cli)
 and as a workflow artifact.
 
 ## Lint
