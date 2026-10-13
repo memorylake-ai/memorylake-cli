@@ -142,12 +142,13 @@ pub fn login_args<'a>(
 }
 
 /// Times a command is run while the API answers `429 Too Many Requests`.
-const RATE_LIMIT_ATTEMPTS: u32 = 6;
+const RATE_LIMIT_ATTEMPTS: u32 = 8;
 
 /// Run `memorylake args` sandboxed to `home`.
 ///
 /// A command the API turned away with 429 is run again after a doubling
-/// pause (2 s, 4 s, … about a minute in all). The live tests run in
+/// pause (2 s, 4 s, … about four minutes in all, long enough for the
+/// management API's per-key bucket to refill). The live tests run in
 /// parallel against one team and can outpace its rate limit, and a 429 means
 /// the request was refused without effect, so repeating even a write is
 /// safe. Stubbed (wire) tests never see a 429 and run once.

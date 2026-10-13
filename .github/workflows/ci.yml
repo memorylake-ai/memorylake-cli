@@ -257,6 +257,14 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    # Every run's live tests share one production team and its per-key rate
+    # limit. Merging a few pull requests in a row used to start as many runs
+    # at once and fail them all with 429, so these jobs queue instead: one at
+    # a time across every branch. A run still waiting when a newer one queues
+    # is superseded rather than run.
+    concurrency:
+      group: live-api
+      cancel-in-progress: false
     env:
       MEMORYLAKE_API_KEY: ${{ secrets.MEMORYLAKE_API_KEY }}
     steps:

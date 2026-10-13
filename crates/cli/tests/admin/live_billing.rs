@@ -128,7 +128,20 @@ fn the_low_balance_alert_round_trips_and_resets() {
     assert_eq!(reset["is_default"], true);
     assert_eq!(reset["enabled"], true);
     if before["is_default"] == true {
-        assert_eq!(run_json(&home, &["billing", "alert", "get"]), before);
+        // `status` is the live balance and the last trigger, which every
+        // other test spending tokens moves; only the configuration is
+        // restored.
+        let config = |mut alert: serde_json::Value| {
+            alert
+                .as_object_mut()
+                .expect("alert object")
+                .remove("status");
+            alert
+        };
+        assert_eq!(
+            config(run_json(&home, &["billing", "alert", "get"])),
+            config(before.clone())
+        );
     }
     let _ = fs::remove_dir_all(&home);
 }
