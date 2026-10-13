@@ -77,6 +77,18 @@ fn bad_input_is_rejected_locally_before_credentials_are_needed() {
             "--issue-api-key",
         ),
         (vec!["team", "create", "--name", " "], "must not be empty"),
+        (
+            vec![
+                "team",
+                "create",
+                "--name",
+                "Lab",
+                "--issue-api-key",
+                "--api-key-name",
+                "",
+            ],
+            "must not be empty",
+        ),
         (vec!["team", "delete"], "--confirm"),
         (
             vec!["team", "transfer-ownership", "--to", "prin-2"],

@@ -317,7 +317,14 @@ fn usage_keeps_the_fields_production_returns() {
 #[test]
 fn usage_daily_and_group_by_repeat_the_parameter() {
     let report = r#"{"success":true,"data":{"scope":"team","period":{"start_date":"2026-10-11","end_date":"2026-10-11","timezone":"Asia/Shanghai"},"quota":{"available_tokens":1,"unlimited":false},"totals":{"requests":1,"prompt_tokens":1,"completion_tokens":0,"used_tokens":1},"by_model":[],"by_member":[{"principal_id":"prin-1","display_name":"A","requests":1,"prompt_tokens":1,"completion_tokens":0,"used_tokens":1}],"buckets":[{"date":"2026-10-11","start_time":1791648000,"end_time":1791734400,"requests":1,"prompt_tokens":1,"completion_tokens":0,"used_tokens":1,"by_member":[{"principal_id":"prin-1","display_name":"A","requests":1,"prompt_tokens":1,"completion_tokens":0,"used_tokens":1}]}]}}"#;
-    let args = ["usage", "--daily", "--group-by", "member,model"];
+    let args = [
+        "usage",
+        "--daily",
+        "--group-by",
+        "model,member",
+        "--group-by",
+        "member",
+    ];
     let (request, output) = exchange(report, &args);
     let stdout = assert_success(&output, &args);
 
