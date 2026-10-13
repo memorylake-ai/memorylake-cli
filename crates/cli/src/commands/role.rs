@@ -87,7 +87,6 @@ pub enum ScopeCommand {
     },
     /// Replace the scope of each listed resource type for everyone holding
     /// the role. A scope limits; it never grants more than the role allows.
-    /// Project instances need their workspace_id.
     #[command(after_long_help = SCOPE_SET_HELP)]
     Set {
         /// tenant_admin, tenant_member, or a custom role key.
