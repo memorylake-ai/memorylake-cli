@@ -1261,7 +1261,16 @@ fn request_body_as_str(request: &reqwest::blocking::Request) -> String {
 ///
 /// Database connection requests carry a `password` the API treats as
 /// write-only; it must not reappear in a `-vvv` trace or an error message.
-const SECRET_BODY_KEYS: [&str; 1] = ["password"];
+const SECRET_BODY_KEYS: [&str; 6] = [
+    "password",
+    // IM integration credentials: the whole object, and its secret fields
+    // should one ever appear on its own.
+    "credentials",
+    "appsecret",
+    "secret",
+    "bottoken",
+    "apptoken",
+];
 
 /// Replace the values of [`SECRET_BODY_KEYS`] in a JSON body with `REDACTED`.
 ///
@@ -1939,6 +1948,26 @@ mod tests {
         assert!(!rendered.contains("hunter2"), "{rendered}");
         assert!(rendered.contains(r#""password":"REDACTED""#), "{rendered}");
         assert!(rendered.contains(r#""host":"db""#), "{rendered}");
+    }
+
+    #[test]
+    fn request_body_trace_redacts_im_credentials() {
+        let http = reqwest::blocking::Client::new();
+        let request = http
+            .post("http://example.invalid/")
+            .json(&serde_json::json!({
+                "name": "bot",
+                "credentials": {"botToken": "xoxb-live-secret", "appToken": "xapp-live-secret"}
+            }))
+            .build()
+            .unwrap();
+        let rendered = request_body_as_str(&request);
+        assert!(!rendered.contains("live-secret"), "{rendered}");
+        assert!(
+            rendered.contains(r#""credentials":"REDACTED""#),
+            "{rendered}"
+        );
+        assert!(rendered.contains(r#""name":"bot""#), "{rendered}");
     }
 
     #[test]

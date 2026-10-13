@@ -317,6 +317,22 @@ pub fn exchange_sequence(responses: &[&str], args: &[&str]) -> (Vec<String>, Out
     (requests, output)
 }
 
+/// [`exchange_sequence`] with standard input and extra environment
+/// variables for the command.
+pub fn exchange_sequence_with_input(
+    responses: &[&str],
+    args: &[&str],
+    stdin: &str,
+    envs: &[(&str, &str)],
+) -> (Vec<String>, Output) {
+    let server = StubServer::with_responses(responses);
+    let home = logged_in_home(&server.base_url);
+    let output = super::run_with_input(&home, args, stdin, envs);
+    let requests = server.received_all(responses.len());
+    let _ = fs::remove_dir_all(&home);
+    (requests, output)
+}
+
 /// First line of a raw HTTP request (`METHOD path HTTP/1.1`).
 pub fn request_line(request: &str) -> &str {
     request.lines().next().unwrap_or_default()

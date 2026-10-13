@@ -15,6 +15,7 @@ pub mod db_connection;
 mod download;
 pub mod fact;
 mod input;
+pub mod integration;
 pub mod invitation;
 pub mod library;
 pub mod member;

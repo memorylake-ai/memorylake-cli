@@ -3,7 +3,8 @@
 //! Governs the team the API key belongs to: the team itself, its API keys,
 //! members, invitations, and usage — plus creating new teams — and who may
 //! do what in it: roles, access groups, permission rules, access scopes, and
-//! per-instance access. It also reads the team's billing and audit log. Same base URL and same key as every other
+//! per-instance access. It also reads the team's billing and audit log, and
+//! connects IM bots to agents. Same base URL and same key as every other
 //! module here — the management endpoints simply live under `/admin/v1`
 //! instead of `/api/v1`. The team is fixed by the key; nothing in a request
 //! can address a different one.
@@ -19,6 +20,7 @@ mod access_groups;
 mod api_keys;
 mod audit_logs;
 mod billing;
+mod integrations;
 mod invitations;
 mod members;
 mod path;
@@ -71,6 +73,12 @@ pub use billing::{
     list_balance_alert_events, list_credit_transactions, list_invoices, list_orders,
     list_payment_methods, preview_plan_change, reset_balance_alert, set_balance_alert,
     set_billing_details,
+};
+pub use integrations::{
+    CHANNELS, CreateIntegrationRequest, Integration, IntegrationCredentials, IntegrationSettings,
+    ListIntegrationsParams, MAX_INTEGRATION_DATASET_ID, MAX_INTEGRATION_DATASETS,
+    MAX_INTEGRATION_NAME, UpdateIntegrationRequest, create_integration, credential_keys,
+    delete_integration, get_integration, list_integrations, update_integration,
 };
 pub use invitations::{
     CreateInvitationRequest, ListInvitationsParams, create_invitation, get_invitation,
