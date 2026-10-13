@@ -16,8 +16,8 @@ Entries: a JSON array of
   {\"resource_type\": \"memorylake:<type>\", \"mode\": \"all\" | \"instances\",
    \"instances\": [{\"id\": \"...\", \"workspace_id\": \"...\", \"actions\": [\"...\"]}]}
 or the whole JSON `scope get` printed, edited: read-only fields are dropped.
-Only the listed resource types change. Project instances need workspace_id;
-`actions` is optional (default: every action the role allows on it). An entry
+Only the listed resource types change. A project instance's workspace_id is
+filled in by the server when left out. `actions` is optional (default: every action the role allows on it). An entry
 in mode `instances` must list at least one instance: leave a type out to keep
 it as it is.
 
