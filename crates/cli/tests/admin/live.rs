@@ -32,13 +32,13 @@ use crate::common::{
 ///
 /// `auth login` VALIDATES the key against the API before storing it, which is
 /// exactly what makes it the probe for "does this key still authenticate?".
-fn login(home: &Path, api_key: &str, profile: &str) -> Output {
+pub(super) fn login(home: &Path, api_key: &str, profile: &str) -> Output {
     let base_url = live_base_url();
     let args = login_args(api_key, profile, base_url.as_deref());
     run(home, &args)
 }
 
-fn login_default(home: &Path, api_key: &str) {
+pub(super) fn login_default(home: &Path, api_key: &str) {
     assert_success(&login(home, api_key, "default"), &["auth", "login"]);
 }
 
@@ -67,11 +67,11 @@ fn assert_key_rejected(api_key: &str) {
 }
 
 /// Parse a command's pretty-JSON stdout.
-fn parse(stdout: &str, what: &str) -> serde_json::Value {
+pub(super) fn parse(stdout: &str, what: &str) -> serde_json::Value {
     serde_json::from_str(stdout).unwrap_or_else(|err| panic!("parse {what} JSON ({err}): {stdout}"))
 }
 
-fn str_field(value: &serde_json::Value, field: &str) -> String {
+pub(super) fn str_field(value: &serde_json::Value, field: &str) -> String {
     value
         .get(field)
         .and_then(|v| v.as_str())
@@ -79,7 +79,7 @@ fn str_field(value: &serde_json::Value, field: &str) -> String {
         .to_string()
 }
 
-fn unix_now() -> u128 {
+pub(super) fn unix_now() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")
@@ -91,7 +91,7 @@ fn unix_now() -> u128 {
 /// The suite runs against whatever team the CI secret or the operator's key
 /// belongs to, and two of the endpoints are defined to REFUSE personal teams.
 /// Tests covering those branch on this instead of assuming an org.
-fn team_is_personal(home: &Path) -> bool {
+pub(super) fn team_is_personal(home: &Path) -> bool {
     let args = ["team", "get"];
     let stdout = assert_success(&run(home, &args), &args);
     str_field(&parse(&stdout, "team"), "type") == "personal"

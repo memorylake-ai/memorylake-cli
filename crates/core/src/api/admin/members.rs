@@ -1,13 +1,15 @@
 //! Members of the team (`/admin/v1/members`).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::client::Client;
 use crate::error::Result;
 
 use super::path;
+use super::scopes::{MemberAccessScope, SetScopesRequest};
 use super::types::{Member, Page, push_each, push_opt, push_page_query};
-use super::{EmptyData, idempotency_headers};
+use super::{EmptyData, idempotency_headers, write_headers};
 
 /// Request body for creating a virtual member.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -124,4 +126,61 @@ pub fn remove_member(
             &idempotency_headers(idempotency_key),
         )
         .map(|_| ())
+}
+
+/// What a member can do and where each permission comes from.
+///
+/// The nested breakdowns are printed as the server sends them: the CLI only
+/// reports them, and their source records vary by kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberExplanation {
+    /// The member.
+    pub principal_id: String,
+    /// Display name.
+    pub display_name: String,
+    /// The member's primary role.
+    pub role: String,
+    /// Effective actions, each with its sources.
+    #[serde(default)]
+    pub permissions: Vec<Value>,
+    /// Effective instance limits; types not listed are unrestricted.
+    #[serde(default)]
+    pub scopes: Vec<Value>,
+    /// Per-source breakdown: the role and each access group.
+    #[serde(default)]
+    pub sources: Vec<Value>,
+    /// Fields the CLI does not model yet.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Return the member's access scope and the `ETag` [`set_member_scope`]
+/// takes as `If-Match`.
+pub fn get_member_scope(
+    client: &Client,
+    principal_id: &str,
+) -> Result<(MemberAccessScope, Option<String>)> {
+    client.get_data_with_etag(&path::member_scope(principal_id), &[])
+}
+
+/// Replace the scope of each listed resource type. A scope limits a member;
+/// it never grants more than the role allows, and a restricted type must
+/// leave at least one reachable instance.
+pub fn set_member_scope(
+    client: &Client,
+    principal_id: &str,
+    request: &SetScopesRequest,
+    if_match: Option<&str>,
+) -> Result<MemberAccessScope> {
+    client.put_data_with_headers(
+        &path::member_scope(principal_id),
+        request,
+        &write_headers(None, if_match),
+    )
+}
+
+/// Explain what the member can do and where each permission comes from:
+/// the role, access groups, or a direct grant.
+pub fn explain_member(client: &Client, principal_id: &str) -> Result<MemberExplanation> {
+    client.get_data(&path::member_effective(principal_id), &[])
 }

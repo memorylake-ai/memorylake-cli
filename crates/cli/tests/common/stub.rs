@@ -40,6 +40,15 @@ impl StubServer {
     /// response can point the CLI back at the stub (a pre-signed upload URL,
     /// for instance).
     fn with_responses(bodies: &[&str]) -> Self {
+        Self::with_responses_and_headers(bodies, &[])
+    }
+
+    /// [`Self::with_responses`], with `headers` added to every response.
+    fn with_responses_and_headers(bodies: &[&str], headers: &[(&str, &str)]) -> Self {
+        let extra: String = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub server");
         let addr = listener.local_addr().expect("stub server address");
         let responses: Vec<String> = bodies
@@ -47,7 +56,7 @@ impl StubServer {
             .map(|body| body.replace("{base_url}", &format!("http://{addr}")))
             .map(|body| {
                 format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{extra}connection: close\r\n\r\n{body}",
                     body.len()
                 )
             })
@@ -273,6 +282,20 @@ pub fn exchange_with_remembered_workspace(
 /// request the CLI sent and the process output.
 pub fn exchange(response: &str, args: &[&str]) -> (String, Output) {
     let server = StubServer::new(response);
+    let home = logged_in_home(&server.base_url);
+    let output = run(&home, args);
+    let request = server.received();
+    let _ = fs::remove_dir_all(&home);
+    (request, output)
+}
+
+/// [`exchange`], with `headers` added to the response (an `ETag`, say).
+pub fn exchange_with_response_headers(
+    response: &str,
+    headers: &[(&str, &str)],
+    args: &[&str],
+) -> (String, Output) {
+    let server = StubServer::with_responses_and_headers(&[response], headers);
     let home = logged_in_home(&server.base_url);
     let output = run(&home, args);
     let request = server.received();

@@ -16,6 +16,11 @@ pub(super) const ROLES: &str = "/admin/v1/roles";
 pub(super) const USAGE: &str = "/admin/v1/usage";
 pub(super) const USAGE_SUMMARY: &str = "/admin/v1/usage/summary";
 pub(super) const USAGE_RECORDS: &str = "/admin/v1/usage/records";
+pub(super) const ACCESS_GROUPS: &str = "/admin/v1/access-groups";
+pub(super) const ACCESS: &str = "/admin/v1/access";
+pub(super) const MY_PERMISSIONS: &str = "/admin/v1/me/permissions";
+pub(super) const PERMISSION_CATALOG: &str = "/admin/v1/permission-catalog";
+pub(super) const PERMISSION_RULES: &str = "/admin/v1/permission-rules";
 
 pub(super) fn api_key(id: &str) -> String {
     format!("{API_KEYS}/{}", encode_segment(id))
@@ -29,8 +34,56 @@ pub(super) fn member(principal_id: &str) -> String {
     format!("{MEMBERS}/{}", encode_segment(principal_id))
 }
 
+pub(super) fn member_scope(principal_id: &str) -> String {
+    format!("{}/access-scope", member(principal_id))
+}
+
+pub(super) fn member_effective(principal_id: &str) -> String {
+    format!("{}/effective-permissions", member(principal_id))
+}
+
 pub(super) fn invitation(id: &str) -> String {
     format!("{INVITATIONS}/{}", encode_segment(id))
+}
+
+pub(super) fn role(key: &str) -> String {
+    format!("{ROLES}/{}", encode_segment(key))
+}
+
+pub(super) fn role_scope(key: &str) -> String {
+    format!("{}/access-scope", role(key))
+}
+
+pub(super) fn access_group(id: &str) -> String {
+    format!("{ACCESS_GROUPS}/{}", encode_segment(id))
+}
+
+pub(super) fn access_group_members(id: &str) -> String {
+    format!("{}/members", access_group(id))
+}
+
+pub(super) fn access_group_member(id: &str, principal_id: &str) -> String {
+    format!(
+        "{}/{}",
+        access_group_members(id),
+        encode_segment(principal_id)
+    )
+}
+
+pub(super) fn access_group_permissions(id: &str) -> String {
+    format!("{}/permissions", access_group(id))
+}
+
+pub(super) fn access_group_scope(id: &str) -> String {
+    format!("{}/access-scope", access_group(id))
+}
+
+pub(super) fn access_group_effective(id: &str) -> String {
+    format!("{}/effective-permissions", access_group(id))
+}
+
+pub(super) fn permission_rule(id: &str) -> String {
+    format!("{PERMISSION_RULES}/{}", encode_segment(id))
 }
 
 #[cfg(test)]

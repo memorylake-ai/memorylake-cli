@@ -8,6 +8,8 @@ use clap::{ArgAction, Parser, Subcommand};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
+use commands::access::{AccessCommand, run as run_access};
+use commands::access_group::{AccessGroupCommand, run as run_access_group};
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
 use commands::api_key::{ApiKeyCommand, run as run_api_key};
@@ -21,6 +23,7 @@ use commands::invitation::{InvitationCommand, run as run_invitation};
 use commands::library::{LibraryCommand, run as run_library};
 use commands::member::{MemberCommand, run as run_member};
 use commands::opendata::{OpendataCommand, run as run_opendata};
+use commands::permission::{PermissionCommand, run as run_permission};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::role::{RoleCommand, run as run_role};
 use commands::search::{SearchArgs, run as run_search};
@@ -156,10 +159,28 @@ enum Commands {
         #[command(subcommand)]
         command: MemberCommand,
     },
-    /// List the roles members and invitees can hold.
+    /// List, inspect, and manage roles and what holders of a role reach.
     Role {
         #[command(subcommand)]
         command: RoleCommand,
+    },
+    /// Manage access groups: extra permissions and instances for their
+    /// members.
+    #[command(visible_alias = "ag")]
+    AccessGroup {
+        #[command(subcommand)]
+        command: AccessGroupCommand,
+    },
+    /// Show your permissions, the permission catalog, and permission rules.
+    #[command(visible_alias = "perm")]
+    Permission {
+        #[command(subcommand)]
+        command: PermissionCommand,
+    },
+    /// See and change who can reach one resource instance.
+    Access {
+        #[command(subcommand)]
+        command: AccessCommand,
     },
     /// Invite people to the team and manage pending invitations.
     #[command(visible_alias = "invite")]
@@ -198,6 +219,9 @@ fn main() -> Result<()> {
         Commands::ApiKey { command } => run_api_key(command, cli.profile, cli.base_url)?,
         Commands::Member { command } => run_member(command, cli.profile, cli.base_url)?,
         Commands::Role { command } => run_role(command, cli.profile, cli.base_url)?,
+        Commands::AccessGroup { command } => run_access_group(command, cli.profile, cli.base_url)?,
+        Commands::Permission { command } => run_permission(command, cli.profile, cli.base_url)?,
+        Commands::Access { command } => run_access(command, cli.profile, cli.base_url)?,
         Commands::Invitation { command } => run_invitation(command, cli.profile, cli.base_url)?,
         Commands::Usage(args) => run_usage(args, cli.profile, cli.base_url)?,
         Commands::Version => {
