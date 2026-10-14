@@ -105,6 +105,63 @@ impl fmt::Display for BaseUrlSource {
     }
 }
 
+impl BaseUrlSource {
+    /// Where to look to fix a value from this source, for error messages.
+    fn origin(self) -> &'static str {
+        match self {
+            Self::Cli => "--base-url",
+            Self::Profile => "the profile's base_url in config.toml",
+            Self::Env => ENV_BASE_URL,
+            Self::Default => "the built-in default",
+        }
+    }
+}
+
+/// Check that `raw` can serve as an API base URL and return it normalized.
+///
+/// Request paths (`/api/v3/...`) are appended to the base URL as text, so a
+/// value without a scheme fails to parse once a request is built, and one with
+/// a query string or fragment swallows the path. Surrounding whitespace and
+/// trailing slashes are dropped; anything else is kept as given.
+pub fn normalize_base_url(raw: &str) -> Result<String> {
+    normalize_base_url_from(raw, None)
+}
+
+fn normalize_base_url_from(raw: &str, source: Option<BaseUrlSource>) -> Result<String> {
+    let invalid = |reason: String| Error::InvalidBaseUrl {
+        url: raw.trim().to_string(),
+        origin: source.map(BaseUrlSource::origin),
+        reason,
+    };
+
+    // Slashes are stripped only at the end: done first, `https://` would
+    // lose its own and be misreported as missing a scheme.
+    let url = raw.trim();
+    if url.is_empty() {
+        return Err(invalid("it is empty".into()));
+    }
+    let lower = url.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        // Only offer the fix when it would actually be accepted.
+        let candidate = format!("https://{url}");
+        let suggestion = if !url.contains("://") && normalize_base_url(&candidate).is_ok() {
+            format!(" (did you mean `{candidate}`?)")
+        } else {
+            String::new()
+        };
+        return Err(invalid(format!(
+            "it must start with http:// or https://{suggestion}"
+        )));
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|err| invalid(err.to_string()))?;
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(invalid(
+            "it must not contain `?` or `#`, because request paths are appended to it".into(),
+        ));
+    }
+    Ok(url.trim_end_matches('/').to_string())
+}
+
 /// Directory and file paths for MemoryLake CLI state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -285,7 +342,7 @@ pub fn resolve(paths: &Paths, overrides: &ResolveOverrides) -> Result<RuntimeCon
     let (base_url, base_url_source) = resolve_base_url(
         overrides.base_url.as_deref(),
         profile_cfg.base_url.as_deref(),
-    );
+    )?;
 
     let cred = credentials
         .profiles
@@ -313,23 +370,27 @@ pub fn resolve(paths: &Paths, overrides: &ResolveOverrides) -> Result<RuntimeCon
     })
 }
 
+/// Pick the base URL by precedence, then validate the winner.
+///
+/// Only the winner is checked: a broken `MEMORYLAKE_BASE_URL` must not block a
+/// command that overrides it with `--base-url`.
 fn resolve_base_url(
     cli_base_url: Option<&str>,
     profile_base_url: Option<&str>,
-) -> (String, BaseUrlSource) {
-    if let Some(url) = cli_base_url.map(str::trim).filter(|s| !s.is_empty()) {
-        return (url.to_string(), BaseUrlSource::Cli);
-    }
-    if let Some(url) = profile_base_url.map(str::trim).filter(|s| !s.is_empty()) {
-        return (url.to_string(), BaseUrlSource::Profile);
-    }
-    if let Ok(url) = std::env::var(ENV_BASE_URL) {
-        let url = url.trim();
-        if !url.is_empty() {
-            return (url.to_string(), BaseUrlSource::Env);
-        }
-    }
-    (DEFAULT_BASE_URL.to_string(), BaseUrlSource::Default)
+) -> Result<(String, BaseUrlSource)> {
+    let env_base_url = std::env::var(ENV_BASE_URL).ok();
+    let (url, source) = [
+        (cli_base_url, BaseUrlSource::Cli),
+        (profile_base_url, BaseUrlSource::Profile),
+        (env_base_url.as_deref(), BaseUrlSource::Env),
+    ]
+    .into_iter()
+    .find_map(|(url, source)| {
+        url.filter(|s| !s.trim().is_empty())
+            .map(|url| (url, source))
+    })
+    .unwrap_or((DEFAULT_BASE_URL, BaseUrlSource::Default));
+    Ok((normalize_base_url_from(url, Some(source))?, source))
 }
 
 /// Resolve the base URL for `profile` using the same precedence as [`resolve`]:
@@ -346,7 +407,7 @@ pub fn resolve_profile_base_url(
         .profiles
         .get(profile)
         .and_then(|c| c.base_url.as_deref());
-    Ok(resolve_base_url(cli_base_url, profile_base))
+    resolve_base_url(cli_base_url, profile_base)
 }
 
 /// Remember `workspace` as the default for `profile`.
@@ -453,7 +514,7 @@ pub fn login_api_key(
 
     let entry = config.profiles.entry(profile.to_string()).or_default();
     if let Some(url) = base_url {
-        entry.base_url = Some(url.to_string());
+        entry.base_url = Some(normalize_base_url(url)?);
     } else if entry.base_url.is_none() {
         entry.base_url = Some(DEFAULT_BASE_URL.to_string());
     }
@@ -534,7 +595,7 @@ pub fn auth_status(paths: &Paths) -> Result<AuthStatus> {
     };
 
     let profile_cfg = config.profiles.get(&profile).cloned().unwrap_or_default();
-    let (base_url, base_url_source) = resolve_base_url(None, profile_cfg.base_url.as_deref());
+    let (base_url, base_url_source) = resolve_base_url(None, profile_cfg.base_url.as_deref())?;
     let login_method = credentials
         .profiles
         .get(&profile)
@@ -1027,6 +1088,109 @@ mod tests {
         unsafe {
             std::env::remove_var(ENV_BASE_URL);
         }
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    #[test]
+    fn normalize_base_url_trims_whitespace_and_trailing_slashes() {
+        assert_eq!(
+            normalize_base_url("  https://app.memorylake.ai/openapi/memorylake//  ").unwrap(),
+            "https://app.memorylake.ai/openapi/memorylake"
+        );
+        assert_eq!(
+            normalize_base_url("http://10.0.0.5:8001").unwrap(),
+            "http://10.0.0.5:8001"
+        );
+    }
+
+    #[test]
+    fn normalize_base_url_rejects_what_requests_cannot_be_built_from() {
+        for (raw, reason) in [
+            ("", "empty"),
+            (
+                "app.memorylake.ai",
+                "did you mean `https://app.memorylake.ai`?",
+            ),
+            (
+                "ftp://app.memorylake.ai",
+                "must start with http:// or https://",
+            ),
+            ("https://", "empty host"),
+            (
+                "https://app.memorylake.ai/openapi?x=1",
+                "must not contain `?` or `#`",
+            ),
+            (
+                "https://app.memorylake.ai/openapi#top",
+                "must not contain `?` or `#`",
+            ),
+        ] {
+            let err = normalize_base_url(raw).expect_err(raw).to_string();
+            assert!(err.contains(reason), "{raw:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn resolve_names_where_an_invalid_base_url_came_from() {
+        let _guard = env_lock().lock().unwrap();
+        let paths = temp_paths();
+
+        // SAFETY: guarded by env_lock; restored before unlock.
+        unsafe {
+            std::env::set_var(ENV_BASE_URL, "env.example");
+        }
+        let err = resolve_profile_base_url(&paths, "default", None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid base URL `env.example` from MEMORYLAKE_BASE_URL"),
+            "{err}"
+        );
+
+        // A valid override wins without the broken variable being consulted.
+        let (url, source) =
+            resolve_profile_base_url(&paths, "default", Some("https://cli.example/")).unwrap();
+        assert_eq!(url, "https://cli.example");
+        assert_eq!(source, BaseUrlSource::Cli);
+
+        let err = resolve_profile_base_url(&paths, "default", Some("cli.example")).unwrap_err();
+        assert!(err.to_string().contains("from --base-url"), "{err}");
+
+        // SAFETY: guarded by env_lock.
+        unsafe {
+            std::env::remove_var(ENV_BASE_URL);
+        }
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    #[test]
+    fn login_stores_the_base_url_normalized_and_refuses_an_invalid_one() {
+        let _guard = env_lock().lock().unwrap();
+        let paths = temp_paths();
+
+        login_api_key(
+            &paths,
+            "default",
+            "sk_testkey1234",
+            Some("https://x.example/api/ "),
+        )
+        .unwrap();
+        let config = load_file_config(&paths).unwrap();
+        assert_eq!(
+            config.profiles["default"].base_url.as_deref(),
+            Some("https://x.example/api")
+        );
+
+        assert!(matches!(
+            login_api_key(&paths, "other", "sk_testkey1234", Some("x.example")),
+            Err(Error::InvalidBaseUrl { origin: None, .. })
+        ));
+        assert!(
+            !load_file_config(&paths)
+                .unwrap()
+                .profiles
+                .contains_key("other")
+        );
+
         let _ = fs::remove_dir_all(&paths.root);
     }
 }

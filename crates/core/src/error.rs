@@ -63,6 +63,22 @@ pub enum Error {
         method: String,
     },
 
+    /// A base URL that requests cannot be built from.
+    ///
+    /// Checked when the URL is resolved: left alone, a malformed value only
+    /// fails once a request is built, as a parse error that names neither the
+    /// value nor where it came from.
+    #[error("invalid base URL `{url}`{}: {reason}", format_origin(*.origin))]
+    InvalidBaseUrl {
+        /// The value as given, without surrounding whitespace.
+        url: String,
+        /// Where the value came from (`--base-url`, …), when it was resolved
+        /// rather than passed in directly.
+        origin: Option<&'static str>,
+        /// What is wrong with it.
+        reason: String,
+    },
+
     /// A fact listing named no owner; the API rejects it.
     #[error("listing facts needs at least one actor, project, or agent id")]
     FactListWithoutOwner,
@@ -223,6 +239,10 @@ pub enum Error {
         /// (`NOT_FOUND`, …) without parsing the display string.
         code: Option<String>,
     },
+}
+
+fn format_origin(origin: Option<&str>) -> String {
+    origin.map(|o| format!(" from {o}")).unwrap_or_default()
 }
 
 fn format_http_error(err: &reqwest::Error) -> String {

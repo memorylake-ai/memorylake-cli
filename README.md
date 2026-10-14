@@ -915,6 +915,11 @@ for a single command, `auth switch` changes the default.
 default workspace: with none remembered and none passed, a command that needs one
 fails and says how to supply it.
 
+A custom base URL, from any of those sources, must start with `http://` or
+`https://` and carry no `?` or `#`; a trailing `/` is dropped. MemoryLake's own
+deployments serve the API under `/openapi/memorylake`, so the URL normally ends
+there.
+
 ## Things to know
 
 - **Deletes are immediate and irreversible.** No confirmation prompt and no

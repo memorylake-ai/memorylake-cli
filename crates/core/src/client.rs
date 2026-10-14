@@ -13,6 +13,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::config::DEFAULT_BASE_URL;
 use crate::error::{Error, Result};
 
 /// Whether `err` is a connection that broke while opening, other than a
@@ -1004,9 +1005,22 @@ fn validate_envelope_body(
     let envelope: ApiEnvelope = match serde_json::from_str(&body) {
         Ok(envelope) => envelope,
         Err(err) => {
+            // No envelope at all usually means the request never reached the
+            // MemoryLake API: the base URL points at a web page or a gateway
+            // route that does not exist, typically because it is missing its
+            // path. A 5xx is left alone — that is the right host failing.
+            let hint = if status.is_server_error() {
+                String::new()
+            } else {
+                format!(
+                    "hint: this does not look like the MemoryLake API; check the base URL \
+                     (`memorylake auth status` shows it). It normally ends in \
+                     `/openapi/memorylake`, e.g. {DEFAULT_BASE_URL}\n"
+                )
+            };
             return Err(Error::Api {
                 message: format!(
-                    "unexpected response from {url} (expected MemoryLake API envelope with `success`; JSON error: {err})\n{}",
+                    "unexpected response from {url} (expected MemoryLake API envelope with `success`; JSON error: {err})\n{hint}{}",
                     format_http_response(status, &body)
                 ),
                 code: None,
@@ -1374,6 +1388,37 @@ mod tests {
             assert!(request.head.starts_with("PUT /y "), "{}", request.head);
             assert_eq!(request.body, br#"{"a":1}"#);
         }
+    }
+
+    #[test]
+    fn a_non_api_response_points_at_the_base_url() {
+        let body = "<!doctype html><title>Example Domain</title>";
+        let (base, _server) = one_shot_server(format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .get_data::<Value>("/api/v3/workspaces", &[])
+            .expect_err("an HTML page is not an envelope")
+            .to_string();
+        assert!(err.contains("check the base URL"), "{err}");
+        assert!(err.contains("/openapi/memorylake"), "{err}");
+    }
+
+    #[test]
+    fn a_server_error_without_an_envelope_does_not_blame_the_base_url() {
+        let body = "<html>502 Bad Gateway</html>";
+        let (base, _server) = one_shot_server(format!(
+            "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let client = Client::new(base, "sk_test_key_abcdefghij").unwrap();
+        let err = client
+            .get_data::<Value>("/api/v3/workspaces", &[])
+            .expect_err("an HTML page is not an envelope")
+            .to_string();
+        assert!(!err.contains("check the base URL"), "{err}");
     }
 
     #[test]
