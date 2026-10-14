@@ -1,7 +1,7 @@
 //! Interactive prompts for `auth login`.
 
-use anyhow::{Result, bail};
-use memorylake_core::{CN_BASE_URL, DEFAULT_BASE_URL};
+use anyhow::Result;
+use memorylake_core::{CN_BASE_URL, DEFAULT_BASE_URL, normalize_base_url};
 
 use crate::interactive::{prompt_line, prompt_secret, select_index};
 
@@ -80,16 +80,7 @@ pub fn prompt_base_url() -> Result<String> {
         1 => Ok(CN_BASE_URL.to_string()),
         _ => {
             let url = prompt_line("Base URL")?;
-            if url.is_empty() {
-                bail!("base URL must not be empty");
-            }
-            // Catch a bare host early: the resolved URL is joined with
-            // `/api/v3/...` paths, and a scheme-less value fails later with a
-            // parse error that does not mention what was typed.
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                bail!("base URL must start with http:// or https://, found `{url}`");
-            }
-            Ok(url)
+            Ok(normalize_base_url(&url)?)
         }
     }
 }
