@@ -30,6 +30,7 @@ use commands::opendata::{OpendataCommand, run as run_opendata};
 use commands::permission::{PermissionCommand, run as run_permission};
 use commands::project::{ProjectCommand, run as run_project};
 use commands::role::{RoleCommand, run as run_role};
+use commands::router::{RouterCommand, run as run_router};
 use commands::search::{SearchArgs, run as run_search};
 use commands::skill::{SkillCommand, run as run_skill};
 use commands::team::{TeamCommand, run as run_team};
@@ -148,6 +149,12 @@ enum Commands {
     },
     /// Search memories in a workspace.
     Search(SearchArgs),
+    /// Call OpenAI- and Anthropic-compatible models through MemoryRouter,
+    /// with a Boundary's memory attached.
+    Router {
+        #[command(subcommand)]
+        command: RouterCommand,
+    },
     /// List the opendata a project can draw on.
     Opendata {
         #[command(subcommand)]
@@ -243,6 +250,7 @@ fn main() -> Result<()> {
         }
         Commands::Datasource { command } => run_datasource(command, cli.profile, cli.base_url)?,
         Commands::Search(args) => run_search(args, cli.profile, cli.base_url)?,
+        Commands::Router { command } => run_router(command, cli.profile, cli.base_url)?,
         Commands::Opendata { command } => run_opendata(command, cli.profile, cli.base_url)?,
         Commands::Team { command } => run_team(command, cli.profile, cli.base_url)?,
         Commands::ApiKey { command } => run_api_key(command, cli.profile, cli.base_url)?,

@@ -501,6 +501,96 @@ impl Client {
         )))
     }
 
+    /// Perform a MemoryRouter request whose success body is the model
+    /// provider's own JSON, and return it with the response's `X-Trace-ID`.
+    ///
+    /// MemoryRouter speaks the OpenAI and Anthropic protocols rather than
+    /// the MemoryLake envelope, on success and on failure alike, so errors
+    /// are decoded by [`router_error`] instead of the envelope decoder.
+    pub fn router_json(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: &[(&str, String)],
+        headers: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> Result<(Value, Option<String>)> {
+        let url = self.url(path)?;
+        let mut builder = apply_headers(self.http.request(method, &url), headers)
+            .headers(self.auth_headers()?)
+            .query(query);
+        if let Some(body) = body {
+            // A body means a model call, which waits for the whole reply.
+            builder = builder.json(body).timeout(ROUTER_CALL_TIMEOUT);
+        }
+        let response = self.execute(builder.build()?)?;
+        let status = response.status();
+        let trace_id = trace_id(&response);
+        if !status.is_success() {
+            return Err(router_error(response));
+        }
+        let body = response.text().map_err(Error::from)?;
+        tracing::trace!(status = status.as_u16(), url = %url, body = %redact_secret_fields(&body), "HTTP response");
+        let value = serde_json::from_str(&body).map_err(|err| Error::Api {
+            message: format!(
+                "unexpected response from {url} (expected JSON; error: {err})\n{}",
+                format_http_response(status, &body)
+            ),
+            code: None,
+        })?;
+        Ok((value, trace_id))
+    }
+
+    /// [`Self::router_json`] for a POST asked to stream: the provider's
+    /// server-sent events as they arrive, with the response's `X-Trace-ID`.
+    ///
+    /// A 2xx that is not an event stream is an error too, since the request
+    /// asked for one.
+    pub fn router_event_stream(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        headers: &[(&str, &str)],
+        body: &Value,
+    ) -> Result<(
+        EventStream<std::io::BufReader<reqwest::blocking::Response>>,
+        Option<String>,
+    )> {
+        let request = self
+            .json_post(path, body, headers)?
+            .query(query)
+            .header(ACCEPT, "text/event-stream")
+            .timeout(EVENT_STREAM_TIMEOUT)
+            .build()?;
+        let response = self.execute(request)?;
+        let status = response.status();
+        let trace_id = trace_id(&response);
+        if !status.is_success() {
+            return Err(router_error(response));
+        }
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !content_type.starts_with("text/event-stream") {
+            let url = response.url().clone();
+            let body = response.text().map_err(Error::from)?;
+            return Err(Error::Api {
+                message: format!(
+                    "expected an event stream from {url}, got `{content_type}`\n{}",
+                    format_http_response(status, &body)
+                ),
+                code: None,
+            });
+        }
+        Ok((
+            EventStream::new(std::io::BufReader::new(response)),
+            trace_id,
+        ))
+    }
+
     /// Perform a DELETE whose successful response carries no usable payload.
     ///
     /// Prefer this over `delete_data::<()>` for endpoints documented to answer
@@ -1116,6 +1206,83 @@ fn decode_bare_json(response: reqwest::blocking::Response) -> Result<Value> {
     Ok(value)
 }
 
+/// The `X-Trace-ID` a MemoryRouter response carries, if any.
+fn trace_id(response: &reqwest::blocking::Response) -> Option<String> {
+    response
+        .headers()
+        .get("x-trace-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+/// Turn a failed MemoryRouter response into an error.
+///
+/// The router answers in several shapes: the OpenAI error object
+/// (`{"error":{"message","type"}}`, also what 401 and 403 use), the
+/// Anthropic one (`{"type":"error","error":{...}}`), a MemoryLake-style
+/// `{"success":false,"message"}` for 402, `{"code":"AUTH_THROTTLED",...}`
+/// for 429, and plain text for a 502. The message is pulled out of whichever
+/// it is; the body is always shown, and the trace id support asks for.
+fn router_error(response: reqwest::blocking::Response) -> Error {
+    let status = response.status();
+    let trace = trace_id(&response);
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response.text().unwrap_or_default();
+    router_error_from(status, &body, trace.as_deref(), retry_after.as_deref())
+}
+
+/// [`router_error`] on a response that has already been read.
+fn router_error_from(
+    status: StatusCode,
+    body: &str,
+    trace: Option<&str>,
+    retry_after: Option<&str>,
+) -> Error {
+    let value: Option<Value> = serde_json::from_str(body).ok();
+    let text = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+    };
+    let error = value.as_ref().and_then(|value| value.get("error"));
+    let message = text(error.and_then(|error| error.get("message")))
+        .or_else(|| text(error))
+        .or_else(|| text(value.as_ref().and_then(|value| value.get("message"))))
+        .unwrap_or_else(|| match status {
+            StatusCode::UNAUTHORIZED => {
+                "the MemoryLake API key is missing, invalid, disabled or expired".into()
+            }
+            StatusCode::PAYMENT_REQUIRED => "balance too low; top up and retry".into(),
+            StatusCode::BAD_GATEWAY => {
+                "MemoryRouter could not reach its upstream service; retry later".into()
+            }
+            _ => "request failed".into(),
+        });
+    let code = text(value.as_ref().and_then(|value| value.get("code")))
+        .or_else(|| text(error.and_then(|error| error.get("type"))));
+    let code_suffix = code
+        .as_deref()
+        .map(|code| format!(" [{code}]"))
+        .unwrap_or_default();
+    let mut message = format!(
+        "{message}{code_suffix}\n{}",
+        format_http_response(status, body)
+    );
+    if let Some(retry_after) = retry_after {
+        message.push_str(&format!("\nRetry-After: {retry_after}"));
+    }
+    if let Some(trace) = trace {
+        message.push_str(&format!("\nX-Trace-ID: {trace}"));
+    }
+    Error::Api { message, code }
+}
+
 fn format_http_response(status: StatusCode, body: &str) -> String {
     const MAX_BODY: usize = 2_048;
 
@@ -1160,6 +1327,11 @@ fn expect_stream<R>(answer: StreamOrData<R>, url: &str) -> Result<EventStream<R>
 /// A stream ends on its own when the task settles; this only bounds one that
 /// never does.
 const EVENT_STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// How long a non-streamed MemoryRouter model call may take, replacing the
+/// client's default 30-second timeout: the reply comes back only once it is
+/// complete, and a reasoning model or a long answer routinely takes longer.
+const ROUTER_CALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Query parameters that turn a URL into a replayable capability.
 ///
@@ -1332,6 +1504,80 @@ fn redact_secret_values(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn router_errors_take_the_message_from_each_documented_shape() {
+        let cases = [
+            (
+                StatusCode::UNAUTHORIZED,
+                r#"{"error":{"message":"Invalid API key","type":"invalid_request_error"}}"#,
+                "Invalid API key [invalid_request_error]",
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: required"}}"#,
+                "max_tokens: required [invalid_request_error]",
+            ),
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                r#"{"success":false,"message":"insufficient quota"}"#,
+                "insufficient quota\n",
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                r#"{"success":false,"code":"AUTH_THROTTLED","error":{"type":"rate_limit","message":"slow down"}}"#,
+                "slow down [AUTH_THROTTLED]",
+            ),
+            (
+                StatusCode::BAD_GATEWAY,
+                "upstream unavailable",
+                "MemoryRouter could not reach its upstream service",
+            ),
+        ];
+        for (status, body, expected) in cases {
+            let message = router_error_from(status, body, Some("tr-1"), None).to_string();
+            assert!(message.contains(expected), "{status}: {message}");
+            assert!(message.contains(body), "the body must be shown: {message}");
+            assert!(message.contains("X-Trace-ID: tr-1"), "{message}");
+        }
+    }
+
+    #[test]
+    fn router_errors_report_retry_after() {
+        let message =
+            router_error_from(StatusCode::TOO_MANY_REQUESTS, "{}", None, Some("30")).to_string();
+        assert!(message.contains("Retry-After: 30"), "{message}");
+    }
+
+    #[test]
+    fn router_json_returns_the_bare_body_and_the_trace_id() {
+        let body = r#"{"object":"chat.completion","choices":[]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Trace-ID: tr-9\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let (base, server) = one_shot_server(response);
+        let client = Client::new(&base, "sk_test_key_1234").unwrap();
+        let (value, trace) = client
+            .router_json(
+                reqwest::Method::POST,
+                "/router/openai/v1/chat/completions",
+                &[("boundary_id", "bnd-1".to_string())],
+                &[],
+                Some(&serde_json::json!({"model": "m"})),
+            )
+            .expect("a bare JSON body is a success");
+        assert_eq!(value["object"], "chat.completion");
+        assert_eq!(trace.as_deref(), Some("tr-9"));
+        let request = server.join().expect("server thread");
+        assert!(
+            request
+                .head
+                .starts_with("POST /router/openai/v1/chat/completions?boundary_id=bnd-1 "),
+            "{}",
+            request.head
+        );
+    }
     use super::*;
 
     use crate::test_support::{json_ok, one_shot_server};

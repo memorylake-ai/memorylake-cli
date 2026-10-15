@@ -14,6 +14,7 @@ pub(crate) mod lenient;
 pub mod library;
 pub mod opendata;
 pub mod projects;
+pub mod router;
 pub mod search;
 pub mod skills;
 pub mod workspaces;

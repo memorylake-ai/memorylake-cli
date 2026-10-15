@@ -693,6 +693,32 @@ omitting `--actors` searches only your own actor's memories. `--top-k` (1-1000,
 default 10) caps the total across all types, not each type. There is no
 pagination.
 
+### MemoryRouter
+
+```bash
+memorylake router models [--protocol openai|anthropic]   # what you can call, with prices
+
+memorylake router chat "Where do I live?" --model gpt-4o-mini --boundary bnd-xxxxxx
+memorylake router responses "Where do I live?" --model gpt-4o-mini --boundary bnd-xxxxxx --stream
+memorylake router messages "Where do I live?" --model claude-haiku-4-5 --boundary bnd-xxxxxx --text
+memorylake router embed "text one" "text two" --model MODEL [--dimensions N]
+```
+
+MemoryRouter calls OpenAI- and Anthropic-compatible models with a Boundary's
+memory added to the prompt. `chat`, `responses` and `messages` speak OpenAI Chat
+Completions, OpenAI Responses and Anthropic Messages; `--boundary` names the
+Boundary, and without it the model is called with memory off. Use the model
+names `router models` lists: `openai` models with `chat` / `responses`,
+`anthropic` models with `messages`.
+
+`--system`, `--max-tokens` and `--temperature` set the common fields; anything
+else goes in `--body FILE` (`-` for standard input) as a request in the
+provider's own format, with the flags applied on top and the prompt appended to
+its conversation. Output is the provider's JSON; `--text` prints only the reply
+text, `--stream` prints it as it arrives, and `--stream --raw` prints each
+event. The response's `X-Trace-ID` goes to standard error — quote it to support.
+Calls are billed to your MemoryLake balance.
+
 ### Opendata
 
 ```bash

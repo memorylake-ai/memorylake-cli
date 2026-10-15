@@ -26,6 +26,7 @@ mod scope_input;
 
 pub mod project;
 pub mod role;
+pub mod router;
 pub mod search;
 pub mod skill;
 pub mod team;
