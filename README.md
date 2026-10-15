@@ -618,6 +618,39 @@ follow the latest); anything else is refused with `SKILL_NOT_USABLE`. Publishing
 a new version makes agents that follow the latest wait for its review, while
 agents pinned to an older version are unaffected.
 
+### Skills for coding agents
+
+```bash
+memorylake agent-skills list                    # bundled skills, and which agents were found
+memorylake agent-skills install [--target claude|agents|all]... [--project] [--force]
+memorylake agent-skills status [--target ...] [--project]
+memorylake agent-skills uninstall [--target ...] [--project] [--force]
+```
+
+The CLI carries skills that teach coding agents how to drive it, and `install`
+writes them where those agents look for skills:
+
+| Target | Directory | Read by |
+| --- | --- | --- |
+| `claude` | `~/.claude/skills/` | Claude Code, opencode |
+| `agents` | `~/.agents/skills/` | Codex, Gemini CLI, opencode, and other agents that follow the Agent Skills standard |
+
+Without `--target`, `install` picks the targets whose agent is set up on this
+machine (`~/.claude` for the first; `~/.agents`, `~/.codex`, `~/.gemini` or
+`~/.config/opencode` for the second) and installs nothing when none is.
+`--project` uses the current directory's `.claude/skills/` and
+`.agents/skills/` instead, for skills committed with a repository.
+
+The skills come from the binary itself, so they always describe the commands
+of the version installed; re-run `install` after upgrading. Each installed
+directory records what was written to it. A directory `install` did not write
+is never touched, and one edited since it was written is kept until `--force`
+says otherwise — for `uninstall` as well. Skills a newer release no longer
+carries are removed on `install`.
+
+These are not the skills `memorylake skill` publishes: those live in
+MemoryLake, for MemoryLake agents to use.
+
 ### Boundaries
 
 ```bash
@@ -910,6 +943,7 @@ for a single command, `auth switch` changes the default.
 | Base URL | `--base-url` → profile → `MEMORYLAKE_BASE_URL` → `app.memorylake.ai` |
 | Workspace | `--workspace` → `ws use` → `MEMORYLAKE_WORKSPACE` |
 | Config location | `MEMORYLAKE_CONFIG_DIR` → `~/.memorylake` |
+| Home for `agent-skills` | `MEMORYLAKE_AGENT_SKILLS_HOME` → your home directory |
 
 `auth status` and `ws current` both report which source won. There is no built-in
 default workspace: with none remembered and none passed, a command that needs one

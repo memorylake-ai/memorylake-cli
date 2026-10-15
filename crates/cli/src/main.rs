@@ -12,6 +12,7 @@ use commands::access::{AccessCommand, run as run_access};
 use commands::access_group::{AccessGroupCommand, run as run_access_group};
 use commands::actor::{ActorCommand, run as run_actor};
 use commands::agent::{AgentCommand, run as run_agent};
+use commands::agent_skills::{AgentSkillsCommand, run as run_agent_skills};
 use commands::api_key::{ApiKeyCommand, run as run_api_key};
 use commands::audit_log::{AuditLogCommand, run as run_audit_log};
 use commands::auth::{AuthCommand, run as run_auth};
@@ -104,6 +105,12 @@ enum Commands {
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
+    },
+    /// Install the skills bundled with this CLI into coding agents (Claude
+    /// Code, Codex, Gemini CLI, opencode), so they know how to drive it.
+    AgentSkills {
+        #[command(subcommand)]
+        command: AgentSkillsCommand,
     },
     /// Publish and manage skills agents can use.
     Skill {
@@ -226,6 +233,7 @@ fn main() -> Result<()> {
         Commands::Project { command } => run_project(command, cli.profile, cli.base_url)?,
         Commands::Library { command } => run_library(command, cli.profile, cli.base_url)?,
         Commands::Agent { command } => run_agent(command, cli.profile, cli.base_url)?,
+        Commands::AgentSkills { command } => run_agent_skills(command)?,
         Commands::Skill { command } => run_skill(command, cli.profile, cli.base_url)?,
         Commands::Boundary { command } => run_boundary(command, cli.profile, cli.base_url)?,
         Commands::Conversation { command } => run_conversation(command, cli.profile, cli.base_url)?,
