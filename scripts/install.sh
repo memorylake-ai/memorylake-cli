@@ -19,6 +19,7 @@
 #   --install-dir MEMORYLAKE_INSTALL_DIR  where to put the binary (default: $HOME/.local/bin)
 #                MEMORYLAKE_INSTALL_NAME  name to install it as (default: memorylake)
 #                MEMORYLAKE_NO_SETUP      skip the guided setup entirely
+#   --no-skills  MEMORYLAKE_NO_SKILLS     do not install skills into coding agents
 #
 # A flag wins over its variable. Note that an API key on the command line is
 # recorded by the shell's history; a variable assignment is too. Prefer a
@@ -74,9 +75,14 @@ while [ $# -gt 0 ]; do
             MEMORYLAKE_NO_SETUP=1
             shift
             ;;
+        --no-skills)
+            MEMORYLAKE_NO_SKILLS=1
+            shift
+            ;;
         -h | --help)
             say "usage: install.sh [--api-key KEY] [--workspace ID] [--base-url URL]"
             say "                  [--version TAG] [--install-dir DIR] [--no-setup]"
+            say "                  [--no-skills]"
             say ""
             say "Through a pipe, pass flags after \`sh -s --\`:"
             say "  curl -fsSL … | sh -s -- --api-key sk-… --workspace ws-…"
@@ -317,6 +323,42 @@ setup_workspace() {
     return 0
 }
 
+# Install the skills the CLI carries into the coding agents found here
+# (Claude Code, Codex, Gemini CLI, opencode), so they know how to drive it.
+#
+# Nothing is asked: `agent-skills install` only writes for agents that are
+# set up on this machine, never replaces a skill it did not write or one the
+# user has edited, and `agent-skills uninstall` takes it all back. Re-running
+# the installer after an upgrade refreshes them. A machine with no coding
+# agent hears nothing about it.
+#
+# Never fails the install: the CLI is usable without its skills. A release
+# from before the command existed (an older --version) is skipped quietly.
+install_skills() {
+    _bin="$1"
+
+    [ -z "${MEMORYLAKE_NO_SKILLS:-}" ] || return 0
+    "$_bin" agent-skills --help >/dev/null 2>&1 || return 0
+
+    # Standard output is the JSON report; the per-directory lines a person
+    # wants are on standard error.
+    if ! _report="$("$_bin" agent-skills install 2>"$tmp/skills.err")"; then
+        say ""
+        say "warning: could not install skills for coding agents:"
+        sed 's/^/  /' "$tmp/skills.err"
+        return 0
+    fi
+    case "$_report" in
+        *'"action"'*) ;;
+        *) return 0 ;;
+    esac
+
+    say ""
+    say "skills for your coding agents:"
+    sed 's/^/  /' "$tmp/skills.err"
+    say "  ('$INSTALL_NAME agent-skills uninstall' removes them)"
+}
+
 main() {
     need_cmd curl || need_cmd wget || err "need curl or wget to download the release"
     need_cmd tar || err "need tar to unpack the release"
@@ -359,6 +401,7 @@ main() {
     say "installed $INSTALL_DIR/$INSTALL_NAME"
 
     setup "$INSTALL_DIR/$INSTALL_NAME"
+    install_skills "$INSTALL_DIR/$INSTALL_NAME"
 
     # Compare against the resolved binary rather than `command -v` alone: a
     # different memorylake earlier in PATH would otherwise look like success.
