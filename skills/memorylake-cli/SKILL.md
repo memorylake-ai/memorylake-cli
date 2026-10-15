@@ -81,5 +81,6 @@ memorylake ws current       # which workspace commands default to, and why
 | Databases | `dbconn`, `ds`, `proj database` |
 | Memory | `actor`, `fact`, `conv`, `search`, `boundary` |
 | Agents and skills | `agent`, `skill` |
+| Calling models with memory (MemoryRouter) | `router` |
 | Team | `team`, `key`, `member`, `invite`, `usage`, `billing`, `audit-log`, `integration` |
 | Access control | `role`, `perm`, `ag`, `access` |

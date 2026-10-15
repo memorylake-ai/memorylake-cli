@@ -48,6 +48,7 @@ mod library;
 mod meta;
 mod opendata;
 mod project;
+mod router;
 mod search;
 mod skill;
 mod workspace;
