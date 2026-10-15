@@ -152,6 +152,10 @@ pub struct SearchDocument {
     pub rank: Option<u32>,
     /// Server-assigned document id.
     pub document_id: String,
+    /// Project the document belongs to, always one of the requested
+    /// `project_ids`. Pair it with `document_id` to get or download it.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Display name.
     #[serde(default)]
     pub document_name: Option<String>,
@@ -271,6 +275,7 @@ mod tests {
             r#"{
                 "documents": [{
                     "document_id": "doc-1",
+                    "project_id": "proj-1",
                     "document_name": "Q4 report",
                     "file_name": "q4.xlsx",
                     "document_summary": "Quarterly figures",
@@ -293,6 +298,7 @@ mod tests {
 
         assert_eq!(results.documents.len(), 1);
         assert_eq!(results.documents[0].document_id, "doc-1");
+        assert_eq!(results.documents[0].project_id.as_deref(), Some("proj-1"));
         assert_eq!(results.documents[0].sheet_name.as_deref(), Some("Revenue"));
         assert_eq!(results.documents[0].items.len(), 1);
         assert_eq!(
