@@ -22,6 +22,7 @@
         MEMORYLAKE_INSTALL_DIR   where to put the binary (default: %LOCALAPPDATA%\memorylake\bin)
         MEMORYLAKE_INSTALL_NAME  name to install it as, without .exe (default: memorylake)
         MEMORYLAKE_NO_SETUP      skip the guided setup entirely
+        MEMORYLAKE_NO_SKILLS     do not install skills into coding agents
 
     Note that a key assigned on the command line is recorded in PowerShell's
     history. Prefer a short-lived key where that matters.
@@ -202,6 +203,7 @@ function Install-Memorylake {
         Write-Info "installed $destination"
         Show-PathHint
         Invoke-Setup $destination
+        Install-AgentSkills $destination
         Show-NextStep
     } finally {
         Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -321,6 +323,51 @@ function Set-DefaultWorkspace([string]$BinPath) {
         Write-Info "no workspace selected. Run '$InstallName workspace use' to pick one,"
         Write-Info 'or pass --workspace <id> to each command.'
     }
+}
+
+# Install the skills the CLI carries into the coding agents found here
+# (Claude Code, Codex, Gemini CLI, opencode), so they know how to drive it.
+#
+# Nothing is asked: `agent-skills install` only writes for agents that are set
+# up on this machine, never replaces a skill it did not write or one the user
+# has edited, and `agent-skills uninstall` takes it all back. Re-running the
+# installer after an upgrade refreshes them. A machine with no coding agent
+# hears nothing about it.
+#
+# Never fails the install: the CLI is usable without its skills. A release from
+# before the command existed (an older MEMORYLAKE_VERSION) is skipped quietly.
+function Install-AgentSkills([string]$BinPath) {
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MEMORYLAKE_NO_SKILLS'))) {
+        return
+    }
+
+    # Windows PowerShell 5.1 turns a native command's standard error into
+    # error records, which 'Stop' would raise. The CLI reports progress there,
+    # so this function reads it instead.
+    $ErrorActionPreference = 'Continue'
+
+    & $BinPath agent-skills --help *> $null
+    if ($LASTEXITCODE -ne 0) { return }
+
+    # Standard output is the JSON report; the per-directory lines a person
+    # wants arrive as error records on the merged stream.
+    $output = & $BinPath agent-skills install 2>&1
+    $failed = $LASTEXITCODE -ne 0
+    $report = ($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
+    $lines = $output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { $_.ToString() }
+
+    if ($failed) {
+        Write-Info ''
+        Write-Info 'warning: could not install skills for coding agents:'
+        $lines | ForEach-Object { Write-Info "  $_" }
+        return
+    }
+    if ($report -notmatch '"action"') { return }
+
+    Write-Info ''
+    Write-Info 'skills for your coding agents:'
+    $lines | ForEach-Object { Write-Info "  $_" }
+    Write-Info "  ('$InstallName agent-skills uninstall' removes them)"
 }
 
 # Tell the user how to reach the binary, and add it to the user PATH when it is

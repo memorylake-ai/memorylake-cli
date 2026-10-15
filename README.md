@@ -43,6 +43,12 @@ logging in and picking a workspace; `MEMORYLAKE_VERSION`,
 `MEMORYLAKE_INSTALL_DIR`, `MEMORYLAKE_INSTALL_NAME` and `MEMORYLAKE_NO_SETUP`
 override the details — see the comments at the top of either script.
 
+If Claude Code, Codex, Gemini CLI or opencode is set up on the machine, the
+installers also give it the skills that teach it this CLI (see
+[Skills for coding agents](#skills-for-coding-agents)), and refresh them on
+every upgrade. Opt out with `--no-skills` or `MEMORYLAKE_NO_SKILLS=1`;
+`memorylake agent-skills uninstall` removes them later.
+
 ### Installing without prompts
 
 Supply the credentials and nothing is asked — useful for a link handed out by a
