@@ -11,6 +11,7 @@
 //!   actor/{offline,live}.rs
 //!   library/{offline,live}.rs
 //!   agent/{offline,live}.rs
+//!   agent_skills/offline.rs   # local only: installing the bundled skills
 //!   skill/{offline,wire,live}.rs
 //!   boundary/{offline,wire,live}.rs
 //!   auth/{offline,live}.rs
@@ -32,6 +33,7 @@
 mod actor;
 mod admin;
 mod agent;
+mod agent_skills;
 mod auth;
 mod boundary;
 mod common;

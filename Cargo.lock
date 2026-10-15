@@ -720,11 +720,13 @@ dependencies = [
  "clap",
  "ctrlc",
  "dialoguer",
+ "dirs",
  "dotenvy",
  "libc",
  "memorylake-core",
  "serde",
  "serde_json",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

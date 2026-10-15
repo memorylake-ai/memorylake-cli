@@ -4,6 +4,7 @@ pub mod access;
 pub mod access_group;
 pub mod actor;
 pub mod agent;
+pub mod agent_skills;
 pub mod api_key;
 pub mod audit_log;
 pub mod auth;
