@@ -53,6 +53,12 @@ memorylake ws current       # which workspace commands default to, and why
   --issue-api-key`) print it exactly once. Hand it to the user; do not write
   it to files or logs unless they ask.
 
+## More specific skills
+
+| Task | Skill |
+| --- | --- |
+| Remember, find, correct, trace or curate memory: facts, actors, conversations, search, conflicts | `memorylake-cli-memory` |
+
 ## Command map
 
 | Area | Commands |

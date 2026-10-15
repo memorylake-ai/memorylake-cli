@@ -710,6 +710,149 @@ mod tests {
     }
 
     #[test]
+    fn every_command_in_the_skills_parses() {
+        // A skill that teaches a renamed command or flag sends agents into
+        // errors they then try to work around. Every `memorylake` line in a
+        // ```bash block goes through the real argument parser, so a CLI change
+        // fails here until the skills follow it.
+        use clap::Parser;
+        use clap::error::ErrorKind;
+
+        let commands = bash_commands();
+        assert!(
+            commands.len() > 20,
+            "expected the skills to carry examples, found {}",
+            commands.len()
+        );
+        let failures: Vec<String> = commands
+            .iter()
+            .filter_map(|(location, line)| {
+                let args = shell_words(line);
+                match crate::Cli::try_parse_from(&args) {
+                    Ok(_) => None,
+                    Err(err) if err.kind() == ErrorKind::DisplayHelp => None,
+                    Err(err) => Some(format!("{location}: {line}\n{err}")),
+                }
+            })
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn shell_words_follows_quotes_and_stops_at_pipes_and_comments() {
+        assert_eq!(
+            shell_words(r#"memorylake fact add --actor "$ACTOR" "a b" 'c "d"' | jq .id"#),
+            [
+                "memorylake",
+                "fact",
+                "add",
+                "--actor",
+                "x",
+                "a b",
+                "c \"d\""
+            ]
+        );
+        assert_eq!(
+            shell_words("memorylake actor me   # who am I"),
+            ["memorylake", "actor", "me"]
+        );
+        assert_eq!(
+            shell_words("memorylake fact list --query a#b"),
+            ["memorylake", "fact", "list", "--query", "a#b"]
+        );
+    }
+
+    /// Every line starting with `memorylake` inside a ```bash block of a
+    /// bundled Markdown file, with `\` continuations joined, as
+    /// (`file:line`, command).
+    fn bash_commands() -> Vec<(String, String)> {
+        let mut commands = Vec::new();
+        for (path, bytes) in BUNDLED_FILES {
+            if !path.ends_with(".md") {
+                continue;
+            }
+            let text = String::from_utf8_lossy(bytes);
+            let mut in_fence = false;
+            let mut is_bash = false;
+            let mut pending: Option<(usize, String)> = None;
+            for (index, line) in text.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("```") {
+                    is_bash = !in_fence && trimmed == "```bash";
+                    in_fence = !in_fence;
+                    continue;
+                }
+                if !(in_fence && is_bash) {
+                    continue;
+                }
+                let (start, mut command) = match pending.take() {
+                    Some((start, joined)) => (start, joined + " " + trimmed),
+                    None if trimmed.starts_with("memorylake ") => (index + 1, trimmed.to_string()),
+                    None => continue,
+                };
+                if let Some(stripped) = command.strip_suffix('\\') {
+                    command = stripped.trim_end().to_string();
+                    pending = Some((start, command));
+                } else {
+                    commands.push((format!("skills/{path}:{start}"), command));
+                }
+            }
+        }
+        commands
+    }
+
+    /// Split a shell command line into words: single and double quotes
+    /// group, an unquoted `#` starting a word begins a comment, a lone `|`
+    /// ends the command, and a word starting with `$` (a shell variable)
+    /// stands in as `x`.
+    fn shell_words(line: &str) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut word = String::new();
+        let mut in_word = false;
+        let mut quote: Option<char> = None;
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match quote {
+                Some(q) if c == q => quote = None,
+                Some(_) => word.push(c),
+                None => match c {
+                    '\'' | '"' => {
+                        quote = Some(c);
+                        in_word = true;
+                    }
+                    '#' if !in_word => break,
+                    '|' if !in_word && chars.peek().is_none_or(|next| next.is_whitespace()) => {
+                        break;
+                    }
+                    c if c.is_whitespace() => {
+                        if in_word {
+                            words.push(std::mem::take(&mut word));
+                            in_word = false;
+                        }
+                    }
+                    c => {
+                        word.push(c);
+                        in_word = true;
+                    }
+                },
+            }
+        }
+        if in_word {
+            words.push(word);
+        }
+        words
+            .into_iter()
+            .map(|word| {
+                if word.starts_with('$') {
+                    "x".to_string()
+                } else {
+                    word
+                }
+            })
+            .collect()
+    }
+
+    #[test]
     fn frontmatter_value_reads_only_the_frontmatter() {
         let text = "---\nname: a\ndescription: says: this\n---\ndescription: body\n";
         assert_eq!(frontmatter_value(text, "name").as_deref(), Some("a"));
