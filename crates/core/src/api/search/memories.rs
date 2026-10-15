@@ -19,14 +19,16 @@ fn search_path(workspace_id: &str) -> String {
 /// Request body for a memory search.
 ///
 /// Every filter is skipped when `None`, so the server applies its own default
-/// rather than one guessed here: omitted `project_ids` and `memory_types` mean
-/// no restriction, but omitted `actor_ids` means the caller's own actor, not
+/// rather than one guessed here: omitted `memory_types` means no
+/// restriction, but omitted `project_ids` searches no project's documents and
+/// omitted `actor_ids` means the caller's own actor, not
 /// every actor. `top_k` is likewise left to the server (default 10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SearchMemoriesRequest {
     /// Natural language query.
     pub query: String,
-    /// Limit to these projects. Omitted means every project in the workspace.
+    /// Projects whose documents are searched. Omitted means no project is
+    /// searched, so `documents` comes back empty; facts are unaffected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_ids: Option<Vec<String>>,
     /// Search these actors' memories. Omitted means the caller's own actor.

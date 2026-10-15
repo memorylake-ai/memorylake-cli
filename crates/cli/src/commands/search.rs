@@ -24,7 +24,8 @@ pub struct SearchArgs {
     /// Defaults to the workspace remembered by `workspace use`.
     #[arg(long)]
     workspace: Option<String>,
-    /// Limit to these projects (comma-separated). Defaults to every project.
+    /// Projects whose documents are searched (comma-separated). Without it no
+    /// project is searched and no documents are returned.
     #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
     projects: Option<IdList>,
     /// Search these actors' memories (comma-separated). Defaults to your own

@@ -14,7 +14,7 @@ restores the overall order.
 
 | Flag | Default | Note |
 | --- | --- | --- |
-| `--projects` | every project | comma-separated ids |
+| `--projects` | **none: no documents come back** | name the projects to search; each document carries its `project_id` |
 | `--actors` | **your own actor only** | name other people to include their memories |
 | `--types` | all | `document`, `fact`, `database` |
 | `--top-k` | 10 | 1-1000, shared across all types, not per type |
