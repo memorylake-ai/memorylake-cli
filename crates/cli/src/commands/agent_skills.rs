@@ -739,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_words_follows_quotes_and_stops_at_pipes_and_comments() {
+    fn shell_words_follows_quotes_and_drops_shell_syntax() {
         assert_eq!(
             shell_words(r#"memorylake fact add --actor "$ACTOR" "a b" 'c "d"' | jq .id"#),
             [
@@ -759,6 +759,14 @@ mod tests {
         assert_eq!(
             shell_words("memorylake fact list --query a#b"),
             ["memorylake", "fact", "list", "--query", "a#b"]
+        );
+        assert_eq!(
+            shell_words("memorylake member scope get usr-1 > scope.json 2> etag.txt"),
+            ["memorylake", "member", "scope", "get", "usr-1"]
+        );
+        assert_eq!(
+            shell_words("memorylake ag get grp-1 2>etag.txt 2>&1"),
+            ["memorylake", "ag", "get", "grp-1"]
         );
     }
 
@@ -801,10 +809,10 @@ mod tests {
         commands
     }
 
-    /// Split a shell command line into words: single and double quotes
-    /// group, an unquoted `#` starting a word begins a comment, a lone `|`
-    /// ends the command, and a word starting with `$` (a shell variable)
-    /// stands in as `x`.
+    /// Split a shell command line into the command's arguments: single and
+    /// double quotes group, an unquoted `#` starting a word begins a comment,
+    /// a lone `|` ends the command, redirections are dropped, and a word
+    /// starting with `$` (a shell variable or substitution) stands in as `x`.
     fn shell_words(line: &str) -> Vec<String> {
         let mut words = Vec::new();
         let mut word = String::new();
@@ -840,16 +848,27 @@ mod tests {
         if in_word {
             words.push(word);
         }
-        words
-            .into_iter()
-            .map(|word| {
-                if word.starts_with('$') {
-                    "x".to_string()
-                } else {
-                    word
+
+        let mut args = Vec::new();
+        let mut words = words.into_iter();
+        while let Some(word) = words.next() {
+            // A redirection (`> out.json`, `2> etag.txt`, `2>&1`) is the
+            // shell's, not the command's: drop it, with its target when that
+            // is the next word.
+            let operator = word.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+            if operator.starts_with(['>', '<']) {
+                if operator.trim_start_matches(['>', '<', '&']).is_empty() {
+                    words.next();
                 }
-            })
-            .collect()
+                continue;
+            }
+            args.push(if word.starts_with('$') {
+                "x".to_string()
+            } else {
+                word
+            });
+        }
+        args
     }
 
     #[test]
