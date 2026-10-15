@@ -21,7 +21,7 @@ memories are attributed to; never pass one where the other is asked for.
 | **Role** | which actions | grants | `role`, `perm rule` |
 | **Access scope** | which instances, per resource type | **only narrows**; never more than the role | `member scope`, `role scope` |
 | **Access group** | extra actions and extra instances | **only adds** | `ag` |
-| **Permission level** | `read` / `write` / `manage` on one instance, per member | sets the level there | `access set-level` |
+| **Permission level** | `read` / `write` / `manage` on one instance, per member | **only adds**; never lowers what the role gives | `access set-level` |
 
 A member can do something when a role or group grants the action and the
 instance is within reach. Details:
@@ -46,8 +46,10 @@ Whole workflows: [references/recipes.md](references/recipes.md).
 
 ## Diagnose before you change
 
-Reading is safe and needs no confirmation. Answer "why can't X do Y" from the
-output, naming the layer that blocks:
+Reading is safe and needs no confirmation. Start with `memorylake perm me`:
+reading other members' access needs rights of its own, and a refusal here
+means an owner or admin has to look, not that there is a way around it.
+Answer "why can't X do Y" from the output, naming the layer that blocks:
 
 ```bash
 memorylake member list --name alice
@@ -63,21 +65,34 @@ Then propose the smallest change that fixes it.
 
 ## Rules for changes
 
-1. **Confirm every write.** Say what will change, for whom, and what it
-   unlocks, then wait for an explicit yes. Access changes take effect at once.
-2. **Least privilege.** Grant the narrowest action on the fewest instances
+1. **Confirm every write.** Say what will change, for whom, in which team
+   (`team get`), and what it unlocks, then wait for an explicit yes. Access
+   changes take effect at once.
+2. **Show the blast radius.** A change to a role (`perm rule`, `role scope`)
+   or a group (`ag permissions`, `ag scope`) reaches everyone holding it.
+   List them first (`member list --role <key>`, `ag member list <id>`) and
+   say how many people are affected.
+3. **Watch for changes to yourself.** If the target is the member this API
+   key acts as, or a role or group it holds (`perm me`), the change also
+   applies to the agent's own key and can cut it off mid-task. Lowering your
+   own level is allowed, so nothing stops this; say so before asking.
+4. **Least privilege.** Grant the narrowest action on the fewest instances
    that does the job. Prefer read over write, one project over all projects.
-3. **Prefer groups for several people.** A grant to an access group is one
+5. **Prefer groups for several people.** A grant to an access group is one
    change to review and one to undo; per-member grants drift.
-4. **Every write needs `--reason`.** It goes into the audit log. Write what
+6. **Every write needs `--reason`.** It goes into the audit log. Write what
    was asked and by whom, for example `"Alice needs to review Atlas docs, per
    Bob 2026-10-15"`.
-5. **Read, edit, write back with `--if-match`.** For scopes and group
+7. **Read, edit, write back with `--if-match`.** For scopes and group
    permissions, pass the ETag the read printed, so a concurrent change is not
    overwritten.
-6. **Verify afterwards** with `member explain` or `access show`, and report
+8. **Verify afterwards** with `member explain` or `access show`, and report
    the result rather than assuming it.
-7. **Some changes cannot be made, by design.** Built-in roles never change;
-   only the team owner manages roles; nobody can change their own role; the
-   last member who can manage an instance cannot be lowered. Explain the
-   refusal instead of looking for a way around it.
+9. **Nothing here is a deny.** Groups and levels only add; to take access
+   away, remove what grants it (a group membership, a rule, a level) or
+   narrow the role or scope. Never tell the user access is gone until
+   `member explain` shows it.
+10. **Some changes cannot be made, by design.** Built-in roles never change;
+    only the team owner manages roles; nobody can change their own role; the
+    last member who can manage an instance cannot be lowered. Explain the
+    refusal instead of looking for a way around it.

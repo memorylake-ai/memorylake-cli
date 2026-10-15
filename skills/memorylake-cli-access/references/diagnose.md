@@ -10,7 +10,9 @@ memorylake perm me
 
 Prints your role, every permission you hold, and per resource type whether
 you reach every instance. A command refused with a permission error is
-explained here first.
+explained here first. If `member explain`, `access show` or `perm rule list`
+is refused, you lack the rights to inspect others; tell the user that a team
+owner or admin has to run the diagnosis.
 
 ## "Why can't member M reach instance I?"
 
@@ -58,8 +60,14 @@ explained here first.
 | Level on I is below what is needed | permission level | `access set-level` |
 | `access levels` shows a `blocked_reason` | stated there | follow it |
 
-For bindings (an actor's or agent's membership of a workspace), use the
-`workspace-actor` and `workspace-agent` kinds with `--workspace`:
+A team owner is never blocked by any of these. Someone who can do *more*
+than expected got it from one of the sources in `member explain`: a group, a
+direct rule, or a level. Groups and levels reach past a narrowed scope.
+
+Memory is guarded by bindings: reading or writing an actor's or agent's
+facts in a workspace is a permission on its binding there, not on the actor
+or agent itself. For "Alice cannot see Bob's memories", ask the binding, with
+the `workspace-actor` and `workspace-agent` kinds and `--workspace`:
 
 ```bash
 memorylake access show workspace-actor act-123 --workspace ws-123

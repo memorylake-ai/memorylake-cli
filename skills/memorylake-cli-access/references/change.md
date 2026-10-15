@@ -11,7 +11,7 @@ Choose the smallest tool that does the job:
 | --- | --- |
 | Let a member reach one more instance they are scoped out of | `access grant --member` |
 | Let several people reach an instance | `access grant --group` |
-| Set how much a member can do on one instance | `access set-level` |
+| Give a member a level on one instance (adds only) | `access set-level` |
 | Limit a member to certain instances of a type | `member scope set` |
 | Limit everyone with a role | `role scope set` |
 | Allow a new kind of action | `perm rule create` on a custom role, or a group permission |
@@ -26,17 +26,24 @@ memorylake access set-level project proj-123 --member usr-123 --level read --rea
 ```
 
 - `grant --member` adds the instance to a member whose scope for that type is
-  **already limited** to listed instances. For a member who reaches every
-  instance it has nothing to add; check `member scope get` first.
+  **already limited** to listed instances, with everything their role allows
+  there. For a member who reaches every instance it is refused (`409`), since
+  it would fence them to that one instance; check `member scope get` first.
+  You can only grant instances you can see yourself.
 - `revoke` refuses to remove a limited member's last instance of a type,
   because that would lift the limit instead. Narrow the scope with
   `member scope set` if that is the intent.
 - `grant` and `revoke` with `--group` change the group's instance list.
-- `set-level` sets the member's final level: `read`, `write`, `manage`, or
-  `none`. `none` only removes the level set here; it is not a deny. The last
-  member who can manage the instance cannot be lowered.
+- `set-level` sets the member's level here: `read`, `write`, `manage`, or
+  `none`. Levels only add (see [model.md](model.md)): `read` does not take
+  writing away from someone whose role allows it, and `none` only removes the
+  levels set here. The last member who can manage the instance cannot be
+  lowered.
 
 ## Scopes: read, edit, write back
+
+Keep `scope.json` and the ETag files in a temporary directory, not in the
+user's project.
 
 ```bash
 memorylake member scope get usr-123 > scope.json 2> etag.txt
@@ -65,6 +72,8 @@ printed:
 
 - Only the listed resource types change; leave a type out to keep it.
 - `mode` is `all` or `instances`. `instances` must list at least one.
+  Switching a type from `all` to `instances` cuts the member off from every
+  instance not listed; list all the ones they should keep.
 - `actions` is optional; without it the instance allows everything the role
   allows there.
 - A project's `workspace_id` is filled in by the server when left out.
@@ -94,6 +103,9 @@ memorylake member set-role usr-123 --role reviewers
   tenant_member` copies that role's rules. Least privilege usually means
   starting empty and adding rules.
 - One rule per action; `--action a,b` creates one for each.
+- `--auto-grant-prerequisites` adds whatever the actions depend on, which can
+  be more than the user asked for. Afterwards list the role's rules and tell
+  the user exactly what was added.
 - `--resource memorylake:project:proj-123` limits a rule to one instance.
 - `perm rule create --member <principal id>` grants one member directly.
   Prefer a role or a group: direct grants are easy to forget.
@@ -112,7 +124,9 @@ memorylake ag scope get grp-123 > group-scope.json 2> scope-etag.txt
 memorylake ag scope set grp-123 --scopes-file group-scope.json --reason "Atlas projects only" --if-match "$(cat scope-etag.txt)"
 ```
 
-- The base (a role or another group) is fixed at creation.
+- The base (a role or another group) is fixed at creation. `--base-role
+  tenant_admin` makes every member of the group an admin in effect; call that
+  out before creating one.
 - `ag get` prints the ETag for `permissions set`; `ag scope get` prints the
   one for `scope set`. They are different values.
 - `ag member add` takes up to 200 principal ids and is all or nothing.

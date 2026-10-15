@@ -64,7 +64,8 @@ member (`member scope`) or for everyone holding a role (`role scope`).
 - `scope get` reports `available_actions` per type (the most an entry can
   allow) and, per instance, `effective_actions` and `shadowed_actions`
   (actions listed that the role no longer grants). These are read-only.
-- The owner role has no scope.
+- The owner role has no scope: the team owner can do everything, and no
+  scope, level or group changes that.
 
 ## Access groups
 
@@ -77,15 +78,29 @@ instances. It never takes anything away.
 - Its **own permissions**, written `<resource_type>:<action>`, for example
   `memorylake:actor:actor:create`. `perm catalog --access-group` lists what
   is accepted.
-- Its **instances** (`ag scope`), the instances it opens to its members. Mode
-  `all` for a type removes its instances: a group never limits.
+- Its **instances** (`ag scope`), the instances it opens to its members, even
+  to members whose own scope leaves them out. Mode `all` for a type removes
+  its instances: a group never limits. Instances only open what a role or
+  group already grants: a group with instances but no permissions gives
+  read to someone whose role reads, and nothing to someone whose role does
+  not.
 
 ## Permission levels
 
 A level is `read`, `write` or `manage` on one instance, set per member with
-`access set-level`. It is the member's final level there. `none` removes the
-level set on the instance; it is **not a deny**, so the member keeps whatever
-their role, scope or groups give them. Access groups cannot hold levels.
+`access set-level`. Levels **only add**: a level is the most this member gets
+from levels on that instance, on top of what their role, scope and groups
+already give. Setting `read` for a member whose role lets them write there
+changes nothing; to make them read-only, narrow their role or scope.
+
+- `none` removes every level set on the instance for that member. It is
+  **not a deny**: they keep whatever their role, scope or groups give them.
+- For a member whose scope leaves the instance out, a level is what opens it,
+  and only as far as the level reaches.
+- Lowering someone else's level needs a higher level than theirs there, or
+  an owner or admin. The last member who can manage an instance cannot be
+  lowered, not even by themselves.
+- Access groups cannot hold levels.
 
 ## Where to look
 

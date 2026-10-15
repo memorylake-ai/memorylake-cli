@@ -22,28 +22,40 @@ write needs the user's explicit yes first.
 1. Check what they have now:
 
    ```bash
+   memorylake member explain usr-123
    memorylake member scope get usr-123
    memorylake access levels project proj-123 --member usr-123
    ```
 
-2. If their project scope is limited to listed instances, add this project:
+2. Pick the case that matches:
 
-   ```bash
-   memorylake access grant project proj-123 --member usr-123 --reason "Read Atlas for the Q4 review, per Bob"
-   ```
+   - **Their project scope is limited and leaves proj-123 out.** A `read`
+     level opens it for reading only:
 
-   If they reach every project already, there is nothing to add; go on.
+     ```bash
+     memorylake access set-level project proj-123 --member usr-123 --level read --reason "Read Atlas for the Q4 review, per Bob"
+     ```
 
-3. Set the level on the project:
+     Not `access grant`: that opens the project with everything their role
+     allows there, writing included if the role writes.
 
-   ```bash
-   memorylake access set-level project proj-123 --member usr-123 --level read --reason "Read-only on Atlas, per Bob"
-   ```
+   - **They already reach every project, or proj-123 is in their scope.**
+     They can read it already. If their role also lets them write and they
+     should not, a level cannot take that away. It takes narrowing: a scope
+     entry for proj-123 with `"actions": ["project:read"]` (see the scope
+     loop in [change.md](change.md)), or a role that only reads. Switching
+     their project scope from `all` to `instances` limits them to the listed
+     projects, so list every project they keep. Explain this to the user
+     before proposing it.
 
-4. Verify and report:
+   - **`settable_levels` is empty or `blocked_reason` is set.** Report the
+     reason; the role or a group has to grant the action first.
+
+3. Verify and report:
 
    ```bash
    memorylake access levels project proj-123 --member usr-123
+   memorylake member explain usr-123
    ```
 
 ## Limit someone to a single workspace
@@ -54,8 +66,12 @@ write needs the user's explicit yes first.
    memorylake member scope get usr-123 > scope.json 2> etag.txt
    ```
 
+   Use a temporary directory for these files.
+
 2. Edit the `memorylake:workspace` entry to `"mode": "instances"` with only
-   the allowed workspace, show the user the diff, then write it back:
+   the allowed workspace, show the user the diff, then write it back. They
+   lose every other workspace at once, including any the agent itself works
+   in if `usr-123` is its own member:
 
    ```bash
    memorylake member scope set usr-123 --scopes-file scope.json --reason "Contractor limited to the Atlas workspace" --if-match "$(cat etag.txt)"
@@ -64,6 +80,11 @@ write needs the user's explicit yes first.
 3. Confirm with `member explain usr-123`: `scopes` lists the limit.
 
 ## Give a team access through a group
+
+A group's instances only help with actions someone holds: from their role,
+or from the group's own base or permissions. If the members' roles already
+allow working on projects, instances are enough; otherwise give the group a
+base or permissions too (see [change.md](change.md)).
 
 ```bash
 memorylake ag create --name "Atlas team" --description "Everyone working on Atlas"
@@ -125,14 +146,27 @@ stay a member. Removing them from the team entirely is `member remove`
    memorylake perm rule list --subject-type member --subject-id usr-123
    ```
 
-2. Show the user the list. On a yes, take each source away:
+2. Show the user the list. On a yes, take away what was added on top of the
+   role:
 
    ```bash
    memorylake ag member remove grp-123 usr-123
    memorylake perm rule delete rule-123 --reason "Carol moved off Atlas"
    memorylake access set-level project proj-123 --member usr-123 --level none --reason "Carol moved off Atlas"
-   memorylake member set-role usr-123 --role tenant_member   # only if her role grants more than she should keep
+   memorylake access revoke project proj-123 --member usr-123 --reason "Carol moved off Atlas"
    ```
 
-3. Remember that `--level none` is not a deny: what their role still grants
-   remains. Run `member explain` again and report what is left.
+   `revoke` only applies where her scope for the type is limited to listed
+   instances, and is refused for the last one.
+
+3. Run `member explain` again. What her role grants is still there: none of
+   the above is a deny. If that is more than she should keep, propose one of
+   these as a separate change, each with its own yes:
+   - Limit her scope to the instances she keeps (the scope loop in
+     [change.md](change.md)).
+   - Move her to a role that grants less with `member set-role`. Compare the
+     two with `role get` first: a built-in role such as `tenant_member` can
+     grant *more* than a narrow custom role. Nobody can change their own
+     role.
+
+4. Report what is left, from the second `member explain`.
