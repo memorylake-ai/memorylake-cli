@@ -5,6 +5,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::api::facts::FactOwner;
+
 /// Wire value for [`MemoryType::Document`].
 pub const MEMORY_TYPE_DOCUMENT: &str = "document";
 
@@ -201,6 +203,10 @@ pub struct SearchFact {
     /// Last update timestamp (ISO 8601).
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// The project, actor or agent the fact belongs to, as the ID the request
+    /// used for it. Use it to address the fact afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<FactOwner>,
 }
 
 /// The `data` payload of a memory search.
@@ -278,7 +284,8 @@ mod tests {
                     "score": 0.87,
                     "metadata": {"source": "q4.xlsx"},
                     "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z"
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "owner": {"type": "project", "id": "proj-1"}
                 }]
             }"#,
         )
@@ -293,6 +300,11 @@ mod tests {
             Some("Revenue was 1.2M")
         );
         assert_eq!(results.facts[0].score, Some(0.87));
+        let owner = results.facts[0].owner.as_ref().expect("owner present");
+        assert_eq!(
+            (owner.owner_type.as_str(), owner.id.as_str()),
+            ("project", "proj-1")
+        );
     }
 
     #[test]
