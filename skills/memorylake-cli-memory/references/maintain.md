@@ -40,6 +40,27 @@ owner lands in `not_found`, and the command then exits non-zero after
 printing; the other ids were still deleted. A deleted fact disappears from
 search and `get`, but `fact trace` keeps its history.
 
+Ids are deleted one request at a time. If the command fails part way with an
+error rather than `not_found` (network, permission), the ids before the
+failure are already gone and nothing was printed. Run `fact list` again to
+see what remains before retrying; retrying is safe, because an id already
+deleted only lands in `not_found`.
+
+### Deleting a fact does not delete where it came from
+
+A fact extracted from a conversation or a document still exists there:
+
+- The conversation's messages keep the original text, and new messages in the
+  same conversation can lead the server to extract the fact again.
+- A project document keeps saying it, and `search` keeps returning the
+  document.
+
+When the user wants something gone, not just out of the fact list, tell them
+where else it lives (`fact trace` shows the conversation; search shows
+documents) and let them decide: `conv delete` removes the whole conversation
+and every message in it; documents are removed with the `proj document`
+commands; a fact instruction can tell the server to stop recording the topic.
+
 ## Explaining a fact
 
 `fact trace` returns the fact and its history, newest first. Each entry has:
@@ -100,8 +121,8 @@ memorylake fact conflict resolve --actor act-123 cfl-790 --strategy dismiss
 
 A conflict resolves once. `dismiss` marks a false alarm and changes no fact;
 the others change or forget facts. Present each conflict's facts to the user
-and let them choose; do not pick a winner yourself unless one fact is clearly
-outdated by a dated, later statement, and even then say which you chose.
+and let them choose. When one fact is clearly superseded by a dated, later
+statement, say so and recommend it, but still wait for their answer.
 
 ## Fact instructions
 
@@ -112,7 +133,7 @@ conversations. With none set, a built-in default applies.
 ```bash
 memorylake fact instruction get --project proj-123
 memorylake fact instruction draft --project proj-123 --guidance "Record architecture decisions and their reasons; skip small talk" --use-existing-facts --use-documents
-memorylake fact instruction set --project proj-123 --file instruction.md
+memorylake fact instruction set --project proj-123 --file -
 memorylake fact instruction clear --project proj-123
 ```
 
@@ -120,7 +141,9 @@ memorylake fact instruction clear --project proj-123
   the user, edit it with them, then `set` it.
 - `--language` takes an English language name such as `"Simplified Chinese"`,
   not a locale tag.
-- `set` replaces the instruction whole; the limit is 2000 characters.
-  `--file -` reads standard input.
+- `set` replaces the instruction whole; the limit is 2000 characters,
+  counted as UTF-16 units (a Chinese character counts once, most emoji
+  twice). `--file -` reads standard input, which avoids leaving a file behind
+  in the user's directory; `--text` works for short ones.
 - An instruction shapes future extraction only; it does not rewrite existing
   facts.

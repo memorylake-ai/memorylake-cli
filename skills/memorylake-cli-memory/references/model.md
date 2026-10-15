@@ -51,8 +51,10 @@ memorylake actor list --workspace ws-123
 
 ### Binding
 
-An actor needs a binding to a workspace before facts can be written for it
-there, and before it can be named in a boundary. `actor me` is often not bound.
+An actor's memory in a workspace hangs off its binding there: without one,
+facts cannot be written or read for it in that workspace, and it cannot be
+named in a boundary. The same holds for agents (`Agent not bound to
+workspace`). `actor me` is often not bound.
 
 ```bash
 memorylake actor bind --actor act-123 --workspace ws-123

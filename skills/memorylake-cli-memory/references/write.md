@@ -21,6 +21,10 @@ memorylake fact add --agent agt-123 "The staging database resets nightly at 02:0
 Each argument becomes one fact. The response lists the stored facts with their
 ids; keep those ids if you will refer to the facts again.
 
+`fact add` is not idempotent: running it twice stores the fact twice. If it
+fails without a clear answer (a timeout, a dropped connection), check with
+`fact list --query` before running it again.
+
 ### Writing a good fact
 
 A fact is read later, out of context, by someone or something that never saw
@@ -78,7 +82,12 @@ memorylake conv msg append conv-123 --actor act-456 --custom-id msg-0002 --text 
 Messages form a chain: each names the message it follows. Without `--parent`
 the CLI looks up the latest message for you, which needs a workspace. When
 appending many messages in order, pass `--parent` with the previous message's
-id to skip that lookup.
+id to skip that lookup. `--parent` takes the `id` the previous append printed,
+never its `--custom-id`.
+
+Each message is one request. A long transcript takes a while; append in
+order, one at a time. If the API answers `429` (rate limited), wait and retry
+the same message with the same `--custom-id`.
 
 Appends to one conversation are serialized. A `409` means another append got
 there first: run `conv msg list conv-123`, then retry with `--parent` set to
@@ -94,9 +103,14 @@ memorylake conv msg append conv-123 --actor act-123 --custom-id msg-0003 --text 
 memorylake conv cook-status conv-123
 ```
 
-`--wait` polls until `cook_finished` is true (600 seconds by default; giving up
-does not undo anything). Append the earlier messages without `--wait` and
-pass it only on the last one. `cook-status` reports the same thing on demand.
+`--wait` polls until `cook_finished` is true (600 seconds by default). Append
+the earlier messages without `--wait` and pass it only on the last one.
+`cook-status` reports the same thing on demand.
+
+If the wait times out, nothing failed: the messages are stored and processing
+continues on the server. Tell the user the memory is still being built rather
+than that it failed, and check `cook-status` later. Not every conversation
+reaches a finished state, so do not poll forever.
 
 ### See what it produced
 

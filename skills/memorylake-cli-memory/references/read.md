@@ -47,8 +47,15 @@ however high its rank. Document hits are pointers: judge them by
 `document_name` and `document_summary`, then quote the matched `items`.
 
 When nothing relevant comes back, retry once with other words (synonyms, the
-entity's full name, a different angle). If that also fails, tell the user
-nothing was found. Never fill the gap from your own assumptions.
+entity's full name, a different angle). Facts are stored in the language they
+were written in, so for memory kept in more than one language, also try the
+query in the other language (`Alice Chen 包管理器` as well as `Alice Chen
+package manager`). If that also fails, tell the user nothing was found. Never
+fill the gap from your own assumptions.
+
+An empty result has other causes worth ruling out before "nothing stored":
+the wrong workspace (`ws current`), another person's memory without
+`--actors`, or a conversation still being processed (`conv cook-status`).
 
 When facts disagree, prefer the most recent `updated_at`, mention the
 disagreement to the user, and consider whether it is a conflict worth

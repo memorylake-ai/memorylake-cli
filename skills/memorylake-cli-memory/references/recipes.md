@@ -13,7 +13,9 @@ earlier output.
    memorylake actor list --workspace ws-123
    ```
 
-   If `actor me`'s `id` is not among the bindings, ask before binding it:
+   The bindings come a page at a time; follow `continuation_token` before
+   concluding the actor is missing. If `actor me`'s `id` is not among them,
+   ask before binding it:
 
    ```bash
    memorylake actor bind --actor act-123 --workspace ws-123
@@ -61,11 +63,12 @@ earlier output.
    ```
 
 2. Append the messages in order with their real timestamps, `--wait` on the
-   last one only:
+   last one only. `--parent` is the `id` the previous append printed (here
+   `msg-901`), not its custom id:
 
    ```bash
    memorylake conv msg append conv-123 --actor act-123 --custom-id m001 --timestamp 2026-10-15T09:00:00Z --text "Launch slips to 2026-11-03."
-   memorylake conv msg append conv-123 --actor act-456 --custom-id m002 --parent msg-001 --timestamp 2026-10-15T09:01:00Z --text "Then QA sign-off moves to 2026-10-31." --wait
+   memorylake conv msg append conv-123 --actor act-456 --custom-id m002 --parent msg-901 --timestamp 2026-10-15T09:01:00Z --text "Then QA sign-off moves to 2026-10-31." --wait
    ```
 
 3. Report what was extracted, from both the project and the participants:
@@ -116,7 +119,12 @@ earlier output.
    memorylake fact delete --actor act-123 fct-123 fct-124
    ```
 
-3. Run the search again to confirm nothing on the topic remains.
+3. Run the search again to confirm no fact on the topic remains.
+4. If `fact trace` showed `source_kind: COOK`, or search still returns
+   documents on the topic, tell the user the source still holds it and could
+   yield the fact again (see "Deleting a fact does not delete where it came
+   from" in [maintain.md](maintain.md)). Delete sources only on a separate,
+   explicit yes: `conv delete` removes the entire conversation.
 
 ## Clean up contradictions
 
