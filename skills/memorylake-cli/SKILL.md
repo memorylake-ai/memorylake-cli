@@ -70,6 +70,7 @@ memorylake ws current       # which workspace commands default to, and why
 | Task | Skill |
 | --- | --- |
 | Remember, find, correct, trace or curate memory: facts, actors, conversations, search, conflicts | `memorylake-cli-memory` |
+| Who may do what: roles, permission rules, access scopes, access groups, permission levels | `memorylake-cli-access` |
 
 ## Command map
 
