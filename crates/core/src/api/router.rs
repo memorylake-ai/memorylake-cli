@@ -69,11 +69,34 @@ pub struct Traced<T> {
     pub trace_id: Option<String>,
 }
 
-/// List the models MemoryRouter can call, with prices, grouped by protocol
-/// (`openai`, `anthropic`).
+/// List the models MemoryRouter can call, with prices, as one array sorted by
+/// name; each model's `provider_type` (`openai`, `anthropic`) says which base
+/// URL reaches it.
+///
+/// The catalog answers in the MemoryLake format (`data.items`). An older
+/// deployment that still groups models by protocol is flattened to the same
+/// array.
 pub fn list_models(client: &Client) -> Result<Traced<Value>> {
     let (value, trace_id) = client.router_json(Method::GET, MODELS_PATH, &[], &[], None)?;
-    Ok(Traced { value, trace_id })
+    Ok(Traced {
+        value: Value::Array(catalog_items(&value)),
+        trace_id,
+    })
+}
+
+/// The models of a catalog reply, in either shape.
+fn catalog_items(reply: &Value) -> Vec<Value> {
+    if let Some(items) = reply.pointer("/data/items").and_then(Value::as_array) {
+        return items.clone();
+    }
+    let mut items: Vec<Value> = ["anthropic", "openai"]
+        .iter()
+        .filter_map(|group| reply.get(group).and_then(Value::as_array))
+        .flatten()
+        .cloned()
+        .collect();
+    items.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    items
 }
 
 /// Query string carrying `boundary`, when one is given.
@@ -118,4 +141,28 @@ pub fn stream(
         body,
     )?;
     Ok(Traced { value, trace_id })
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::catalog_items;
+    use serde_json::json;
+
+    #[test]
+    fn items_come_from_data_items() {
+        let reply = json!({"success":true,"data":{"items":[{"name":"a"},{"name":"b"}]}});
+        assert_eq!(
+            catalog_items(&reply),
+            vec![json!({"name":"a"}), json!({"name":"b"})]
+        );
+    }
+
+    #[test]
+    fn the_older_grouped_reply_is_flattened_and_sorted() {
+        let reply = json!({"anthropic":[{"name":"c"}],"openai":[{"name":"a"}]});
+        assert_eq!(
+            catalog_items(&reply),
+            vec![json!({"name":"a"}), json!({"name":"c"})]
+        );
+    }
 }
