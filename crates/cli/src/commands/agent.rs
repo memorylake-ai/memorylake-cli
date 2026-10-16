@@ -93,8 +93,9 @@ pub enum AgentCommand {
     },
     /// Delete an agent.
     ///
-    /// Irreversible: removes the agent, every one of its versions, and all of
-    /// its workspace bindings. There is no confirmation prompt.
+    /// Irreversible: removes the agent and every one of its versions. Its
+    /// workspace bindings are kept as INACTIVE (read-only); remove them with
+    /// `agent unbind`. There is no confirmation prompt.
     Delete {
         /// Agent id.
         id: String,
@@ -303,7 +304,9 @@ pub fn run(command: AgentCommand, profile: Option<String>, base_url: Option<Stri
         }
         AgentCommand::Delete { id } => {
             delete_agent(&client, &id).context("delete agent")?;
-            println!("Deleted agent `{id}` and all of its versions and bindings");
+            println!(
+                "Deleted agent `{id}` and all of its versions; its workspace bindings remain as INACTIVE until `agent unbind`"
+            );
         }
         AgentCommand::Fork {
             id,
