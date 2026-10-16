@@ -7,6 +7,8 @@
 
 use std::fs;
 use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::live::{login_default, parse, str_field};
 use crate::common::{assert_failure, assert_success, require_api_key, run, temp_home};
@@ -158,25 +160,41 @@ fn the_audit_log_records_what_this_key_just_did() {
     let args = ["role", "delete", key.as_str()];
     assert_success(&run(&home, &args), &args);
 
-    let page = run_json(
-        &home,
-        &[
-            "audit",
-            "list",
-            "--category",
-            "management",
-            "--target-id",
-            key.as_str(),
-            "--page-size",
-            "10",
-        ],
-    );
+    // The delete row can land a second after the listing's default window ends
+    // (the server stamps rows and the window with whole seconds, possibly from
+    // different instances), so poll briefly instead of reading once.
+    let args = [
+        "audit",
+        "list",
+        "--category",
+        "management",
+        "--target-id",
+        key.as_str(),
+        "--page-size",
+        "10",
+    ];
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let page = loop {
+        let page = run_json(&home, &args);
+        let actions: Vec<String> = page["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .filter_map(|e| e["action"].as_str().map(str::to_owned))
+            .collect();
+        let complete = ["custom_role:create", "custom_role:delete"]
+            .iter()
+            .all(|want| actions.iter().any(|a| a == want));
+        if complete {
+            break page;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the role's lifecycle must be in the log: {actions:?}"
+        );
+        thread::sleep(Duration::from_secs(1));
+    };
     let items = page["items"].as_array().expect("items");
-    let actions: Vec<&str> = items.iter().filter_map(|e| e["action"].as_str()).collect();
-    assert!(
-        actions.contains(&"custom_role:create") && actions.contains(&"custom_role:delete"),
-        "the role's lifecycle must be in the log: {actions:?}"
-    );
     for entry in items {
         assert_eq!(entry["result"], "succeeded");
         // Done with an API key, so the actor is the key acting as its owner.
