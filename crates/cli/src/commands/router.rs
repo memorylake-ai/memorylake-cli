@@ -21,7 +21,7 @@ use super::{api_client, print_json};
 /// MemoryRouter subcommands.
 #[derive(Debug, Subcommand)]
 pub enum RouterCommand {
-    /// List the models you can call and their prices, grouped by protocol.
+    /// List the models you can call and their prices, with each model's protocol in `provider_type`.
     Models {
         /// Show only the models of one protocol.
         #[arg(long, value_enum)]
@@ -124,7 +124,14 @@ pub fn run(
                         Protocol::Openai => "openai",
                         Protocol::Anthropic => "anthropic",
                     };
-                    print_json(models.value.get(key).unwrap_or(&json!([])))
+                    let items: Vec<_> = models
+                        .value
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|model| model["provider_type"] == key)
+                        .collect();
+                    print_json(&json!(items))
                 }
             }
         }

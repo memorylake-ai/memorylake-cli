@@ -6,7 +6,7 @@ use crate::common::stub::{
     request_line,
 };
 
-const MODELS: &str = r#"{"anthropic":[{"name":"claude-haiku-4-5","provider_type":"anthropic"}],"openai":[{"name":"gpt-4o-mini","provider_type":"openai"}]}"#;
+const MODELS: &str = r#"{"success":true,"message":"Operation completed successfully","data":{"items":[{"name":"claude-haiku-4-5","provider_type":"anthropic"},{"name":"gpt-4o-mini","provider_type":"openai"}]}}"#;
 const CHAT: &str = r#"{"object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Lisbon."}}]}"#;
 const MESSAGE: &str =
     r#"{"type":"message","role":"assistant","content":[{"type":"text","text":"Lisbon."}]}"#;
