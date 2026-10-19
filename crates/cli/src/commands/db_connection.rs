@@ -12,10 +12,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Subcommand;
 use memorylake_core::Error as CoreError;
 use memorylake_core::api::db_connections::{
-    ConnectivityTestRequest, CreateDbConnectionRequest, DbPassword, ListDbConnectionsParams,
-    UpdateDbConnectionRequest, create_db_connection, delete_db_connection, get_db_connection,
-    get_db_connection_by_custom_id, list_db_connection_schemas, list_db_connections,
-    test_db_connectivity, update_db_connection,
+    CONNECTIVITY_TEST_TIMEOUT, ConnectivityTestRequest, CreateDbConnectionRequest, DbPassword,
+    ListDbConnectionsParams, UpdateDbConnectionRequest, create_db_connection, delete_db_connection,
+    get_db_connection, get_db_connection_by_custom_id, list_db_connection_schemas,
+    list_db_connections, test_db_connectivity, update_db_connection,
 };
 
 use super::input::{parse_custom_id, parse_non_empty};
@@ -282,7 +282,7 @@ pub fn run(
                 database,
             };
             let data = test_db_connectivity(&connect()?, &request)
-                .context("test database connectivity")
+                .map_err(|err| test_failure(err, &request.host, request.port))
                 .map_err(|err| redact_password(err, Some(&request.password)))?;
             print_json(&data)
         }
@@ -309,20 +309,87 @@ fn required_password(args: &PasswordArgs, missing: &str) -> Result<DbPassword> {
 /// message may quote the database driver, and a driver error can echo the
 /// password it was handed. The chain is only rebuilt (as plain messages) when
 /// some message actually contains it.
+///
+/// Only whole occurrences count — ones not glued to a letter or digit on
+/// either side — so a short password such as `x` does not turn "unexpected"
+/// into "uneREDACTEDpected".
 fn redact_password(err: anyhow::Error, password: Option<&DbPassword>) -> anyhow::Error {
     let Some(secret) = password.map(DbPassword::expose).filter(|s| !s.is_empty()) else {
         return err;
     };
     let messages: Vec<String> = err.chain().map(ToString::to_string).collect();
-    if !messages.iter().any(|message| message.contains(secret)) {
+    if !messages
+        .iter()
+        .any(|message| redact_whole(message, secret).is_some())
+    {
         return err;
     }
     let mut messages = messages
         .into_iter()
         .rev()
-        .map(|message| message.replace(secret, "REDACTED"));
+        .map(|message| redact_whole(&message, secret).unwrap_or(message));
     let innermost = messages.next().unwrap_or_default();
     messages.fold(anyhow!(innermost), |err, outer| err.context(outer))
+}
+
+/// `message` with every whole occurrence of `secret` replaced, or `None` when
+/// there is none.
+fn redact_whole(message: &str, secret: &str) -> Option<String> {
+    let glued = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    let mut out = String::with_capacity(message.len());
+    let mut rest = 0;
+    let mut found = false;
+    for (start, _) in message.match_indices(secret) {
+        let end = start + secret.len();
+        if start < rest
+            || glued(message[..start].chars().next_back())
+            || glued(message[end..].chars().next())
+        {
+            continue;
+        }
+        out.push_str(&message[rest..start]);
+        out.push_str("REDACTED");
+        rest = end;
+        found = true;
+    }
+    found.then(|| {
+        out.push_str(&message[rest..]);
+        out
+    })
+}
+
+/// Explain a failed connectivity test in terms of the hop that failed.
+///
+/// The slow part of a test is the server reaching the database, so the two
+/// slow failures are about the database, not the MemoryLake API: the server
+/// gives up on an address that drops packets with a bare INTERNAL_ERROR, and
+/// a client-side timeout means the server was still trying. The generic
+/// timeout message ("timed out connecting to MemoryLake API") is dropped for
+/// the latter because it names the wrong hop.
+fn test_failure(err: CoreError, host: &str, port: Option<u16>) -> anyhow::Error {
+    let target = format!("{host}:{}", port.unwrap_or(5432));
+    if let CoreError::Http(http) = &err
+        && http.is_timeout()
+        && !http.is_connect()
+    {
+        return anyhow!(
+            "test database connectivity: no answer within {}s; the MemoryLake server was still \
+             trying to reach the database at {target}. Check that the host and port are right \
+             and that the database accepts connections from MemoryLake",
+            CONNECTIVITY_TEST_TIMEOUT.as_secs()
+        );
+    }
+    let hint = is_internal_error(&err);
+    let err = anyhow::Error::new(err);
+    if hint {
+        err.context(format!(
+            "test database connectivity (the server reported an internal error; an address \
+             that never answers, such as a firewalled {target}, ends this way after about 30 \
+             seconds, so check that the database accepts connections from MemoryLake)"
+        ))
+    } else {
+        err.context("test database connectivity")
+    }
 }
 
 /// Whether the server reported a bare internal error.
@@ -345,6 +412,28 @@ mod tests {
         assert_eq!(
             text,
             "create database connection: server said: password REDACTED rejected"
+        );
+    }
+
+    #[test]
+    fn a_password_inside_a_word_is_left_alone() {
+        let password = DbPassword::new("x");
+        let err = anyhow!("An unexpected error occurred").context("create database connection");
+        let text = format!("{:#}", redact_password(err, Some(&password)));
+        assert_eq!(
+            text,
+            "create database connection: An unexpected error occurred"
+        );
+    }
+
+    #[test]
+    fn a_password_next_to_punctuation_is_still_redacted() {
+        let password = DbPassword::new("x");
+        let err = anyhow!("bad password \"x\"; dsn=user:x@db").context("test");
+        let text = format!("{:#}", redact_password(err, Some(&password)));
+        assert_eq!(
+            text,
+            "test: bad password \"REDACTED\"; dsn=user:REDACTED@db"
         );
     }
 

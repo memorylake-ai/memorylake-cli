@@ -7,6 +7,7 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
+use memorylake_core::{ENV_API_KEY, Error as CoreError};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
@@ -150,6 +151,12 @@ enum Commands {
         command: DatasourceCommand,
     },
     /// Search memories in a workspace.
+    ///
+    /// Results come back as one list split into `documents`, `facts` and
+    /// `databases`, ordered by a `rank` shared across the three. The `score`
+    /// on fact hits is `1 / rank`: it restates the order and is not a
+    /// relevance measure, so a threshold on it keeps the top N hits, not the
+    /// good ones.
     Search(SearchArgs),
     /// Call OpenAI- and Anthropic-compatible models through MemoryRouter,
     /// with a Boundary's memory attached.
@@ -234,7 +241,28 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
+    run(cli).map_err(explain_env_key_without_profile)
+}
 
+/// `MEMORYLAKE_API_KEY` alone is not a session: a profile has to be selected.
+/// "not logged in" with the variable set reads like the variable was ignored,
+/// so say what to run instead.
+fn explain_env_key_without_profile(err: anyhow::Error) -> anyhow::Error {
+    let not_logged_in = err
+        .chain()
+        .any(|cause| matches!(cause.downcast_ref(), Some(CoreError::NotLoggedIn)));
+    let env_key_set = std::env::var(ENV_API_KEY).is_ok_and(|key| !key.trim().is_empty());
+    if not_logged_in && env_key_set {
+        err.context(format!(
+            "{ENV_API_KEY} is set, but an environment variable alone does not create a \
+             session; save it to a profile with `memorylake auth login --api-key \"${ENV_API_KEY}\"`"
+        ))
+    } else {
+        err
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Auth { command } => run_auth(command, cli.profile, cli.base_url)?,
         Commands::Actor { command } => run_actor(command, cli.profile, cli.base_url)?,

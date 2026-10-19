@@ -437,6 +437,29 @@ fn send_requires_exactly_one_message_source() {
 }
 
 #[test]
+fn send_without_a_memory_scope_fails_before_any_request() {
+    let home = temp_home();
+    seed_credentials(&home);
+
+    let args = [
+        "agent",
+        "send",
+        "agt-1",
+        "--workspace",
+        "ws-1",
+        "--text",
+        "hi",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    for flag in ["--project", "--read-only-project", "--skip-memory"] {
+        assert!(err.contains(flag), "{err}");
+    }
+    assert_no_request_attempted(&err);
+
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
 fn send_rejects_stream_together_with_no_wait() {
     let home = temp_home();
     let args = [

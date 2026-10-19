@@ -25,7 +25,9 @@ pub use delete::delete_db_connection;
 pub use get::{get_db_connection, get_db_connection_by_custom_id};
 pub use list::{DbConnectionList, ListDbConnectionsParams, list_db_connections};
 pub use list_schemas::list_db_connection_schemas;
-pub use test_connectivity::{ConnectivityTestRequest, test_db_connectivity};
+pub use test_connectivity::{
+    CONNECTIVITY_TEST_TIMEOUT, ConnectivityTestRequest, test_db_connectivity,
+};
 pub use types::{ConnectionSchemas, DbConnection, DbPassword};
 pub use update::{UpdateDbConnectionRequest, update_db_connection};
 

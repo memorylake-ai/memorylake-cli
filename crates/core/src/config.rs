@@ -261,7 +261,10 @@ pub struct ResolveOverrides {
 pub struct AuthStatus {
     /// Active profile name, if any.
     pub active_profile: Option<String>,
-    /// Resolved base URL for the active profile (or default).
+    /// The profile this status describes: the one asked for, else the active
+    /// one.
+    pub profile: Option<String>,
+    /// Resolved base URL for [`Self::profile`] (or default).
     pub base_url: String,
     /// Where [`Self::base_url`] came from.
     pub base_url_source: BaseUrlSource,
@@ -271,7 +274,7 @@ pub struct AuthStatus {
     pub api_key_source: Option<ApiKeySource>,
     /// Login method stored with the profile credentials.
     pub login_method: Option<String>,
-    /// Whether credentials can be resolved for the active profile.
+    /// Whether credentials can be resolved for [`Self::profile`].
     pub logged_in: bool,
 }
 
@@ -577,14 +580,16 @@ pub fn switch_profile(paths: &Paths, profile: &str) -> Result<()> {
 /// Build a display-oriented auth status snapshot.
 ///
 /// Env-only credentials without an active profile do not count as logged in.
-pub fn auth_status(paths: &Paths) -> Result<AuthStatus> {
+pub fn auth_status(paths: &Paths, profile: Option<&str>) -> Result<AuthStatus> {
     let config = load_file_config(paths)?;
     let credentials = load_credentials(paths)?;
     let active_profile = config.active_profile.clone();
+    let requested = profile.map(str::to_string);
 
-    let Some(profile) = active_profile.clone() else {
+    let Some(profile) = requested.clone().or_else(|| active_profile.clone()) else {
         return Ok(AuthStatus {
             active_profile: None,
+            profile: None,
             base_url: DEFAULT_BASE_URL.to_string(),
             base_url_source: BaseUrlSource::Default,
             api_key_masked: None,
@@ -601,9 +606,14 @@ pub fn auth_status(paths: &Paths) -> Result<AuthStatus> {
         .get(&profile)
         .map(|c| c.login_method.clone());
 
-    match resolve(paths, &ResolveOverrides::default()) {
+    let overrides = ResolveOverrides {
+        profile: requested,
+        base_url: None,
+    };
+    match resolve(paths, &overrides) {
         Ok(runtime) => Ok(AuthStatus {
-            active_profile: Some(profile),
+            active_profile,
+            profile: Some(profile),
             base_url: runtime.base_url,
             base_url_source: runtime.base_url_source,
             api_key_masked: Some(mask_api_key(&runtime.api_key)),
@@ -612,7 +622,8 @@ pub fn auth_status(paths: &Paths) -> Result<AuthStatus> {
             logged_in: true,
         }),
         Err(Error::MissingApiKey { .. } | Error::UnsupportedLoginMethod { .. }) => Ok(AuthStatus {
-            active_profile: Some(profile),
+            active_profile,
+            profile: Some(profile),
             base_url,
             base_url_source,
             api_key_masked: None,
@@ -900,13 +911,24 @@ mod tests {
         )
         .unwrap();
 
-        let status = auth_status(&paths).unwrap();
+        let status = auth_status(&paths, None).unwrap();
         assert_eq!(status.active_profile.as_deref(), Some("dev"));
         assert!(status.logged_in);
         assert_eq!(status.login_method.as_deref(), Some("api_key"));
         assert_eq!(status.api_key_source, Some(ApiKeySource::Profile));
         assert_eq!(status.base_url_source, BaseUrlSource::Profile);
         assert_eq!(status.base_url, "https://example.test/openapi/memorylake");
+
+        // Asking for another profile describes that one, active unchanged.
+        let other = auth_status(&paths, Some("default")).unwrap();
+        assert_eq!(other.active_profile.as_deref(), Some("dev"));
+        assert_eq!(other.profile.as_deref(), Some("default"));
+        assert!(other.logged_in);
+        assert_eq!(other.base_url, DEFAULT_BASE_URL);
+        assert!(matches!(
+            auth_status(&paths, Some("nope")),
+            Err(Error::UnknownProfile { .. })
+        ));
 
         switch_profile(&paths, "default").unwrap();
         let runtime = resolve(&paths, &ResolveOverrides::default()).unwrap();
@@ -1021,7 +1043,7 @@ mod tests {
             resolve(&paths, &ResolveOverrides::default()),
             Err(Error::NotLoggedIn)
         ));
-        let status = auth_status(&paths).unwrap();
+        let status = auth_status(&paths, None).unwrap();
         assert!(!status.logged_in);
         assert!(status.active_profile.is_none());
 

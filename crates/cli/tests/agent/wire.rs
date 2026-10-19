@@ -53,7 +53,7 @@ fn card_gets_the_well_known_document_and_prints_it_as_is() {
 
 #[test]
 fn send_posts_a_v1_message_and_prints_the_reply_text() {
-    let args = ["agent", "send", AGENT, "--text", "ping"];
+    let args = ["agent", "send", AGENT, "--skip-memory", "--text", "ping"];
     let (request, output) = exchange_with_remembered_workspace(COMPLETED_TASK, WS, &args);
     assert_success(&output, &args);
 
@@ -78,9 +78,10 @@ fn send_posts_a_v1_message_and_prints_the_reply_text() {
         body.get("configuration").is_none(),
         "default send is blocking: {body}"
     );
-    assert!(
-        body.get("metadata").is_none(),
-        "no scope flags, no metadata: {body}"
+    assert_eq!(
+        body["metadata"],
+        serde_json::json!({"memorylake": {"skipMemory": true}}),
+        "only the scope flag that was passed: {body}"
     );
 
     assert_eq!(
@@ -142,7 +143,15 @@ fn send_maps_scope_flags_onto_the_memorylake_extension() {
 
 #[test]
 fn send_no_wait_asks_for_an_immediate_return_and_prints_the_task() {
-    let args = ["agent", "send", AGENT, "--text", "ping", "--no-wait"];
+    let args = [
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "ping",
+        "--no-wait",
+    ];
     let (request, output) = exchange_with_remembered_workspace(WORKING_TASK, WS, &args);
     assert_success(&output, &args);
 
@@ -158,7 +167,7 @@ fn send_no_wait_asks_for_an_immediate_return_and_prints_the_task() {
 
 #[test]
 fn send_explains_how_to_answer_an_input_required_task() {
-    let args = ["agent", "send", AGENT, "--text", "open it"];
+    let args = ["agent", "send", AGENT, "--skip-memory", "--text", "open it"];
     let (_, output) = exchange_with_remembered_workspace(INPUT_REQUIRED_TASK, WS, &args);
     assert_success(&output, &args);
 
@@ -176,6 +185,7 @@ fn send_accepts_full_parts_from_json() {
         "agent",
         "send",
         AGENT,
+        "--skip-memory",
         "--message-json",
         r#"[{"text":"look"},{"url":"https://example.com/x.png","mediaType":"image/png"}]"#,
     ];
@@ -198,7 +208,15 @@ fn send_stream_prints_fragments_as_they_arrive_and_the_artifact_only_as_fallback
         r#"{"artifactUpdate":{"taskId":"run-1","contextId":"ctx-1","lastChunk":true,"artifact":{"parts":[{"text":"PONG"}]}}}"#,
         r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_COMPLETED"}}}"#,
     ];
-    let args = ["agent", "send", AGENT, "--text", "ping", "--stream"];
+    let args = [
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "ping",
+        "--stream",
+    ];
     let (request, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
     assert_success(&output, &args);
 
@@ -231,7 +249,15 @@ fn send_stream_falls_back_to_the_artifact_when_nothing_was_streamed() {
         r#"{"artifactUpdate":{"taskId":"run-1","contextId":"ctx-1","artifact":{"parts":[{"text":"PONG"}]}}}"#,
         r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_COMPLETED"}}}"#,
     ];
-    let args = ["agent", "send", AGENT, "--text", "ping", "--stream"];
+    let args = [
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "ping",
+        "--stream",
+    ];
     let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
     assert_success(&output, &args);
     assert_eq!(stdout_of(&output), "PONG\n");
@@ -244,7 +270,14 @@ fn send_stream_raw_prints_one_event_per_line() {
         r#"{"statusUpdate":{"taskId":"run-1","status":{"state":"TASK_STATE_COMPLETED"}}}"#,
     ];
     let args = [
-        "agent", "send", AGENT, "--text", "ping", "--stream", "--raw",
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "ping",
+        "--stream",
+        "--raw",
     ];
     let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
     assert_success(&output, &args);
@@ -267,7 +300,15 @@ fn send_stream_that_closes_while_the_task_works_fails_with_a_subscribe_hint() {
         r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING","message":{"parts":[{"text":"PO"}]}}}}"#,
         r#"{"artifactUpdate":{"taskId":"run-1","contextId":"ctx-1","artifact":{"parts":[{"text":"PO"}]}}}"#,
     ];
-    let args = ["agent", "send", AGENT, "--text", "ping", "--stream"];
+    let args = [
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "ping",
+        "--stream",
+    ];
     let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
     let stderr = assert_failure(&output, &args);
 
@@ -283,7 +324,14 @@ fn send_stream_that_closes_while_the_task_works_fails_with_a_subscribe_hint() {
 fn send_stream_raw_also_fails_when_the_task_did_not_settle() {
     let events = [r#"{"task":{"id":"run-1","status":{"state":"TASK_STATE_WORKING"}}}"#];
     let args = [
-        "agent", "send", AGENT, "--text", "ping", "--stream", "--raw",
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "ping",
+        "--stream",
+        "--raw",
     ];
     let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
     let stderr = assert_failure(&output, &args);
@@ -302,7 +350,15 @@ fn send_stream_ending_in_a_failed_task_exits_non_zero() {
         r#"{"task":{"id":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING"}}}"#,
         r#"{"statusUpdate":{"taskId":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_FAILED"}}}"#,
     ];
-    let args = ["agent", "send", AGENT, "--text", "ping", "--stream"];
+    let args = [
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "ping",
+        "--stream",
+    ];
     let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
     let stderr = assert_failure(&output, &args);
     assert!(
@@ -317,7 +373,15 @@ fn send_stream_ending_in_input_required_succeeds() {
         r#"{"task":{"id":"run-2","contextId":"ctx-1","status":{"state":"TASK_STATE_WORKING"}}}"#,
         r#"{"statusUpdate":{"taskId":"run-2","contextId":"ctx-1","status":{"state":"TASK_STATE_INPUT_REQUIRED"}}}"#,
     ];
-    let args = ["agent", "send", AGENT, "--text", "open it", "--stream"];
+    let args = [
+        "agent",
+        "send",
+        AGENT,
+        "--skip-memory",
+        "--text",
+        "open it",
+        "--stream",
+    ];
     let (_, output) = exchange_event_stream_with_remembered_workspace(&events, WS, &args);
     assert_success(&output, &args);
 }
@@ -325,7 +389,7 @@ fn send_stream_ending_in_input_required_succeeds() {
 #[test]
 fn send_of_a_task_that_failed_exits_non_zero() {
     let failed = r#"{"task":{"id":"run-1","contextId":"ctx-1","status":{"state":"TASK_STATE_FAILED"},"artifacts":[]}}"#;
-    let args = ["agent", "send", AGENT, "--text", "ping"];
+    let args = ["agent", "send", AGENT, "--skip-memory", "--text", "ping"];
     let (_, output) = exchange_with_remembered_workspace(failed, WS, &args);
     let stderr = assert_failure(&output, &args);
     assert!(stderr.contains("TASK_STATE_FAILED"), "{stderr}");
