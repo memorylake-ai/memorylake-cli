@@ -3,8 +3,9 @@
 mod database;
 mod document;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
+use memorylake_core::Error as CoreError;
 use memorylake_core::api::projects::{
     CreateProjectRequest, ListProjectsParams, UpdateProjectRequest, create_project, delete_project,
     get_project, get_project_by_custom_id, get_project_statistics, list_projects, update_project,
@@ -102,6 +103,10 @@ pub enum ProjectCommand {
     ///
     /// The project and all of its documents and conversations are removed.
     /// This cannot be undone, and the command does not ask for confirmation.
+    ///
+    /// Fails, deleting nothing, when the id does not name a project in the
+    /// workspace, so a mistyped or already-deleted id is not reported as a
+    /// successful delete.
     Delete {
         /// Workspace id that owns the project.
         ///
@@ -240,6 +245,18 @@ pub fn run(
         }
         ProjectCommand::Delete { workspace, id } => {
             let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
+            // The delete endpoint is idempotent and answers success for an id
+            // that names nothing, so existence is checked here first.
+            if let Err(err) = get_project(&client, &workspace, &id) {
+                if is_not_found(&err) {
+                    bail!(
+                        "project `{id}` not found in workspace `{workspace}`; nothing was deleted"
+                    );
+                }
+                // Any other lookup failure is left to the delete itself, so
+                // this check never makes a delete fail that would have worked.
+                tracing::debug!(error = %err, "project lookup before delete failed");
+            }
             delete_project(&client, &workspace, &id).context("delete project")?;
             println!("Deleted project `{id}` in workspace `{workspace}`");
         }
@@ -256,4 +273,28 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Whether the server said the addressed resource does not exist.
+fn is_not_found(err: &CoreError) -> bool {
+    matches!(err, CoreError::Api { code: Some(code), .. } if code == "NOT_FOUND")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn api_error(code: Option<&str>) -> CoreError {
+        CoreError::Api {
+            message: "boom".to_string(),
+            code: code.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn only_a_not_found_code_counts_as_missing() {
+        assert!(is_not_found(&api_error(Some("NOT_FOUND"))));
+        assert!(!is_not_found(&api_error(Some("PERMISSION_DENIED"))));
+        assert!(!is_not_found(&api_error(None)));
+    }
 }

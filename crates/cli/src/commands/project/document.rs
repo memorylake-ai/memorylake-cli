@@ -9,7 +9,7 @@
 //! traits rather than against [`Client`] directly, so their rules can be tested
 //! without a network or a real clock.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use crate::commands::download::{SaveTo, save_download};
@@ -24,6 +24,7 @@ use memorylake_core::api::documents::{
 };
 use memorylake_core::api::library::{Item, ItemList, ListChildrenParams, get_item, list_children};
 use memorylake_core::{Client, Paths};
+use serde_json::{Value, json};
 
 /// Files a single `import` may cover before it refuses to run.
 ///
@@ -394,11 +395,6 @@ fn run_import(
     )
     .with_context(|| format!("import documents into project `{project}`"))?;
 
-    // Printed before any failure is raised: the batch has already run, and the
-    // caller must not have to choose between seeing the result and seeing the
-    // failure.
-    println!("{}", serde_json::to_string_pretty(&outcome)?);
-
     let (waited, polled) = if options.wait {
         let document_ids = outcome.document_ids();
         eprintln!(
@@ -413,13 +409,32 @@ fn run_import(
             start: Instant::now(),
         };
         let polled = document_ids.len();
-        (
-            Some(wait_for_documents(&poller, &document_ids, options.timeout)?),
-            polled,
-        )
+        let waited = match wait_for_documents(&poller, &document_ids, options.timeout) {
+            Ok(waited) => waited,
+            Err(err) => {
+                // The batch was accepted before polling broke; say what was
+                // accepted rather than leave stdout empty.
+                println!("{}", serde_json::to_string_pretty(&outcome)?);
+                return Err(err);
+            }
+        };
+        (Some(waited), polled)
     } else {
         (None, 0)
     };
+
+    // Printed once, after any waiting, and before any failure is raised: the
+    // batch has already run, and the caller must not have to choose between
+    // seeing the result and seeing the failure. Under --wait the payload
+    // carries each document's final status, so stdout alone tells an import
+    // that failed processing from one that succeeded.
+    match &waited {
+        Some(waited) => println!(
+            "{}",
+            serde_json::to_string_pretty(&import_report(&outcome, waited)?)?
+        ),
+        None => println!("{}", serde_json::to_string_pretty(&outcome)?),
+    }
 
     let failures = import_failures(&outcome, waited.as_ref(), polled);
     if !failures.is_empty() {
@@ -567,8 +582,8 @@ fn push_unique(files: &mut Vec<String>, seen: &mut BTreeSet<String>, id: String)
 /// Injected so the polling rules can be tested without a network and without
 /// spending the real seconds the backoff schedule describes.
 trait PollContext {
-    /// Current processing status of one document.
-    fn status(&self, document_id: &str) -> Result<String>;
+    /// Current processing state of one document.
+    fn status(&self, document_id: &str) -> Result<DocumentState>;
     /// Pause before the next round.
     fn sleep(&self, delay: Duration);
     /// Time spent waiting so far.
@@ -583,10 +598,13 @@ struct ApiPoller<'a> {
 }
 
 impl PollContext for ApiPoller<'_> {
-    fn status(&self, document_id: &str) -> Result<String> {
+    fn status(&self, document_id: &str) -> Result<DocumentState> {
         let document = get_document(self.client, self.workspace, self.project, document_id)
             .with_context(|| format!("poll document `{document_id}`"))?;
-        Ok(document.status)
+        Ok(DocumentState {
+            status: document.status,
+            error: document.error,
+        })
     }
 
     fn sleep(&self, delay: Duration) {
@@ -598,6 +616,15 @@ impl PollContext for ApiPoller<'_> {
     }
 }
 
+/// One poll's reading of a document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DocumentState {
+    /// Processing status as the server reported it.
+    status: String,
+    /// Error detail, set when `status` is `error`.
+    error: Option<Value>,
+}
+
 /// How waiting ended.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct WaitOutcome {
@@ -605,6 +632,9 @@ struct WaitOutcome {
     errored: Vec<String>,
     /// Documents still non-terminal when the timeout elapsed.
     timed_out: Vec<String>,
+    /// Last state observed for every polled document: terminal for settled
+    /// ones, whatever it was at the deadline for timed-out ones.
+    last_seen: BTreeMap<String, DocumentState>,
 }
 
 /// Poll `document_ids` until each reaches a terminal status or `timeout` passes.
@@ -623,12 +653,13 @@ fn wait_for_documents(
     while !pending.is_empty() {
         let mut still_pending = Vec::new();
         for id in pending {
-            let status = ctx.status(&id)?;
-            if !is_terminal_status(&status) {
-                still_pending.push(id);
-            } else if status == DOCUMENT_STATUS_ERROR {
-                outcome.errored.push(id);
+            let state = ctx.status(&id)?;
+            if !is_terminal_status(&state.status) {
+                still_pending.push(id.clone());
+            } else if state.status == DOCUMENT_STATUS_ERROR {
+                outcome.errored.push(id.clone());
             }
+            outcome.last_seen.insert(id, state);
         }
         pending = still_pending;
 
@@ -644,6 +675,46 @@ fn wait_for_documents(
     }
 
     Ok(outcome)
+}
+
+/// The payload `import --wait` prints.
+///
+/// The server's acceptance summary, where each `details` entry also gets the document's final `status` (and `error`,
+/// when there is one), and a top-level `processing` tally counts how the
+/// polled documents ended. `success_count` and `result` keep describing
+/// acceptance, so existing parsers see the same fields; the added ones are
+/// what say whether processing worked.
+fn import_report(outcome: &ImportOutcome, waited: &WaitOutcome) -> Result<Value> {
+    let mut report = serde_json::to_value(outcome)?;
+
+    if let Some(details) = report.get_mut("details").and_then(Value::as_array_mut) {
+        for detail in details {
+            let Some(state) = detail
+                .get("document_id")
+                .and_then(Value::as_str)
+                .and_then(|id| waited.last_seen.get(id))
+            else {
+                continue;
+            };
+            if let Some(entry) = detail.as_object_mut() {
+                entry.insert("status".to_string(), json!(state.status));
+                if let Some(error) = &state.error {
+                    entry.insert("error".to_string(), error.clone());
+                }
+            }
+        }
+    }
+
+    let errored = waited.errored.len();
+    let timed_out = waited.timed_out.len();
+    let okay = waited.last_seen.len().saturating_sub(errored + timed_out);
+    if let Some(top) = report.as_object_mut() {
+        top.insert(
+            "processing".to_string(),
+            json!({ "okay": okay, "error": errored, "timed_out": timed_out }),
+        );
+    }
+    Ok(report)
 }
 
 /// Reasons an accepted import must still fail the command.
@@ -986,7 +1057,7 @@ mod tests {
     }
 
     impl PollContext for FakePoller {
-        fn status(&self, document_id: &str) -> Result<String> {
+        fn status(&self, document_id: &str) -> Result<DocumentState> {
             let statuses = self
                 .script
                 .get(document_id)
@@ -995,7 +1066,9 @@ mod tests {
             let seen = polls.entry(document_id.to_string()).or_insert(0);
             let status = statuses[(*seen).min(statuses.len() - 1)].clone();
             *seen += 1;
-            Ok(status)
+            let error = (status == DOCUMENT_STATUS_ERROR)
+                .then(|| json!({"code": "ERROR_FILE_CORRUPTED", "msg": "unreadable"}));
+            Ok(DocumentState { status, error })
         }
 
         fn sleep(&self, delay: Duration) {
@@ -1018,7 +1091,10 @@ mod tests {
             wait_for_documents(&poller, &ids(&["doc-1", "doc-2"]), Duration::from_secs(600))
                 .expect("wait");
 
-        assert_eq!(outcome, WaitOutcome::default());
+        assert!(outcome.errored.is_empty());
+        assert!(outcome.timed_out.is_empty());
+        assert_eq!(outcome.last_seen["doc-1"].status, "okay");
+        assert_eq!(outcome.last_seen["doc-2"].status, "okay");
     }
 
     #[test]
@@ -1162,10 +1238,58 @@ mod tests {
     }
 
     #[test]
+    fn under_wait_the_report_says_a_document_failed_processing() {
+        // The import was accepted (`result: success`) but the document then
+        // errored; stdout must say so rather than read as a success.
+        let poller = FakePoller::new(&[("doc-1", &["running", "error"])]);
+        let waited =
+            wait_for_documents(&poller, &ids(&["doc-1"]), Duration::from_secs(600)).expect("wait");
+
+        let report = import_report(&outcome(1, 0, 0, false), &waited).expect("report");
+
+        assert_eq!(report["success_count"], 1, "acceptance fields are kept");
+        assert_eq!(report["details"][0]["result"], "success");
+        assert_eq!(report["details"][0]["status"], "error");
+        assert_eq!(
+            report["details"][0]["error"]["code"],
+            "ERROR_FILE_CORRUPTED"
+        );
+        assert_eq!(
+            report["processing"],
+            json!({"okay": 0, "error": 1, "timed_out": 0})
+        );
+    }
+
+    #[test]
+    fn under_wait_the_report_tallies_okay_and_timed_out_documents() {
+        let mut accepted = outcome(2, 0, 0, false);
+        accepted.details.push(ImportDetail {
+            result: "success".to_string(),
+            drive_item_id: Some("sc-a:inode-2".to_string()),
+            document_id: Some("doc-2".to_string()),
+        });
+        let poller = FakePoller::new(&[("doc-1", &["okay"]), ("doc-2", &["running"])]);
+        let waited =
+            wait_for_documents(&poller, &ids(&["doc-1", "doc-2"]), Duration::from_secs(10))
+                .expect("wait");
+
+        let report = import_report(&accepted, &waited).expect("report");
+
+        assert_eq!(report["details"][0]["status"], "okay");
+        assert!(report["details"][0].get("error").is_none());
+        assert_eq!(report["details"][1]["status"], "running");
+        assert_eq!(
+            report["processing"],
+            json!({"okay": 1, "error": 0, "timed_out": 1})
+        );
+    }
+
+    #[test]
     fn an_errored_document_fails_the_command() {
         let waited = WaitOutcome {
             errored: ids(&["doc-9"]),
             timed_out: Vec::new(),
+            ..WaitOutcome::default()
         };
         let failures = import_failures(&outcome(1, 0, 0, false), Some(&waited), 1);
         assert_eq!(failures.len(), 1);
@@ -1178,6 +1302,7 @@ mod tests {
         let waited = WaitOutcome {
             errored: Vec::new(),
             timed_out: ids(&["doc-9"]),
+            ..WaitOutcome::default()
         };
         let failures = import_failures(&outcome(1, 0, 0, false), Some(&waited), 1);
         assert_eq!(failures.len(), 1);
@@ -1193,6 +1318,7 @@ mod tests {
         let waited = WaitOutcome {
             errored: ids(&["doc-8"]),
             timed_out: ids(&["doc-9"]),
+            ..WaitOutcome::default()
         };
         let failures = import_failures(&outcome(3, 2, 0, true), Some(&waited), 1);
         assert_eq!(
