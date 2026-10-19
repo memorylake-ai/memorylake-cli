@@ -566,7 +566,7 @@ context id and final state go to stderr, so a script can pipe the reply and
 still know how to continue:
 
 ```
-$ memorylake agent send agent-… --text "Summarize yesterday's standup"
+$ memorylake agent send agent-… --project proj-… --text "Summarize yesterday's standup"
 The team agreed to …
 task run-…  context 5fdb…  state TASK_STATE_COMPLETED
 ```
@@ -574,9 +574,14 @@ task run-…  context 5fdb…  state TASK_STATE_COMPLETED
 Pass `--context` to keep talking in the same thread. A task that ends in
 `TASK_STATE_INPUT_REQUIRED` needs more from you: reply with `--task <id>
 --context <id>`. `--stream` prints the reply as it is produced; `--no-wait`
-returns the task as soon as it exists (poll it with `agent task get`, or follow
-it with `agent task subscribe`, which prints like `--stream`); `--raw` prints the
-protocol response as JSON instead of the reply text.
+returns the task as soon as it exists; `--raw` prints the protocol response as
+JSON instead of the reply text.
+
+After `--no-wait`, `agent task subscribe` is the way to get the reply: it prints
+like `--stream`, and replays the whole stream of a task that already finished.
+`agent task get` and `agent task list` report state only — the server does not
+keep history or artifacts yet, so those come back empty even with
+`--history-length` and `--artifacts`.
 
 A task that ends `FAILED`, `CANCELED` or `REJECTED` exits non-zero. So does a
 stream that closes before its task settles; the error names the
@@ -586,7 +591,10 @@ The `--actor`, `--project`, `--read-only-project` and `--skip-memory` flags set
 MemoryLake's extension of the request (`metadata.memorylake`): whose message it
 is, which projects the agent may read and write, and whether the exchange is
 remembered at all. Anything else the extension accepts, such as `overrides`,
-goes through `--metadata-json`.
+goes through `--metadata-json`. The server refuses a message without the
+extension, continued conversations included, so every `send` needs at least one
+of these — usually `--project` or `--skip-memory`; the CLI says so before
+sending.
 
 Feedback is a MemoryLake extension to A2A. `task feedback` records a rating on
 the task; `task get` reads it back under `metadata."task-feedback/v1"`.
@@ -687,7 +695,9 @@ memorylake search "quarterly revenue" \
 
 Returns one ranked list split into `documents`, `facts` and `databases`. Every
 entry carries a `rank` that is unique across the three, so sorting by it
-restores the overall order. Filters take one comma-separated value each
+restores the overall order. The `score` on fact hits is exactly `1 / rank`, so
+it says nothing `rank` does not: a threshold such as `score >= 0.3` keeps the top
+three hits whatever they are, not the relevant ones. Filters take one comma-separated value each
 (`--projects a,b`). Omitting `--projects` or `--types` searches all of them, but
 omitting `--actors` searches only your own actor's memories. `--top-k` (1-1000,
 default 10) caps the total across all types, not each type. There is no

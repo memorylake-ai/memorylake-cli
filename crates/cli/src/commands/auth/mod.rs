@@ -6,8 +6,9 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::workspaces::{ListWorkspacesParams, list_workspaces};
 use memorylake_core::{
-    BaseUrlSource, Client, DEFAULT_PROFILE, Error as CoreError, Paths, ResolveOverrides,
-    auth_status, login_api_key, logout, resolve, resolve_profile_base_url, switch_profile,
+    BaseUrlSource, Client, DEFAULT_PROFILE, ENV_API_KEY, Error as CoreError, Paths,
+    ResolveOverrides, auth_status, login_api_key, logout, resolve, resolve_profile_base_url,
+    switch_profile,
 };
 
 use interactive::{InteractiveLoginMethod, prompt_api_key, prompt_base_url, prompt_login_method};
@@ -99,10 +100,15 @@ pub fn run(
             );
         }
         AuthCommand::Status => {
-            let status = auth_status(&paths).context("read auth status")?;
-            match status.active_profile.as_deref() {
-                Some(name) => println!("Active profile: {name}"),
-                None => println!("Active profile: (none)"),
+            let status =
+                auth_status(&paths, global_profile.as_deref()).context("read auth status")?;
+            match (&global_profile, status.active_profile.as_deref()) {
+                (Some(name), active) => println!(
+                    "Profile: {name} (from --profile; active profile: {})",
+                    active.unwrap_or("(none)")
+                ),
+                (None, Some(name)) => println!("Active profile: {name}"),
+                (None, None) => println!("Active profile: (none)"),
             }
             println!("Base URL: {}", status.base_url);
             println!("Base URL source: {}", status.base_url_source);
@@ -119,14 +125,21 @@ pub fn run(
                 None => println!("Login method: (none)"),
             }
             println!("Logged in: {}", if status.logged_in { "yes" } else { "no" });
+            if status.profile.is_none()
+                && std::env::var(ENV_API_KEY).is_ok_and(|key| !key.trim().is_empty())
+            {
+                println!(
+                    "Hint: {ENV_API_KEY} is set, but an environment variable alone does not \
+                     create a session; run `memorylake auth login --api-key \"${ENV_API_KEY}\"`"
+                );
+            }
 
             if status.logged_in {
-                // Validate the same profile `auth_status` displayed (active), not a
-                // global `--profile` override that would drift from the printed summary.
+                // Validate the same profile `auth_status` displayed.
                 let runtime = resolve(
                     &paths,
                     &ResolveOverrides {
-                        profile: status.active_profile.clone(),
+                        profile: status.profile.clone(),
                         base_url: global_base_url,
                     },
                 )

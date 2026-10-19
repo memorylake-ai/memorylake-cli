@@ -52,7 +52,9 @@ pub struct SendArgs {
     pub stream: bool,
     /// Return as soon as the task exists instead of waiting for the answer.
     ///
-    /// Prints the task as JSON; follow it with `agent task get`.
+    /// Prints the task as JSON. `agent task subscribe` then follows it and
+    /// prints the reply (replaying it if the task already finished);
+    /// `agent task get` reports its state only.
     #[arg(long)]
     pub no_wait: bool,
     /// Print the protocol response as JSON instead of the reply text.
@@ -86,6 +88,11 @@ pub struct SendArgs {
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
     /// List an agent's tasks, newest first.
+    ///
+    /// Reports each task's state, not its reply: the server does not keep
+    /// history or artifacts yet, so those come back empty even with
+    /// `--history-length` and `--artifacts`. Use `agent task subscribe` to
+    /// replay a finished task's reply.
     List {
         /// Agent whose tasks to list.
         agent_id: String,
@@ -104,10 +111,10 @@ pub enum TaskCommand {
         /// Only tasks whose status changed after this ISO 8601 instant.
         #[arg(long, value_name = "TIMESTAMP")]
         after: Option<String>,
-        /// History messages to include per task.
+        /// History messages to include per task. Currently always empty.
         #[arg(long)]
         history_length: Option<u32>,
-        /// Include each task's artifacts.
+        /// Include each task's artifacts. Currently always empty.
         #[arg(long)]
         artifacts: bool,
         /// Workspace the agent is bound in.
@@ -116,13 +123,17 @@ pub enum TaskCommand {
         #[arg(long)]
         workspace: Option<String>,
     },
-    /// Get one task.
+    /// Get one task's state.
+    ///
+    /// Not its reply: the server does not keep history or artifacts yet, so
+    /// `--history-length` has no effect. Use `agent task subscribe` to replay
+    /// a finished task's reply.
     Get {
         /// Agent that owns the task.
         agent_id: String,
         /// Task id.
         task_id: String,
-        /// History messages to include.
+        /// History messages to include. Currently has no effect.
         #[arg(long)]
         history_length: Option<u32>,
         /// Workspace the agent is bound in.
@@ -272,8 +283,16 @@ pub fn run_task(client: &Client, workspace: &str, command: TaskCommand) -> Resul
             task_id,
             workspace: _,
         } => {
-            let data = cancel_task(client, workspace, &agent_id, &task_id)
-                .with_context(|| format!("cancel task `{task_id}` of agent `{agent_id}`"))?;
+            let data = cancel_task(client, workspace, &agent_id, &task_id).map_err(|err| {
+                let context = match settled_state_name(&err.to_string()) {
+                    Some(state) => format!(
+                        "cancel task `{task_id}` of agent `{agent_id}` (its state is `{state}`; \
+                         only a task still running can be cancelled)"
+                    ),
+                    None => format!("cancel task `{task_id}` of agent `{agent_id}`"),
+                };
+                anyhow::Error::new(err).context(context)
+            })?;
             print_json(&data)
         }
         TaskCommand::Subscribe {
@@ -312,6 +331,28 @@ pub fn run_task(client: &Client, workspace: &str, command: TaskCommand) -> Resul
     }
 }
 
+/// The task state named by a refused cancel.
+///
+/// The server words it `Task cannot be canceled - current state: 3`, with the
+/// protocol enum's number where every other response spells the name.
+fn settled_state_name(message: &str) -> Option<&'static str> {
+    let (_, rest) = message.split_once("current state: ")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let name = match digits.parse::<u8>().ok()? {
+        0 => "TASK_STATE_UNSPECIFIED",
+        1 => "TASK_STATE_SUBMITTED",
+        2 => "TASK_STATE_WORKING",
+        3 => "TASK_STATE_COMPLETED",
+        4 => "TASK_STATE_FAILED",
+        5 => "TASK_STATE_CANCELED",
+        6 => "TASK_STATE_INPUT_REQUIRED",
+        7 => "TASK_STATE_REJECTED",
+        8 => "TASK_STATE_AUTH_REQUIRED",
+        _ => return None,
+    };
+    Some(name)
+}
+
 /// The `--workspace` flag of a `task` subcommand, for the shared resolver.
 pub fn task_workspace_flag(command: &TaskCommand) -> Option<String> {
     match command {
@@ -345,6 +386,15 @@ pub fn build_request(args: &SendArgs) -> Result<SendMessageRequest> {
     };
     if let Some(json) = &args.metadata_json {
         memorylake.extra = parse_extra_metadata(json, &memorylake)?;
+    }
+    // The server refuses a message without `metadata.memorylake` (HTTP 400),
+    // continued conversations included; say which flags fix it before the
+    // round trip.
+    if memorylake.is_empty() {
+        bail!(
+            "say where the agent's memory comes from: pass --project <PROJECT_ID> \
+             (read and write), --read-only-project <PROJECT_ID>, or --skip-memory"
+        );
     }
 
     Ok(SendMessageRequest {
@@ -700,9 +750,21 @@ mod tests {
     }
 
     #[test]
+    fn a_send_without_any_memory_scope_is_refused_locally() {
+        let mut a = args("agt-1");
+        a.text = vec!["hello".into()];
+        a.context = Some("ctx".into());
+        let err = build_request(&a).unwrap_err().to_string();
+        for flag in ["--project", "--read-only-project", "--skip-memory"] {
+            assert!(err.contains(flag), "{err}");
+        }
+    }
+
+    #[test]
     fn text_flags_become_text_parts_and_nothing_else_is_sent() {
         let mut a = args("agt-1");
         a.text = vec!["hello".into(), "world".into()];
+        a.skip_memory = true;
         let request = build_request(&a).unwrap();
         let body = serde_json::to_value(&request).unwrap();
         assert_eq!(body["message"]["role"], "ROLE_USER");
@@ -717,7 +779,10 @@ mod tests {
                 .starts_with("cli-")
         );
         assert!(body.get("configuration").is_none(), "{body}");
-        assert!(body.get("metadata").is_none(), "{body}");
+        assert_eq!(
+            body["metadata"],
+            json!({"memorylake": {"skipMemory": true}})
+        );
     }
 
     #[test]
@@ -788,6 +853,7 @@ mod tests {
         assert!(err.contains("pass only one"), "{err}");
 
         let mut a = args("agt-1");
+        a.skip_memory = true;
         a.message_json =
             Some(r#"[{"text":"x"},{"url":"https://e/x.png","mediaType":"image/png"}]"#.into());
         let body = serde_json::to_value(build_request(&a).unwrap()).unwrap();
@@ -804,6 +870,20 @@ mod tests {
         a.message_json = Some(r#"["x"]"#.into());
         let err = build_request(&a).unwrap_err().to_string();
         assert!(err.contains("part 0"), "{err}");
+    }
+
+    #[test]
+    fn a_refused_cancel_names_the_task_state() {
+        assert_eq!(
+            settled_state_name("Task cannot be canceled - current state: 3 [INVALID_ARGUMENT]"),
+            Some("TASK_STATE_COMPLETED")
+        );
+        assert_eq!(
+            settled_state_name("current state: 5"),
+            Some("TASK_STATE_CANCELED")
+        );
+        assert_eq!(settled_state_name("current state: 42"), None);
+        assert_eq!(settled_state_name("task not found"), None);
     }
 
     #[test]
