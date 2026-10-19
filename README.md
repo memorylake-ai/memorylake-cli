@@ -226,7 +226,7 @@ memorylake proj create --name "My Project" --custom-id my-proj-001 [--descriptio
 memorylake proj get <id> [--by-custom-id]
 memorylake proj update <id> [--name NAME] [--description D] \
   [--opendata-ids IDS | --clear-opendata]
-memorylake proj delete <id>
+memorylake proj delete <id>   # fails, deleting nothing, if the id names no project
 memorylake proj stats <id>     # document/database counts by processing status
 ```
 
@@ -287,6 +287,11 @@ Importing is asynchronous: the command returns once the server accepts the batch
 and each document moves through `pending` / `running` to `okay` or `error`.
 `--wait` polls until they settle. Giving up does not cancel anything — the import
 carries on server-side.
+
+`success_count` and each detail's `result` describe acceptance, not processing.
+Under `--wait` the printed payload also gives each detail its final `status`
+(plus `error` when it failed) and a `processing` tally of `okay` / `error` /
+`timed_out`, and the command exits non-zero unless every document reached `okay`.
 
 The API answers `200` even when individual files fail, so the CLI prints the full
 payload and then exits non-zero if anything went wrong. Files already in the

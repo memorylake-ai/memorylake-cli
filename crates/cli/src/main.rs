@@ -3,6 +3,8 @@
 mod commands;
 mod interactive;
 
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
 use tracing::Level;
@@ -284,9 +286,13 @@ fn init_tracing(verbose: u8) -> Result<()> {
         .with_default_directive(level.into())
         .from_env_lossy();
 
+    // Diagnostics go to stderr so `-v` or `RUST_LOG` never corrupts the JSON
+    // on stdout; colour only when a person is reading them.
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .try_init()
         .map_err(|err| anyhow::anyhow!(err))?;
 
