@@ -39,7 +39,13 @@ fn unset_filters_are_absent_not_null_or_empty() {
     );
     let body = body_of(&request);
     let object = body.as_object().expect("object body");
-    for key in ["project_ids", "actor_ids", "memory_types", "top_k"] {
+    for key in [
+        "project_ids",
+        "actor_ids",
+        "memory_types",
+        "top_k",
+        "search_effort",
+    ] {
         assert!(
             !object.contains_key(key),
             "{key} must not be sent when its flag was omitted: {body}"
@@ -63,6 +69,8 @@ fn every_filter_reaches_the_wire_under_its_documented_name() {
             "document,fact",
             "--top-k",
             "5",
+            "--effort",
+            "low",
             "revenue",
         ],
     );
@@ -75,7 +83,8 @@ fn every_filter_reaches_the_wire_under_its_documented_name() {
             "project_ids": ["proj-1", "proj-2"],
             "actor_ids": ["act-1"],
             "memory_types": ["document", "fact"],
-            "top_k": 5
+            "top_k": 5,
+            "search_effort": "low"
         })
     );
 }

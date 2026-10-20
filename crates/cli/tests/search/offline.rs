@@ -135,6 +135,16 @@ fn top_k_outside_the_documented_range_is_rejected_before_any_request() {
 }
 
 #[test]
+fn an_unknown_effort_is_rejected_before_any_request() {
+    for value in ["medium", "MAX", ""] {
+        assert_rejected_locally(
+            &["search", "--workspace", "ws-1", "--effort", value, "q"],
+            "max, high, low",
+        );
+    }
+}
+
+#[test]
 fn the_memory_type_error_lists_the_accepted_values() {
     let home = logged_in_home(UNREACHABLE);
     let args = ["search", "--workspace", "ws-1", "--types", "memo", "q"];

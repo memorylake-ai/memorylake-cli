@@ -72,6 +72,66 @@ impl From<MemoryType> for String {
     }
 }
 
+/// Wire value for [`SearchEffort::Max`].
+pub const SEARCH_EFFORT_MAX: &str = "max";
+
+/// Wire value for [`SearchEffort::High`].
+pub const SEARCH_EFFORT_HIGH: &str = "high";
+
+/// Wire value for [`SearchEffort::Low`].
+pub const SEARCH_EFFORT_LOW: &str = "low";
+
+/// How deep a search goes, trading result quality for speed.
+///
+/// Strict like [`MemoryType`]: the API answers any other value with `400`, so
+/// an unrecognized one is a user mistake worth catching before the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(into = "String")]
+pub enum SearchEffort {
+    /// The full search.
+    Max,
+    /// No query expansion from stored facts and a lighter final ranking.
+    High,
+    /// `High`, plus no model-based query understanding and a narrower recall.
+    Low,
+}
+
+impl SearchEffort {
+    /// Every accepted value, in the order help text and errors should list them.
+    pub const ALL: [Self; 3] = [Self::Max, Self::High, Self::Low];
+
+    /// Wire representation of this effort level.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Max => SEARCH_EFFORT_MAX,
+            Self::High => SEARCH_EFFORT_HIGH,
+            Self::Low => SEARCH_EFFORT_LOW,
+        }
+    }
+
+    /// Parse a wire value, returning `None` when it is not recognized.
+    pub fn from_wire(raw: &str) -> Option<Self> {
+        match raw {
+            SEARCH_EFFORT_MAX => Some(Self::Max),
+            SEARCH_EFFORT_HIGH => Some(Self::High),
+            SEARCH_EFFORT_LOW => Some(Self::Low),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for SearchEffort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<SearchEffort> for String {
+    fn from(value: SearchEffort) -> Self {
+        value.as_str().to_string()
+    }
+}
+
 /// One matched block inside a document.
 ///
 /// The API sends one of several block shapes, told apart by `type`. A figure
@@ -260,6 +320,20 @@ mod tests {
             serde_json::to_string(&MemoryType::Database).expect("serialize"),
             r#""database""#
         );
+    }
+
+    #[test]
+    fn search_effort_round_trips_and_rejects_anything_else() {
+        for value in SearchEffort::ALL {
+            assert_eq!(SearchEffort::from_wire(value.as_str()), Some(value));
+        }
+        assert_eq!(
+            serde_json::to_string(&SearchEffort::High).expect("serialize"),
+            r#""high""#
+        );
+        for raw in ["Max", "medium", "", " low"] {
+            assert_eq!(SearchEffort::from_wire(raw), None, "should reject {raw:?}");
+        }
     }
 
     #[test]
