@@ -12,5 +12,6 @@ mod types;
 pub use memories::{SearchMemoriesRequest, search_memories};
 pub use types::{
     DocumentItem, Highlight, HighlightChunk, MEMORY_TYPE_DATABASE, MEMORY_TYPE_DOCUMENT,
-    MEMORY_TYPE_FACT, MemoryType, SearchDocument, SearchFact, SearchResults,
+    MEMORY_TYPE_FACT, MemoryType, SEARCH_EFFORT_HIGH, SEARCH_EFFORT_LOW, SEARCH_EFFORT_MAX,
+    SearchDocument, SearchEffort, SearchFact, SearchResults,
 };

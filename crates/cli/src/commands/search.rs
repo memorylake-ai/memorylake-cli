@@ -3,7 +3,9 @@
 use super::require_workspace;
 use anyhow::{Context, Result};
 use clap::Args;
-use memorylake_core::api::search::{MemoryType, SearchMemoriesRequest, search_memories};
+use memorylake_core::api::search::{
+    MemoryType, SearchEffort, SearchMemoriesRequest, search_memories,
+};
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 /// Search memories in a workspace.
@@ -39,6 +41,22 @@ pub struct SearchArgs {
     /// The server defaults to 10.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
     top_k: Option<u32>,
+    /// How deep to search (max, high, low). Lower levels are faster but may
+    /// return fewer or different results. The server picks the default.
+    #[arg(long, value_name = "LEVEL", value_parser = parse_effort)]
+    effort: Option<SearchEffort>,
+}
+
+/// Parse `--effort`, rejecting levels the API would answer with `400`.
+fn parse_effort(raw: &str) -> std::result::Result<SearchEffort, String> {
+    SearchEffort::from_wire(raw).ok_or_else(|| {
+        let accepted = SearchEffort::ALL
+            .into_iter()
+            .map(SearchEffort::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("unknown effort `{raw}`; expected one of {accepted}")
+    })
 }
 
 /// Reject a query that carries no searchable text.
@@ -131,6 +149,7 @@ pub fn run(args: SearchArgs, profile: Option<String>, base_url: Option<String>) 
         actor_ids: args.actors.map(|list| list.0),
         memory_types: args.types.map(|list| list.0),
         top_k: args.top_k,
+        search_effort: args.effort,
     };
     let data = search_memories(&client, &workspace, &request).context("search memories")?;
     println!("{}", serde_json::to_string_pretty(&data)?);

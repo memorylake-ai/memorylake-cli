@@ -695,7 +695,7 @@ each. `--projects` on `update` replaces the list rather than adding to it.
 memorylake search "what were the quarterly revenue figures"
 
 memorylake search "quarterly revenue" \
-  --projects proj-1,proj-2 --actors act-1 --types document,fact,database --top-k 10
+  --projects proj-1,proj-2 --actors act-1 --types document,fact,database --top-k 10 --effort high
 ```
 
 Returns one ranked list split into `documents`, `facts` and `databases`. Every
@@ -705,8 +705,12 @@ it says nothing `rank` does not: a threshold such as `score >= 0.3` keeps the to
 three hits whatever they are, not the relevant ones. Filters take one comma-separated value each
 (`--projects a,b`). Omitting `--projects` or `--types` searches all of them, but
 omitting `--actors` searches only your own actor's memories. `--top-k` (1-1000,
-default 10) caps the total across all types, not each type. There is no
-pagination.
+default 10) caps the total across all types, not each type. `--effort`
+(`max`, `high`, `low`) trades result quality for speed: `max` is the full
+search, `high` skips query expansion from stored facts and uses a lighter final
+ranking, `low` also skips model-based query understanding and narrows recall.
+Lower levels may return fewer or different results; omit it for the server's
+default. There is no pagination.
 
 ### MemoryRouter
 

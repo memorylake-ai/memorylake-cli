@@ -7,7 +7,7 @@ use crate::api::path::encode_segment;
 use crate::client::Client;
 use crate::error::Result;
 
-use super::types::{MemoryType, SearchResults};
+use super::types::{MemoryType, SearchEffort, SearchResults};
 
 fn search_path(workspace_id: &str) -> String {
     format!(
@@ -41,6 +41,9 @@ pub struct SearchMemoriesRequest {
     /// than applied per type. The API accepts 1 to 1000 and defaults to 10.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<u32>,
+    /// How deep the search goes. Omitted means the server's default level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_effort: Option<SearchEffort>,
 }
 
 impl SearchMemoriesRequest {
@@ -52,6 +55,7 @@ impl SearchMemoriesRequest {
             actor_ids: None,
             memory_types: None,
             top_k: None,
+            search_effort: None,
         }
     }
 }
@@ -110,11 +114,18 @@ mod tests {
             actor_ids: None,
             memory_types: None,
             top_k: None,
+            search_effort: None,
         })
         .expect("serialize");
         let object = body.as_object().expect("object");
         assert_eq!(object.len(), 1, "only `query` should be sent: {body}");
-        for key in ["project_ids", "actor_ids", "memory_types", "top_k"] {
+        for key in [
+            "project_ids",
+            "actor_ids",
+            "memory_types",
+            "top_k",
+            "search_effort",
+        ] {
             assert!(!object.contains_key(key), "{key} should be absent: {body}");
         }
     }
@@ -127,6 +138,7 @@ mod tests {
             actor_ids: Some(vec!["act-1".into()]),
             memory_types: Some(vec![MemoryType::Document, MemoryType::Fact]),
             top_k: Some(10),
+            search_effort: Some(SearchEffort::Low),
         })
         .expect("serialize");
 
@@ -137,7 +149,8 @@ mod tests {
                 "project_ids": ["proj-1", "proj-2"],
                 "actor_ids": ["act-1"],
                 "memory_types": ["document", "fact"],
-                "top_k": 10
+                "top_k": 10,
+                "search_effort": "low"
             })
         );
     }
