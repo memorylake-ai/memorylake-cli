@@ -92,3 +92,30 @@ fn list_asks_for_the_named_xattr_keys() {
         "GET /api/v1/drives/items/sc-a:inode-b/children?with_xattr_keys=team%2Cowner HTTP/1.1"
     );
 }
+
+#[test]
+fn delete_with_one_id_uses_the_single_item_endpoint() {
+    let args = ["library", "delete", ITEM];
+    let (request, output) = exchange(VOID, &args);
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "DELETE /api/v1/drives/items/sc-a:inode-b HTTP/1.1"
+    );
+}
+
+#[test]
+fn delete_with_several_ids_posts_one_batch() {
+    let args = ["library", "delete", ITEM, "sc-a:inode-c"];
+    let (request, output) = exchange(VOID, &args);
+    let stdout = assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "POST /api/v1/drives/items/delete HTTP/1.1"
+    );
+    assert_eq!(
+        body_of(&request),
+        json!({"item_ids": [ITEM, "sc-a:inode-c"]})
+    );
+    assert!(stdout.contains("Deleted 2 items"), "{stdout}");
+}

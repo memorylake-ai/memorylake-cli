@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
 use memorylake_core::api::library::{
-    CreateFolderRequest, ListChildrenParams, NameConflictStrategy, ROOT_ALIAS, UploadFileRequest,
-    create_folder, delete_item, delete_xattrs, get_item, list_children, set_xattrs, upload_file,
+    CreateFolderRequest, ListChildrenParams, MAX_BATCH_DELETE_ITEMS, NameConflictStrategy,
+    ROOT_ALIAS, UploadFileRequest, create_folder, delete_item, delete_items, delete_xattrs,
+    get_item, list_children, set_xattrs, upload_file,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
@@ -78,13 +79,16 @@ pub enum LibraryCommand {
         #[command(subcommand)]
         command: XattrCommand,
     },
-    /// Delete a file or folder.
+    /// Delete one or more files or folders.
     ///
     /// Deleting a folder recursively removes everything inside it. This is
-    /// irreversible and is not confirmed.
+    /// irreversible and is not confirmed. Several ids (up to 100) go in one
+    /// batch request; if one cannot be deleted the batch stops there, so
+    /// check the rest with `library get` before retrying.
     Delete {
-        /// Item id to delete.
-        item_id: String,
+        /// Item id(s) to delete.
+        #[arg(required = true, value_name = "ITEM_ID")]
+        item_ids: Vec<String>,
     },
 }
 
@@ -253,10 +257,22 @@ pub fn run(
                 keys.0.join(", ")
             );
         }
-        LibraryCommand::Delete { item_id } => {
-            delete_item(&client, &item_id).context("delete library item")?;
-            println!("Deleted item `{item_id}`");
-        }
+        LibraryCommand::Delete { item_ids } => match item_ids.as_slice() {
+            [item_id] => {
+                delete_item(&client, item_id).context("delete library item")?;
+                println!("Deleted item `{item_id}`");
+            }
+            ids => {
+                if ids.len() > MAX_BATCH_DELETE_ITEMS {
+                    bail!(
+                        "cannot delete {} items at once; the limit is {MAX_BATCH_DELETE_ITEMS}",
+                        ids.len()
+                    );
+                }
+                delete_items(&client, ids).context("delete library items")?;
+                println!("Deleted {} items: {}", ids.len(), ids.join(", "));
+            }
+        },
     }
 
     Ok(())

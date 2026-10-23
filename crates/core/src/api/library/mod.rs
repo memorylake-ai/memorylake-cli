@@ -17,7 +17,7 @@ mod upload;
 mod xattrs;
 
 pub use create::{CreateFileRequest, CreateFolderRequest, PartETag, create_file, create_folder};
-pub use delete::delete_item;
+pub use delete::{MAX_BATCH_DELETE_ITEMS, delete_item, delete_items};
 pub use get::get_item;
 pub use list::{ItemList, ListChildrenParams, list_children};
 pub use types::{

@@ -662,6 +662,19 @@ impl Client {
         Ok(())
     }
 
+    /// Perform a POST with a JSON body whose successful response carries no
+    /// usable payload, for action endpoints answering `ResponseWrapperVoid`.
+    ///
+    /// Envelope handling matches [`Self::post_empty`].
+    pub fn post_empty_with_body<B>(&self, path: &str, body: &B) -> Result<()>
+    where
+        B: Serialize,
+    {
+        let request = self.json_post(path, body, &[])?.build()?;
+        validate_envelope(self.execute(request)?)?;
+        Ok(())
+    }
+
     /// Perform a PUT whose successful response carries no usable payload.
     ///
     /// Envelope handling matches [`Self::post_empty`].
