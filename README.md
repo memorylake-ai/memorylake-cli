@@ -721,6 +721,7 @@ memorylake router chat "Where do I live?" --model gpt-4o-mini --boundary bnd-xxx
 memorylake router responses "Where do I live?" --model gpt-4o-mini --boundary bnd-xxxxxx --stream
 memorylake router messages "Where do I live?" --model claude-haiku-4-5 --boundary bnd-xxxxxx --text
 memorylake router embed "text one" "text two" --model MODEL [--dimensions N]
+memorylake router image "a small red circle" --model gpt-image-1 --size 1024x1024 --quality low [-n N]
 ```
 
 MemoryRouter calls OpenAI- and Anthropic-compatible models with a Boundary's
@@ -736,6 +737,9 @@ provider's own format, with the flags applied on top and the prompt appended to
 its conversation. Output is the provider's JSON; `--text` prints only the reply
 text, `--stream` prints it as it arrives, and `--stream --raw` prints each
 event. The response's `X-Trace-ID` goes to standard error — quote it to support.
+`image` generates pictures (OpenAI Images, no Boundary): `--size`, `--quality`,
+`--output-format`, `--background` and `-n` set the common fields, and the reply's
+`data[].b64_json` holds each base64-encoded picture.
 Calls are billed to your MemoryLake balance.
 
 ### Opendata

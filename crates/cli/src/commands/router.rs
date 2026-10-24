@@ -35,6 +35,8 @@ pub enum RouterCommand {
     Messages(GenerateArgs),
     /// OpenAI Embeddings: one vector per input.
     Embed(EmbedArgs),
+    /// OpenAI Images: generate pictures from a text prompt.
+    Image(ImageArgs),
 }
 
 /// Protocol a model is called through.
@@ -105,6 +107,61 @@ pub struct EmbedArgs {
     body: Option<PathBuf>,
 }
 
+/// Flags of `router image`.
+#[derive(Debug, Args)]
+pub struct ImageArgs {
+    /// Description of the picture. `-` reads it from standard input.
+    #[arg(value_parser = parse_non_empty)]
+    prompt: Option<String>,
+    /// Image model name (e.g. `gpt-image-1`).
+    #[arg(long, value_parser = parse_non_empty)]
+    model: Option<String>,
+    /// Number of pictures to generate.
+    #[arg(short = 'n', long, value_parser = clap::value_parser!(u32).range(1..))]
+    count: Option<u32>,
+    /// Picture size, e.g. `1024x1024`.
+    #[arg(long, value_parser = parse_non_empty)]
+    size: Option<String>,
+    /// Rendering quality.
+    #[arg(long, value_enum)]
+    quality: Option<ImageQuality>,
+    /// File format of the picture.
+    #[arg(long, value_enum)]
+    output_format: Option<ImageFormat>,
+    /// Picture background.
+    #[arg(long, value_enum)]
+    background: Option<ImageBackground>,
+    /// Whole request body as a JSON file (`-` for standard input). The other
+    /// flags are applied on top of it.
+    #[arg(long, value_name = "FILE")]
+    body: Option<PathBuf>,
+}
+
+/// Rendering quality of a generated picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ImageQuality {
+    Low,
+    Medium,
+    High,
+    Auto,
+}
+
+/// File format of a generated picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+    Webp,
+}
+
+/// Background of a generated picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ImageBackground {
+    Transparent,
+    Opaque,
+    Auto,
+}
+
 /// Execute a `router` subcommand.
 pub fn run(
     command: RouterCommand,
@@ -143,6 +200,14 @@ pub fn run(
             let client = api_client(profile, base_url)?;
             let reply = call(&client, Endpoint::Embeddings, None, &Value::Object(body))
                 .context("create embeddings")?;
+            print_trace(&reply);
+            print_json(&reply.value)
+        }
+        RouterCommand::Image(args) => {
+            let body = image_body(args)?;
+            let client = api_client(profile, base_url)?;
+            let reply = call(&client, Endpoint::Images, None, &Value::Object(body))
+                .context("generate images")?;
             print_trace(&reply);
             print_json(&reply.value)
         }
@@ -339,6 +404,47 @@ fn embed_body(args: EmbedArgs) -> Result<Map<String, Value>> {
     Ok(body)
 }
 
+/// A flag value as the API spells it.
+fn value_name<T: ValueEnum>(value: &T) -> String {
+    value
+        .to_possible_value()
+        .map(|v| v.get_name().to_string())
+        .unwrap_or_default()
+}
+
+/// Assemble an Images body from `--body` and the flags, which win over it.
+fn image_body(args: ImageArgs) -> Result<Map<String, Value>> {
+    let mut body = load_body(args.body.as_ref())?;
+    if let Some(model) = args.model {
+        body.insert("model".into(), Value::String(model));
+    }
+    if let Some(prompt) = read_prompt(args.prompt)? {
+        body.insert("prompt".into(), Value::String(prompt));
+    }
+    if let Some(count) = args.count {
+        body.insert("n".into(), json!(count));
+    }
+    if let Some(size) = args.size {
+        body.insert("size".into(), Value::String(size));
+    }
+    if let Some(quality) = args.quality {
+        body.insert("quality".into(), json!(value_name(&quality)));
+    }
+    if let Some(format) = args.output_format {
+        body.insert("output_format".into(), json!(value_name(&format)));
+    }
+    if let Some(background) = args.background {
+        body.insert("background".into(), json!(value_name(&background)));
+    }
+    if !body.get("model").is_some_and(Value::is_string) {
+        bail!("no model given; pass `--model` (see `memorylake router models`)");
+    }
+    if !body.get("prompt").is_some_and(Value::is_string) {
+        bail!("nothing to draw; pass a prompt, or `prompt` in `--body`");
+    }
+    Ok(body)
+}
+
 /// The reply text of a non-streamed reply, its parts joined.
 fn reply_text(endpoint: Endpoint, reply: &Value) -> String {
     let parts: Vec<&str> = match endpoint {
@@ -363,7 +469,7 @@ fn reply_text(endpoint: Endpoint, reply: &Value) -> String {
             .filter(|block| block["type"] == "text")
             .filter_map(|block| block["text"].as_str())
             .collect(),
-        Endpoint::Embeddings => Vec::new(),
+        Endpoint::Embeddings | Endpoint::Images => Vec::new(),
     };
     parts.concat()
 }
@@ -540,6 +646,49 @@ mod tests {
         })
         .unwrap();
         assert_eq!(two["input"], json!(["a", "b"]));
+    }
+
+    #[test]
+    fn image_body_maps_flags_to_the_api_fields() {
+        let body = image_body(ImageArgs {
+            prompt: Some("a red circle".into()),
+            model: Some("gpt-image-1".into()),
+            count: Some(2),
+            size: Some("1024x1024".into()),
+            quality: Some(ImageQuality::Low),
+            output_format: Some(ImageFormat::Webp),
+            background: Some(ImageBackground::Transparent),
+            body: None,
+        })
+        .unwrap();
+        assert_eq!(
+            Value::Object(body),
+            json!({
+                "model": "gpt-image-1", "prompt": "a red circle", "n": 2,
+                "size": "1024x1024", "quality": "low",
+                "output_format": "webp", "background": "transparent"
+            })
+        );
+    }
+
+    #[test]
+    fn image_body_needs_a_model_and_a_prompt() {
+        let empty = || ImageArgs {
+            prompt: None,
+            model: None,
+            count: None,
+            size: None,
+            quality: None,
+            output_format: None,
+            background: None,
+            body: None,
+        };
+        let err = image_body(empty()).unwrap_err();
+        assert!(err.to_string().contains("--model"), "{err}");
+        let mut a = empty();
+        a.model = Some("m".into());
+        let err = image_body(a).unwrap_err();
+        assert!(err.to_string().contains("nothing to draw"), "{err}");
     }
 
     #[test]

@@ -36,6 +36,8 @@ pub enum Endpoint {
     Responses,
     /// OpenAI Embeddings. Takes no Boundary and never streams.
     Embeddings,
+    /// OpenAI Images (generations). Takes no Boundary and never streams.
+    Images,
     /// Anthropic Messages.
     Messages,
 }
@@ -47,6 +49,7 @@ impl Endpoint {
             Self::ChatCompletions => "/router/openai/v1/chat/completions",
             Self::Responses => "/router/openai/v1/responses",
             Self::Embeddings => "/router/openai/v1/embeddings",
+            Self::Images => "/router/openai/v1/images/generations",
             Self::Messages => "/router/anthropic/v1/messages",
         }
     }
