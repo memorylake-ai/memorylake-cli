@@ -125,6 +125,10 @@ pub struct ImportOutcome {
     /// for each to finish, say — cannot get the full set from this response.
     #[serde(default)]
     pub details_truncated: bool,
+    /// Whether the import stopped part-way because the remaining quota could
+    /// not cover the rest of the files; those files are counted as failed.
+    #[serde(default)]
+    pub quota_exceeded: bool,
 }
 
 impl ImportOutcome {
@@ -277,7 +281,18 @@ mod tests {
         assert_eq!(outcome.success_count, 0);
         assert!(outcome.details.is_empty());
         assert!(!outcome.details_truncated);
+        assert!(!outcome.quota_exceeded);
         assert!(outcome.document_ids().is_empty());
+    }
+
+    #[test]
+    fn quota_exceeded_is_decoded() {
+        let outcome: ImportOutcome = serde_json::from_str(
+            r#"{"success_count":1,"failure_count":2,"duplicate_count":0,
+                "details":[],"details_truncated":false,"quota_exceeded":true}"#,
+        )
+        .expect("deserialize quota shape");
+        assert!(outcome.quota_exceeded);
     }
 
     #[test]

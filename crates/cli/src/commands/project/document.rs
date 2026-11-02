@@ -736,6 +736,11 @@ fn import_failures(
                 "; the server truncated the per-file details, so the output above does not name all of them",
             );
         }
+        if outcome.quota_exceeded {
+            reason.push_str(
+                "; the import stopped part-way because the remaining quota could not cover the rest of the files",
+            );
+        }
         failures.push(reason);
     }
 
@@ -1156,7 +1161,17 @@ mod tests {
                 document_id: Some("doc-1".to_string()),
             }],
             details_truncated: truncated,
+            quota_exceeded: false,
         }
+    }
+
+    #[test]
+    fn a_quota_stop_is_named_in_the_failure() {
+        let mut stopped = outcome(1, 2, 0, false);
+        stopped.quota_exceeded = true;
+        let failures = import_failures(&stopped, None, 0);
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].contains("quota"), "{failures:?}");
     }
 
     #[test]
