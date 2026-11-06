@@ -86,6 +86,10 @@ enum UsageCommand {
         /// Only the record of this request id.
         #[arg(long)]
         request_id: Option<String>,
+        /// Only the records of this trace id (the X-Trace-ID response
+        /// header): every charge of that request.
+        #[arg(long)]
+        trace_id: Option<String>,
     },
 }
 
@@ -146,6 +150,7 @@ pub fn run(args: UsageArgs, profile: Option<String>, base_url: Option<String>) -
             kind,
             principal_ids,
             request_id,
+            trace_id,
         }) => {
             let data = list_usage_records(
                 &client,
@@ -158,6 +163,7 @@ pub fn run(args: UsageArgs, profile: Option<String>, base_url: Option<String>) -
                     kind,
                     principal_ids,
                     request_id,
+                    trace_id,
                 },
             )
             .context("list usage records")?;

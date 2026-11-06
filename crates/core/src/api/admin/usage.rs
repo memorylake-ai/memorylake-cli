@@ -49,6 +49,9 @@ pub struct ListUsageRecordsParams {
     pub principal_ids: Vec<String>,
     /// Only the record of this request id.
     pub request_id: Option<String>,
+    /// Only the records of this trace id (the `X-Trace-ID` response header):
+    /// every charge of that request.
+    pub trace_id: Option<String>,
 }
 
 /// Return the team's quota snapshot plus consumption over the requested
@@ -89,5 +92,6 @@ pub fn list_usage_records(
     push_opt(&mut query, "kind", params.kind.as_ref());
     push_each(&mut query, "principal_id", &params.principal_ids);
     push_opt(&mut query, "request_id", params.request_id.as_ref());
+    push_opt(&mut query, "trace_id", params.trace_id.as_ref());
     client.get_data(path::USAGE_RECORDS, &query)
 }

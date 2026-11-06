@@ -62,6 +62,10 @@ pub enum ApiKeyCommand {
         /// Fallback model-routing group, same rule as --group.
         #[arg(long)]
         backup_group: Option<String>,
+        /// Issue a read-only key: requests that create, change or delete
+        /// anything are refused with 403 API_KEY_READ_ONLY.
+        #[arg(long)]
+        read_only: bool,
         /// Retrying with the same value replays the first result instead of
         /// creating a second key. A replay does not carry the key itself.
         #[arg(long, value_parser = parse_non_blank)]
@@ -104,13 +108,24 @@ pub enum ApiKeyCommand {
         /// Fallback model-routing group; "" clears it.
         #[arg(long)]
         backup_group: Option<String>,
+        /// true makes the key read-only (writes are refused with 403
+        /// API_KEY_READ_ONLY); false gives it full access. The key making the
+        /// request cannot make itself read-only.
+        #[arg(long, value_name = "BOOL")]
+        read_only: Option<bool>,
     },
     /// Replace a key's material and print the new value once. The previous
-    /// value stops working immediately.
+    /// value stops working immediately unless --old-key-expires-in keeps it
+    /// for a while.
     Rotate {
         /// API key id (from `api-key list`).
         #[arg(value_parser = parse_non_blank)]
         id: String,
+        /// When the replaced key stops working: now (default), or 1h / 24h /
+        /// 7d during which both keys work. Rotating again ends a replaced
+        /// key at once.
+        #[arg(long, value_parser = ["now", "1h", "24h", "7d"])]
+        old_key_expires_in: Option<String>,
         /// Retrying with the same value replays the first result instead of
         /// minting a second key. A replay does not carry the key itself.
         #[arg(long, value_parser = parse_non_blank)]
@@ -146,13 +161,14 @@ pub fn run(
         no_ip_restriction: false,
         group: None,
         backup_group: None,
+        read_only: None,
         ..
     } = &command
         && allowed_ips.is_empty()
     {
         bail!(
             "nothing to update; pass --name, --status, --expires-at, --allowed-ip, \
-             --no-ip-restriction, --group or --backup-group"
+             --no-ip-restriction, --group, --backup-group or --read-only"
         );
     }
 
@@ -198,6 +214,7 @@ pub fn run(
             allowed_ips,
             group,
             backup_group,
+            read_only,
             idempotency_key,
         } => {
             let data = create_api_key(
@@ -209,6 +226,7 @@ pub fn run(
                     allowed_ips: (!allowed_ips.is_empty()).then_some(allowed_ips),
                     group,
                     backup_group,
+                    read_only: read_only.then_some(true),
                 },
                 idempotency_key.as_deref(),
             )
@@ -229,6 +247,7 @@ pub fn run(
             no_ip_restriction,
             group,
             backup_group,
+            read_only,
         } => {
             let allowed_ips = if no_ip_restriction {
                 Some(Vec::new())
@@ -245,6 +264,7 @@ pub fn run(
                     allowed_ips,
                     group,
                     backup_group,
+                    read_only,
                 },
             )
             .with_context(|| format!("update API key `{id}`"))?;
@@ -252,10 +272,16 @@ pub fn run(
         }
         ApiKeyCommand::Rotate {
             id,
+            old_key_expires_in,
             idempotency_key,
         } => {
-            let data = rotate_api_key(&client, &id, idempotency_key.as_deref())
-                .with_context(|| format!("rotate API key `{id}`"))?;
+            let data = rotate_api_key(
+                &client,
+                &id,
+                old_key_expires_in.as_deref(),
+                idempotency_key.as_deref(),
+            )
+            .with_context(|| format!("rotate API key `{id}`"))?;
             print_json(&data)?;
             warn_if_key_withheld(
                 data.key.as_deref(),

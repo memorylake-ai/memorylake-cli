@@ -21,7 +21,7 @@ use super::{api_client, print_json};
 /// MemoryRouter subcommands.
 #[derive(Debug, Subcommand)]
 pub enum RouterCommand {
-    /// List the models you can call and their prices, with each model's protocol in `provider_type`.
+    /// List the models you can call and their prices, with the paths each one can be called at in `endpoints` and its protocols in `protocols`.
     Models {
         /// Show only the models of one protocol.
         #[arg(long, value_enum)]
@@ -186,7 +186,12 @@ pub fn run(
                         .as_array()
                         .into_iter()
                         .flatten()
-                        .filter(|model| model["provider_type"] == key)
+                        .filter(|model| match model["protocols"].as_array() {
+                            // A model can be reached over several protocols;
+                            // older catalogs only carry `provider_type`.
+                            Some(protocols) => protocols.iter().any(|p| p == key),
+                            None => model["provider_type"] == key,
+                        })
                         .collect();
                     print_json(&json!(items))
                 }

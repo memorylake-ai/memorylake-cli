@@ -31,6 +31,11 @@ pub struct CreateApiKeyRequest {
     /// Fallback model-routing group, same rule as `group`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_group: Option<String>,
+    /// `true` issues a read-only key: requests that create, change or delete
+    /// anything are refused with 403 `API_KEY_READ_ONLY`. Omit for full
+    /// access.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
 }
 
 /// Request body for changing an API key. Only the fields set are sent, and
@@ -57,6 +62,10 @@ pub struct UpdateApiKeyRequest {
     /// Fallback model-routing group; `""` clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_group: Option<String>,
+    /// `true` makes the key read-only, `false` gives it full access again.
+    /// The key making the request cannot make itself read-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
 }
 
 /// Query parameters for listing API keys.
@@ -122,17 +131,23 @@ pub fn create_api_key(
 }
 
 /// Replace the key material and return the new value once. The previous value
-/// stops working immediately.
+/// stops working immediately unless `old_key_expires_in` (`now`, `1h`, `24h`
+/// or `7d`) keeps it alive for that long.
 pub fn rotate_api_key(
     client: &Client,
     id: &str,
+    old_key_expires_in: Option<&str>,
     idempotency_key: Option<&str>,
 ) -> Result<ApiKeyCreated> {
-    // The endpoint takes no body; an empty object keeps the request valid
-    // JSON under the client's `application/json` default.
+    // An empty object keeps the request valid JSON under the client's
+    // `application/json` default when no option is set.
+    let body = match old_key_expires_in {
+        Some(value) => serde_json::json!({ "old_key_expires_in": value }),
+        None => serde_json::json!({}),
+    };
     client.post_data_with_headers(
         &path::api_key_rotate(id),
-        &serde_json::json!({}),
+        &body,
         &idempotency_headers(idempotency_key),
     )
 }

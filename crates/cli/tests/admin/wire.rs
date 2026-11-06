@@ -373,6 +373,8 @@ fn usage_records_filters_ride_the_query_string() {
         "prin-2",
         "--request-id",
         "req-9",
+        "--trace-id",
+        "trace-7",
         "--page-size",
         "1",
     ];
@@ -383,7 +385,7 @@ fn usage_records_filters_ride_the_query_string() {
         request_line(&request),
         "GET /admin/v1/usage/records?page_size=1&start_time=1791000000&end_time=1791800000\
          &model=gpt-5.4&model=files_process&kind=model_call&principal_id=prin-1\
-         &principal_id=prin-2&request_id=req-9 HTTP/1.1"
+         &principal_id=prin-2&request_id=req-9&trace_id=trace-7 HTTP/1.1"
     );
     assert!(stdout.contains(r#""used_tokens": 9578"#), "{stdout}");
     assert!(
@@ -715,4 +717,37 @@ fn fields_the_cli_does_not_model_are_printed_as_sent() {
 
     assert!(stdout.contains(r#""region": "us-east""#), "{stdout}");
     assert!(stdout.contains(r#""seats": 5"#), "{stdout}");
+}
+
+#[test]
+fn api_key_create_and_update_send_read_only() {
+    let created = r#"{"success":true,"data":{"id":"42","name":"ci","key_prefix":"abc12345","key":"sk-abc","read_only":true}}"#;
+    let args = ["api-key", "create", "--name", "ci", "--read-only"];
+    let (request, output) = exchange(created, &args);
+    assert_success(&output, &args);
+    assert_eq!(request_line(&request), "POST /admin/v1/api-keys HTTP/1.1");
+    assert!(request.contains(r#""read_only":true"#), "{request}");
+
+    let updated = r#"{"success":true,"data":{"id":"42","name":"ci","key_prefix":"abc12345","status":"enabled","created_at":1700000000}}"#;
+    let args = ["api-key", "update", "42", "--read-only", "false"];
+    let (request, output) = exchange(updated, &args);
+    assert_success(&output, &args);
+    assert_eq!(
+        request_line(&request),
+        "PATCH /admin/v1/api-keys/42 HTTP/1.1"
+    );
+    assert!(request.contains(r#"{"read_only":false}"#), "{request}");
+}
+
+#[test]
+fn api_key_rotate_sends_old_key_expires_in() {
+    let created = r#"{"success":true,"data":{"id":"42","name":"ci","key_prefix":"sk-new12","key":"sk-new1234567890","previous_key_expires_at":1760000000}}"#;
+    let args = ["api-key", "rotate", "42", "--old-key-expires-in", "24h"];
+    let (request, output) = exchange(created, &args);
+    let stdout = assert_success(&output, &args);
+    assert!(
+        request.contains(r#"{"old_key_expires_in":"24h"}"#),
+        "{request}"
+    );
+    assert!(stdout.contains("previous_key_expires_at"), "{stdout}");
 }
