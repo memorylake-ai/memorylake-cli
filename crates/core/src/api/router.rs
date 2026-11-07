@@ -73,8 +73,9 @@ pub struct Traced<T> {
 }
 
 /// List the models MemoryRouter can call, with prices, as one array sorted by
-/// name; each model's `provider_type` (`openai`, `anthropic`) says which base
-/// URL reaches it.
+/// name; each model's `endpoints` list the paths it can be called at and
+/// `protocols` (`openai`, `anthropic`) the base URLs that reach it
+/// (`provider_type` is the first protocol).
 ///
 /// The catalog answers in the MemoryLake format (`data.items`). An older
 /// deployment that still groups models by protocol is flattened to the same

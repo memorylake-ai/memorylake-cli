@@ -30,6 +30,22 @@ fn models_calls_the_catalog_and_filters_by_protocol() {
 }
 
 #[test]
+fn models_protocol_filter_uses_the_protocols_list() {
+    let catalog = r#"{"success":true,"data":{"items":[{"name":"a","endpoints":["/anthropic/v1/messages"],"protocols":["anthropic"],"provider_type":"anthropic"},{"name":"b","endpoints":["/openai/v1/chat/completions","/anthropic/v1/messages"],"protocols":["openai","anthropic"],"provider_type":"openai"}]}}"#;
+    let args = ["router", "models", "--protocol", "anthropic"];
+    let (_, output) = exchange(catalog, &args);
+    let stdout = assert_success(&output, &args);
+    let printed: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    let names: Vec<_> = printed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["a", "b"]);
+}
+
+#[test]
 fn chat_sends_the_boundary_as_a_query_parameter() {
     let args = [
         "router",
