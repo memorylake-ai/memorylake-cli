@@ -195,7 +195,7 @@ impl Drop for StubServer {
 }
 
 /// Read one complete HTTP request (head plus `content-length` body).
-fn read_http_request(stream: &mut TcpStream) -> String {
+pub fn read_http_request(stream: &mut TcpStream) -> String {
     let mut data = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {

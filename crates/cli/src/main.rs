@@ -241,7 +241,46 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose)?;
-    run(cli).map_err(explain_env_key_without_profile)
+    // A login that is turned away is about the key being offered, and says so
+    // itself; every other command is using a key accepted earlier.
+    let logging_in = matches!(
+        cli.command,
+        Commands::Auth {
+            command: AuthCommand::Login { .. }
+        }
+    );
+    run(cli)
+        .map_err(explain_env_key_without_profile)
+        .map_err(|err| {
+            if logging_in {
+                err
+            } else {
+                explain_rejected_key(err)
+            }
+        })
+}
+
+/// A key that worked before and is now refused has usually expired or been
+/// revoked: one created by a browser login runs out on a date the server set.
+/// The API's own words for it (`service account not found`) point nowhere, so
+/// say what to do.
+fn explain_rejected_key(err: anyhow::Error) -> anyhow::Error {
+    let rejected = err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref(),
+            Some(CoreError::Api { code, message })
+                if code.as_deref() == Some("UNAUTHORIZE")
+                    || message.starts_with("API key was rejected by the server")
+        )
+    });
+    if rejected {
+        err.context(
+            "MemoryLake did not accept the API key in use; it may have expired or been \
+             revoked. Run `memorylake auth login` to log in again",
+        )
+    } else {
+        err
+    }
 }
 
 /// `MEMORYLAKE_API_KEY` alone is not a session: a profile has to be selected.

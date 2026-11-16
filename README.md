@@ -98,7 +98,7 @@ build)`), so it cannot be mistaken for one.
 </p>
 
 ```bash
-memorylake auth login          # pick an endpoint, then paste your API key
+memorylake auth login          # pick an endpoint, then approve the login in your browser
 memorylake workspace use       # pick a default workspace from a list
 
 memorylake project create --name "Research" --custom-id research-1
@@ -126,7 +126,9 @@ Aliases: `ws` = `workspace`, `proj` = `project`, `lib` = `library`,
 ### Auth
 
 ```bash
-memorylake auth login                          # interactive: endpoint, then API key
+memorylake auth login                          # interactive: endpoint, then browser or API key
+memorylake auth login --browser [--base-url URL] [--profile NAME] [--key-name NAME]
+memorylake auth login --no-browser …           # print the login URL instead of opening it
 memorylake auth login --api-key sk-… [--base-url URL] [--profile NAME]
 memorylake auth status                         # who am I, and where did it come from
 memorylake auth switch <profile>
@@ -134,8 +136,23 @@ memorylake auth refresh
 memorylake auth logout
 ```
 
-Create an API key in the MemoryLake console first; see
-[Authentication and API keys](https://docs.memorylake.ai/authentication).
+**Browser login** needs no key in hand: approve the login in the browser, pick
+a team, and MemoryLake creates an API key for this machine. It appears in the
+console's key list as `memorylake CLI · <hostname>` (or `--key-name`), expires
+on a date the server sets, which `auth status` shows, and is revoked by
+`auth logout`. Logging in again replaces it and revokes the old one.
+
+`--no-browser` is for a program that opens the URL itself, or a machine whose
+browser is elsewhere: the URL is the first line on standard output, and the
+command then waits (`--timeout SECONDS`, 300 by default) for the login to be
+approved. The browser is sent back to `127.0.0.1` on this machine, so it has to
+run where the command does.
+
+**API-key login** stores a key you already have; create one in the MemoryLake
+console, see [Authentication and API keys](https://docs.memorylake.ai/authentication).
+It is the way in for CI, and for a deployment that does not offer browser login.
+A key stored this way is yours to manage: `auth logout` forgets it without
+revoking it.
 
 Interactive login offers the **Global** (`app.memorylake.ai`) and **China**
 (`app.memorylake.cn`) endpoints, or a URL you type. They are separate
