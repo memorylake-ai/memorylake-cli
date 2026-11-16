@@ -14,6 +14,7 @@
 mod delete;
 mod download;
 mod get;
+mod graph;
 mod import;
 mod inspect;
 mod list;
@@ -24,6 +25,10 @@ mod types;
 pub use delete::{DeleteDocumentsRequest, delete_documents};
 pub use download::download_document;
 pub use get::get_document;
+pub use graph::{
+    ListGraphChildrenParams, get_document_graph, get_graph_node, get_graph_schema,
+    list_graph_children,
+};
 pub use import::{ImportDocumentsRequest, import_documents};
 pub use inspect::{
     DocumentInspection, INSPECT_MAX_DOCUMENTS, InspectDocumentsRequest, InspectedDocument,

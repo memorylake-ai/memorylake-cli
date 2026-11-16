@@ -44,6 +44,43 @@ pub(super) fn reload_document_path(
     )
 }
 
+/// Path to a document's graph overview.
+pub(super) fn graph_path(workspace_id: &str, project_id: &str, document_id: &str) -> String {
+    format!(
+        "{}/graph",
+        document_path(workspace_id, project_id, document_id)
+    )
+}
+
+/// Path to one node of a document's graph.
+pub(super) fn graph_node_path(
+    workspace_id: &str,
+    project_id: &str,
+    document_id: &str,
+    node_id: &str,
+) -> String {
+    format!(
+        "{}/nodes/{}",
+        graph_path(workspace_id, project_id, document_id),
+        encode_segment(node_id)
+    )
+}
+
+/// Path to one list relation (edge) of a graph node.
+pub(super) fn graph_children_path(
+    workspace_id: &str,
+    project_id: &str,
+    document_id: &str,
+    node_id: &str,
+    edge: &str,
+) -> String {
+    format!(
+        "{}/children/{}",
+        graph_node_path(workspace_id, project_id, document_id, node_id),
+        encode_segment(edge)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +137,22 @@ mod tests {
         assert_eq!(
             document_path("ws-1", "proj-1", "sc-a:inode-b"),
             "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/sc-a:inode-b"
+        );
+    }
+
+    #[test]
+    fn graph_paths_nest_under_the_document() {
+        assert_eq!(
+            graph_path("ws-1", "proj-1", "doc-1"),
+            "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/doc-1/graph"
+        );
+        assert_eq!(
+            graph_node_path("ws-1", "proj-1", "doc-1", "chunk-9"),
+            "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/doc-1/graph/nodes/chunk-9"
+        );
+        assert_eq!(
+            graph_children_path("ws-1", "proj-1", "doc-1", "txt-1", "paragraphs"),
+            "/api/v3/workspaces/ws-1/projects/proj-1/memories/documents/doc-1/graph/nodes/txt-1/children/paragraphs"
         );
     }
 }

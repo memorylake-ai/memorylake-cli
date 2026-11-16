@@ -19,8 +19,9 @@ use clap::Subcommand;
 use memorylake_core::api::documents::{
     DOCUMENT_STATUS_ERROR, DeleteDocumentsRequest, DocumentInspection, INSPECT_MAX_DOCUMENTS,
     ImportDocumentsRequest, ImportOutcome, InspectDocumentsRequest, ListDocumentsParams,
-    delete_documents, download_document, get_document, import_documents, inspect_documents,
-    is_terminal_status, list_documents, reload_document,
+    ListGraphChildrenParams, delete_documents, download_document, get_document, get_document_graph,
+    get_graph_node, get_graph_schema, import_documents, inspect_documents, is_terminal_status,
+    list_documents, list_graph_children, reload_document,
 };
 use memorylake_core::api::library::{Item, ItemList, ListChildrenParams, get_item, list_children};
 use memorylake_core::{Client, Paths};
@@ -180,6 +181,14 @@ pub enum DocumentCommand {
         /// Document id.
         document_id: String,
     },
+    /// Browse a document's parsed graph: its root, nodes and relations.
+    ///
+    /// Only for accounts with the document graph enabled; others get 403
+    /// `FEATURE_NOT_ENABLED`. Node ids change whenever the document is
+    /// re-parsed. Storage-backed fields come back as download URLs valid for
+    /// 5 hours; treat the output as a credential.
+    #[command(subcommand)]
+    Graph(GraphCommand),
     /// Remove documents from a project.
     ///
     /// This cannot be undone: the indexed content and every memory derived from
@@ -198,6 +207,81 @@ pub enum DocumentCommand {
         #[arg(required = true, value_name = "DOCUMENT_ID")]
         document_ids: Vec<String>,
     },
+}
+
+/// `project document graph` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum GraphCommand {
+    /// Show a document's graph overview: root node and node counts per type.
+    Overview {
+        /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Project containing the document.
+        #[arg(long)]
+        project: String,
+        /// Document id.
+        document_id: String,
+        /// Also return the first N children (0-100) of each of the root's list relations.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=100))]
+        preview: Option<u32>,
+    },
+    /// Show one node: its fields, parent, links and child counts.
+    ///
+    /// A block id from a search hit (`paragraph_id`, `table_id`,
+    /// `figure_entity_id`) is a valid node id.
+    Node {
+        /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Project containing the document.
+        #[arg(long)]
+        project: String,
+        /// Document id.
+        document_id: String,
+        /// Node id.
+        node_id: String,
+        /// Comma-separated one-to-one links to return beside the node (e.g. `summary`).
+        #[arg(long)]
+        expand: Option<String>,
+    },
+    /// List one page of the children under a node's list relation.
+    Children {
+        /// Workspace id that owns the project.
+        ///
+        /// Defaults to the workspace remembered by `workspace use`.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Project containing the document.
+        #[arg(long)]
+        project: String,
+        /// Document id.
+        document_id: String,
+        /// Node id.
+        node_id: String,
+        /// Relation name, one of the node's `edges` (e.g. `paragraphs`, `chunks`).
+        edge: String,
+        /// Most children in this page (1-500).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=500))]
+        count: Option<u32>,
+        /// Continuation token from a previous page.
+        #[arg(long)]
+        continuation_token: Option<String>,
+        /// Leave out each child's own child counts (cheaper for leaf nodes).
+        #[arg(long)]
+        no_edge_counts: bool,
+        /// Comma-separated one-to-one links of the children to return beside the page.
+        #[arg(long)]
+        expand: Option<String>,
+    },
+    /// Show the catalog of every node type: fields, links and relations.
+    ///
+    /// Platform-wide, not tied to a document.
+    Schema,
 }
 
 /// Execute a `project document` subcommand.
@@ -319,6 +403,7 @@ pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentComma
             );
             Ok(())
         }
+        DocumentCommand::Graph(command) => run_graph(client, paths, profile, command),
         DocumentCommand::Delete {
             workspace,
             project,
@@ -342,6 +427,72 @@ pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentComma
             Ok(())
         }
     }
+}
+
+fn run_graph(client: &Client, paths: &Paths, profile: &str, command: GraphCommand) -> Result<()> {
+    let data = match command {
+        GraphCommand::Overview {
+            workspace,
+            project,
+            document_id,
+            preview,
+        } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
+            get_document_graph(client, &workspace, &project, &document_id, preview)
+                .with_context(|| format!("get graph of document `{document_id}`"))?
+        }
+        GraphCommand::Node {
+            workspace,
+            project,
+            document_id,
+            node_id,
+            expand,
+        } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
+            get_graph_node(
+                client,
+                &workspace,
+                &project,
+                &document_id,
+                &node_id,
+                expand.as_deref(),
+            )
+            .with_context(|| format!("get graph node `{node_id}`"))?
+        }
+        GraphCommand::Children {
+            workspace,
+            project,
+            document_id,
+            node_id,
+            edge,
+            count,
+            continuation_token,
+            no_edge_counts,
+            expand,
+        } => {
+            let workspace = require_workspace(paths, profile, workspace)?;
+            list_graph_children(
+                client,
+                &workspace,
+                &project,
+                &document_id,
+                &node_id,
+                &edge,
+                &ListGraphChildrenParams {
+                    count,
+                    continuation_token,
+                    with_edge_counts: no_edge_counts.then_some(false),
+                    expand,
+                },
+            )
+            .with_context(|| format!("list `{edge}` of graph node `{node_id}`"))?
+        }
+        GraphCommand::Schema => {
+            get_graph_schema(client).context("get the document graph schema")?
+        }
+    };
+    println!("{}", serde_json::to_string_pretty(&data)?);
+    Ok(())
 }
 
 /// Requested ids the inspect response said nothing about, in request order,
