@@ -3,6 +3,12 @@
 //! Read-only and error paths only. There is no test database to point a
 //! connection at, and production rejected every create while this was written
 //! (HTTP 500, 2026-10-09), so nothing here creates a connection.
+//!
+//! Skipped for now: MemoryLake has taken the whole nl2sql feature (database
+//! connections, datasources, database memories) offline in production for
+//! security reasons (announced 2026-11-16), and its endpoints answer HTTP 500
+//! in the meantime, on .ai and .cn alike. Each test is `#[ignore]`d rather than deleted; drop the
+//! attribute when the feature is back, or run them with `-- --ignored`.
 
 use std::fs;
 use std::path::Path;
@@ -21,6 +27,7 @@ fn login_default(home: &Path, api_key: &str) {
 }
 
 #[test]
+#[ignore = "nl2sql is offline in production (security, announced 2026-11-16); run with --ignored once it is back"]
 fn db_connection_list_decodes() {
     let api_key = require_api_key();
     let home = temp_home();
@@ -34,6 +41,7 @@ fn db_connection_list_decodes() {
 }
 
 #[test]
+#[ignore = "nl2sql is offline in production (security, announced 2026-11-16); run with --ignored once it is back"]
 fn db_connection_get_unknown_is_not_found() {
     let api_key = require_api_key();
     let home = temp_home();
@@ -50,6 +58,7 @@ fn db_connection_get_unknown_is_not_found() {
 }
 
 #[test]
+#[ignore = "nl2sql is offline in production (security, announced 2026-11-16); run with --ignored once it is back"]
 fn db_connection_test_against_an_unresolvable_host_fails_cleanly() {
     // `.invalid` is reserved never to resolve (RFC 6761), so the server's
     // probe fails at name lookup without connecting anywhere, its own

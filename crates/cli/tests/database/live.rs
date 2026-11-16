@@ -4,6 +4,12 @@
 //! connection — not available on production (2026-10-09). So these cover the
 //! read path on an empty project and the error paths only. The project is
 //! created in the account's default workspace and removed again by a guard.
+//!
+//! Skipped for now: MemoryLake has taken the whole nl2sql feature (database
+//! connections, datasources, database memories) offline in production for
+//! security reasons (announced 2026-11-16), and its endpoints answer HTTP 500
+//! in the meantime, on .ai and .cn alike. Each test is `#[ignore]`d rather than deleted; drop the
+//! attribute when the feature is back, or run them with `-- --ignored`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,6 +108,7 @@ impl Drop for ScratchProject {
 }
 
 #[test]
+#[ignore = "nl2sql is offline in production (security, announced 2026-11-16); run with --ignored once it is back"]
 fn database_memory_reads_and_error_paths() {
     let api_key = require_api_key();
     let home = temp_home();
