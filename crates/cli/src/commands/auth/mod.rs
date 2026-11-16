@@ -52,8 +52,14 @@ pub enum AuthCommand {
         /// list it (defaults to `memorylake CLI · <hostname>`).
         #[arg(long, value_name = "NAME", conflicts_with = "api_key")]
         key_name: Option<String>,
-        /// Seconds a browser login waits to be approved.
-        #[arg(long, value_name = "SECONDS", default_value_t = browser::DEFAULT_TIMEOUT_SECS)]
+        /// Seconds a browser login waits to be approved (at most a day).
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = browser::DEFAULT_TIMEOUT_SECS,
+            value_parser = clap::value_parser!(u64).range(..=browser::MAX_TIMEOUT_SECS),
+            conflicts_with = "api_key"
+        )]
         timeout: u64,
     },
     /// Remove stored credentials for a profile.

@@ -16,6 +16,12 @@ use memorylake_core::browser_login::{
 /// How long a login waits for the browser unless told otherwise, in seconds.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
+/// The longest a login may be told to wait, in seconds: a day.
+///
+/// A bound at all, because the wait is added to the clock to get a deadline
+/// and a value near the top of the range overflows it.
+pub const MAX_TIMEOUT_SECS: u64 = 86_400;
+
 /// What one browser login needs to know.
 pub struct BrowserLogin<'a> {
     /// API base URL of the deployment to log in to.

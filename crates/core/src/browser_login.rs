@@ -406,6 +406,17 @@ impl LoginClient {
         tracing::debug!(status = status.as_u16(), "revoke endpoint answered");
 
         match status {
+            // Success counts only when the revoke endpoint is what answered.
+            // A deployment without it can serve its web app for any path, as
+            // a 200 carrying a page, and the key is then as valid as before.
+            status if status.is_success() && !answered_by_an_endpoint(&body) => Err(Error::Api {
+                message: format!(
+                    "could not revoke the API key: {} answered HTTP {status} with something \
+                     other than the revoke endpoint's reply",
+                    self.origin
+                ),
+                code: None,
+            }),
             status if status.is_success() => Ok(Revocation::Revoked),
             // A key the server no longer recognizes is as revoked as it gets.
             StatusCode::UNAUTHORIZED => Ok(Revocation::Revoked),
@@ -448,6 +459,12 @@ pub fn authorization_origin(base_url: &str) -> Result<String> {
         ));
     }
     Ok(url.origin().ascii_serialization())
+}
+
+/// Whether a successful response's body can have come from a login endpoint:
+/// nothing at all (`204 No Content`), or JSON. A web page is neither.
+fn answered_by_an_endpoint(body: &str) -> bool {
+    body.trim().is_empty() || serde_json::from_str::<Value>(body).is_ok()
 }
 
 fn bearer(secret: &str) -> Result<reqwest::header::HeaderValue> {
@@ -957,6 +974,31 @@ mod tests {
                 .contains("authorization: bearer sk-issued")
         );
         assert!(request.body.is_empty());
+    }
+
+    #[test]
+    fn a_web_page_is_not_a_revocation() {
+        // What a deployment without the endpoint answers when its web app
+        // takes every unknown path: success, and a page.
+        let page = "<!doctype html><html><title>Loading...</title></html>";
+        let (base_url, _server) = one_shot_server(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{page}",
+            page.len()
+        ));
+        let client = LoginClient::new(&base_url).expect("client");
+        let (message, _) = api_error(client.revoke_api_key("sk-still-valid"));
+        assert!(message.contains("could not revoke"), "{message}");
+        assert!(!message.contains("<html>"), "{message}");
+        assert!(!message.contains("sk-still-valid"), "{message}");
+
+        // An empty success is how an endpoint says "done" without a body.
+        let (base_url, _server) =
+            one_shot_server("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_string());
+        let client = LoginClient::new(&base_url).expect("client");
+        assert_eq!(
+            client.revoke_api_key("sk").expect("revoke"),
+            Revocation::Revoked
+        );
     }
 
     #[test]

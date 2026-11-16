@@ -597,6 +597,31 @@ fn logout_still_logs_out_when_the_key_cannot_be_revoked() {
 }
 
 #[test]
+fn a_wait_longer_than_a_day_is_refused_by_the_parser() {
+    // The wait is added to the clock for a deadline; the largest values
+    // overflowed it and took the command down instead of being turned away.
+    let home = temp_home();
+    let args = [
+        "auth",
+        "login",
+        "--no-browser",
+        "--base-url",
+        "http://127.0.0.1:1/openapi/memorylake",
+        "--timeout",
+        "18446744073709551615",
+    ];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("--timeout"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+
+    // A wait says nothing about a key that is pasted in.
+    let args = ["auth", "login", "--api-key", "sk-x", "--timeout", "5"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(err.contains("cannot be used with"), "{err}");
+    let _ = fs::remove_dir_all(&home);
+}
+
+#[test]
 fn logout_of_a_pasted_key_asks_the_deployment_nothing() {
     // A key the user pasted in is theirs: it may be in use elsewhere, and it
     // is never sent to an endpoint it was not created by. The unreachable
