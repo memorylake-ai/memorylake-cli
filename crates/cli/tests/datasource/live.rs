@@ -3,6 +3,12 @@
 //! Read-only and error paths only: a datasource needs a working database
 //! connection, which production could not provide (2026-10-09). The tests use
 //! the account's default workspace rather than creating one.
+//!
+//! Skipped for now: MemoryLake has taken the whole nl2sql feature (database
+//! connections, datasources, database memories) offline in production for
+//! security reasons (announced 2026-11-16), and its endpoints answer HTTP 500
+//! in the meantime, on .ai and .cn alike. Each test is `#[ignore]`d rather than deleted; drop the
+//! attribute when the feature is back, or run them with `-- --ignored`.
 
 use std::fs;
 use std::path::Path;
@@ -48,6 +54,7 @@ pub fn default_workspace(home: &Path) -> String {
 }
 
 #[test]
+#[ignore = "nl2sql is offline in production (security, announced 2026-11-16); run with --ignored once it is back"]
 fn datasource_list_decodes() {
     let api_key = require_api_key();
     let home = temp_home();
@@ -69,6 +76,7 @@ fn datasource_list_decodes() {
 }
 
 #[test]
+#[ignore = "nl2sql is offline in production (security, announced 2026-11-16); run with --ignored once it is back"]
 fn unknown_datasources_and_connections_are_not_found() {
     let api_key = require_api_key();
     let home = temp_home();

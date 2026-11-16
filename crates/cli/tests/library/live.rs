@@ -11,8 +11,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::common::{
-    assert_failure, assert_success, live_base_url, login_args, require_api_key, run, scratch_file,
-    temp_home, unique_name,
+    assert_failure, assert_success, live_base_url, login_args, require_api_key, run,
+    run_with_input, scratch_file, temp_home, unique_name,
 };
 
 /// Large enough to span more than one upload part (parts were 5 MiB at this
@@ -64,10 +64,26 @@ fn multipart_upload_get_and_cascading_delete() {
     let (dir, path) = scratch_file("cli-multipart", MULTIPART_BYTES);
     let source = path.to_str().expect("utf-8 scratch path");
     let args = ["lib", "upload", source, "--parent", folder.as_str()];
-    let uploaded = json(&assert_success(&run(&home, &args), &args));
+    // The debug log is the only place the CLI says how the server split the
+    // file, so it is turned on for this one command and read below.
+    let output = run_with_input(&home, &args, "", &[("RUST_LOG", "debug")]);
+    let uploaded = json(&assert_success(&output, &args));
     let file_id = field(&uploaded, "item_id").to_string();
     assert_eq!(field(&uploaded, "name"), "payload.bin");
     let _ = fs::remove_dir_all(&dir);
+
+    // One part would mean the multi-part assembly path was never exercised.
+    // Counted from what the CLI did rather than read off the stored ETag: the
+    // server used to return the storage layer's composite `<hash>-<parts>`
+    // there and now returns a hash of the whole file, which says nothing
+    // about parts.
+    let parts = String::from_utf8_lossy(&output.stderr)
+        .matches("uploading part")
+        .count();
+    assert!(
+        parts > 1,
+        "expected the file to go up in several parts, the log shows {parts}"
+    );
 
     let args = ["library", "get", file_id.as_str()];
     let fetched = json(&assert_success(&run(&home, &args), &args));
@@ -77,13 +93,6 @@ fn multipart_upload_get_and_cascading_delete() {
         "uploaded size must match the local file exactly"
     );
     assert_eq!(fetched.get("type").and_then(Value::as_str), Some("file"));
-    // A composite ETag ending in `-1` would mean the file went up as a single
-    // part and the multi-part assembly path was never exercised.
-    let etag = field(&fetched, "etag");
-    assert!(
-        etag.rsplit_once('-').is_some_and(|(_, n)| n != "1"),
-        "expected a multi-part composite etag, got {etag}"
-    );
 
     // The file must be visible in its parent listing.
     let args = ["lib", "list", folder.as_str()];
