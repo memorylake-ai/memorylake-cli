@@ -291,10 +291,14 @@ jobs:
         with:
           name: lcov
           path: lcov.info
+      # Best effort: the tests above are what this job is for, and Codecov
+      # turning an upload away (it reported the repository as deactivated on
+      # 2026-11-16) is not a reason to fail every pull request. The lcov file
+      # is still attached to the run as an artifact, one step up.
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           slug: memorylake-ai/memorylake-cli
