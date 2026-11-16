@@ -86,13 +86,12 @@ fn multipart_upload_round_trips_through_get() {
         Some(MULTIPART_BYTES),
         "every byte must land exactly once"
     );
-    // S3 composite ETags end in `-<part count>`; anything else means the file
-    // was assembled from a single part and the multipart path went untested.
-    let etag = fetched.etag.as_deref().expect("file has an etag");
-    assert!(
-        etag.rsplit_once('-').is_some_and(|(_, n)| n != "1"),
-        "expected a multi-part composite etag, got {etag}"
-    );
+    // How many parts the file went up in is not checked here. The stored ETag
+    // used to say (the storage layer's composite `<hash>-<parts>`); the server
+    // now returns a hash of the whole file there, and `upload_file` reports
+    // nothing about its parts. The CLI's live library test counts them from
+    // the debug log instead.
+    assert!(fetched.etag.is_some(), "file has an etag");
 
     let _ = std::fs::remove_dir_all(&dir);
     delete_item(&client, &folder.item_id).expect("clean up scratch folder");
