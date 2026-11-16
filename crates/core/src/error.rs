@@ -79,6 +79,13 @@ pub enum Error {
         reason: String,
     },
 
+    /// The operating system would not hand out random bytes.
+    ///
+    /// A browser login cannot go on without them: its state and verifier are
+    /// what stop another party from finishing the login in the user's place.
+    #[error("could not get random bytes from the operating system")]
+    Random,
+
     /// A fact listing named no owner; the API rejects it.
     #[error("listing facts needs at least one actor, project, or agent id")]
     FactListWithoutOwner,

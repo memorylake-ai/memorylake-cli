@@ -8,31 +8,25 @@ use crate::interactive::{prompt_line, prompt_secret, select_index};
 /// Login methods offered by interactive `auth login`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InteractiveLoginMethod {
-    /// Store and validate a MemoryLake API key.
+    /// Approve the login in a browser; MemoryLake creates the API key.
+    Browser,
+    /// Store and validate a MemoryLake API key the user already has.
     ApiKey,
-    /// Browser / OAuth device login (not implemented yet).
-    ///
-    /// Kept out of [`Self::AVAILABLE`] until the flow exists, so nothing
-    /// constructs it today. Retained rather than deleted because `run_login`
-    /// still handles it, which is what will carry the real flow.
-    #[allow(dead_code)] // planned login method; not offered until it works
-    OAuth,
 }
 
 impl InteractiveLoginMethod {
-    /// Methods a user can actually complete today.
+    /// Methods a user can actually complete, in the order offered.
     ///
-    /// [`Self::OAuth`] is deliberately absent: it is not wired to the API yet,
-    /// so offering it means a first-time user can pick the one option that
-    /// cannot work and be told so only afterwards. A picker whose extra choice
-    /// is a dead end is worse than no picker. Add it back here — nothing else
-    /// needs to change — once the flow exists.
-    const AVAILABLE: &'static [Self] = &[Self::ApiKey];
+    /// The browser comes first because it asks least of someone new: there is
+    /// no key to create in the console and copy over. A method belongs here
+    /// only once its flow works end to end: a picker whose first choice is a
+    /// dead end is worse than no picker.
+    const AVAILABLE: &'static [Self] = &[Self::Browser, Self::ApiKey];
 
     fn label(self) -> &'static str {
         match self {
-            Self::ApiKey => "API key",
-            Self::OAuth => "OAuth",
+            Self::Browser => "Browser (creates an API key for this machine)",
+            Self::ApiKey => "API key (paste one you already have)",
         }
     }
 }
@@ -90,23 +84,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_single_available_method_is_returned_without_prompting() {
-        // This test passing at all is the assertion: it runs with no TTY, so it
-        // would fail if the one-method case still opened a picker. It also pins
-        // that the method offered is the one that works — OAuth is defined but
-        // not wired up, and must not be reachable through this path.
-        let method = prompt_login_method("https://app.memorylake.ai/openapi/memorylake")
-            .expect("a single method needs no terminal");
-        assert_eq!(method, InteractiveLoginMethod::ApiKey);
+    fn the_browser_is_offered_first_and_a_key_remains_possible() {
+        // The first entry is the default the picker lands on. A key login has
+        // to stay: it is the only way in for a deployment without browser
+        // login, and for anyone who already holds a key.
+        assert_eq!(
+            InteractiveLoginMethod::AVAILABLE,
+            &[
+                InteractiveLoginMethod::Browser,
+                InteractiveLoginMethod::ApiKey
+            ],
+        );
     }
 
     #[test]
-    fn only_implemented_methods_are_offered() {
-        assert_eq!(
-            InteractiveLoginMethod::AVAILABLE,
-            &[InteractiveLoginMethod::ApiKey],
-            "a method that cannot complete must not be offered; \
-             add it here together with its flow"
-        );
+    fn choosing_a_method_needs_a_terminal() {
+        // Tests run without one. With two methods there is a real question to
+        // ask, and nobody to ask must be an error, not a silent default: the
+        // flags `--browser` and `--api-key` are how a script answers it.
+        let err = prompt_login_method("https://app.memorylake.ai/openapi/memorylake")
+            .expect_err("no terminal to ask on");
+        assert!(err.to_string().contains("TTY"), "{err}");
     }
 }

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::credentials::{CredentialsFile, LOGIN_METHOD_API_KEY, ProfileCredentials};
+use crate::credentials::{CredentialsFile, IssuedKey, LOGIN_METHOD_API_KEY, ProfileCredentials};
 use crate::error::{Error, Result};
 
 /// Default MemoryLake OpenAPI base URL (global deployment).
@@ -274,8 +274,37 @@ pub struct AuthStatus {
     pub api_key_source: Option<ApiKeySource>,
     /// Login method stored with the profile credentials.
     pub login_method: Option<String>,
+    /// What is known about the key when a browser login created it.
+    pub issued: Option<IssuedKey>,
     /// Whether credentials can be resolved for [`Self::profile`].
     pub logged_in: bool,
+}
+
+/// A profile's stored API key, with where it is used and how it came to be.
+///
+/// What `auth logout` and a repeated `auth login` need in order to revoke a
+/// key that is about to be forgotten.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StoredKey {
+    /// Profile the key belongs to.
+    pub profile: String,
+    /// The key itself (never log this).
+    pub api_key: String,
+    /// Base URL the profile talks to.
+    pub base_url: String,
+    /// Set when a browser login created the key.
+    pub issued: Option<IssuedKey>,
+}
+
+impl fmt::Debug for StoredKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredKey")
+            .field("profile", &self.profile)
+            .field("api_key", &mask_api_key(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("issued", &self.issued)
+            .finish()
+    }
 }
 
 /// Load `config.toml`, returning defaults when the file is missing.
@@ -286,7 +315,7 @@ pub fn load_file_config(paths: &Paths) -> Result<FileConfig> {
 /// Persist `config.toml`, creating the parent directory if needed.
 pub fn save_file_config(paths: &Paths, config: &FileConfig) -> Result<()> {
     ensure_dir(&paths.root)?;
-    write_toml(&paths.config, config)
+    write_toml(&paths.config, config, Visibility::Shared)
 }
 
 /// Load `credentials.toml`, returning defaults when the file is missing.
@@ -294,21 +323,10 @@ pub fn load_credentials(paths: &Paths) -> Result<CredentialsFile> {
     read_toml_or_default(&paths.credentials)
 }
 
-/// Persist `credentials.toml` with restrictive permissions on Unix.
+/// Persist `credentials.toml`, readable by its owner only on Unix.
 pub fn save_credentials(paths: &Paths, credentials: &CredentialsFile) -> Result<()> {
     ensure_dir(&paths.root)?;
-    write_toml(&paths.credentials, credentials)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(&paths.credentials, perms).map_err(|source| Error::Io {
-            action: "chmod",
-            path: paths.credentials.clone(),
-            source,
-        })?;
-    }
-    Ok(())
+    write_toml(&paths.credentials, credentials, Visibility::Private)
 }
 
 /// Resolve runtime API settings from files, environment, and overrides.
@@ -512,6 +530,31 @@ pub fn login_api_key(
     api_key: &str,
     base_url: Option<&str>,
 ) -> Result<()> {
+    store_login(paths, profile, api_key, base_url, None)
+}
+
+/// Store the API key a browser login created for `profile`, and activate it.
+///
+/// The key is stored the way a pasted one is, so every command, and every
+/// older binary sharing these files, uses it without knowing where it came
+/// from. `issued` is kept beside it for `auth status` and `auth logout`.
+pub fn login_issued_key(
+    paths: &Paths,
+    profile: &str,
+    api_key: &str,
+    base_url: &str,
+    issued: IssuedKey,
+) -> Result<()> {
+    store_login(paths, profile, api_key, Some(base_url), Some(issued))
+}
+
+fn store_login(
+    paths: &Paths,
+    profile: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+    issued: Option<IssuedKey>,
+) -> Result<()> {
     let mut config = load_file_config(paths)?;
     let mut credentials = load_credentials(paths)?;
 
@@ -527,6 +570,7 @@ pub fn login_api_key(
         ProfileCredentials {
             api_key: api_key.to_string(),
             login_method: LOGIN_METHOD_API_KEY.to_string(),
+            issued,
         },
     );
     config.active_profile = Some(profile.to_string());
@@ -534,6 +578,41 @@ pub fn login_api_key(
     save_file_config(paths, &config)?;
     save_credentials(paths, &credentials)?;
     Ok(())
+}
+
+/// The key stored for `profile` (default: the active profile), if any.
+///
+/// `None` covers every way of having nothing to revoke: no profile selected,
+/// an unknown one, or one without a key of its own. A key that only comes
+/// from `MEMORYLAKE_API_KEY` is not stored and so is not reported.
+pub fn stored_key(paths: &Paths, profile: Option<&str>) -> Result<Option<StoredKey>> {
+    let config = load_file_config(paths)?;
+    let credentials = load_credentials(paths)?;
+
+    let Some(profile) = profile
+        .map(str::to_string)
+        .or_else(|| config.active_profile.clone())
+    else {
+        return Ok(None);
+    };
+    let Some(cred) = credentials.profiles.get(&profile) else {
+        return Ok(None);
+    };
+    if cred.api_key.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let profile_base = config
+        .profiles
+        .get(&profile)
+        .and_then(|c| c.base_url.as_deref());
+    let (base_url, _) = resolve_base_url(None, profile_base)?;
+    Ok(Some(StoredKey {
+        api_key: cred.api_key.trim().to_string(),
+        base_url,
+        issued: cred.issued.clone(),
+        profile,
+    }))
 }
 
 /// Remove credentials (and profile config) for `profile`.
@@ -595,16 +674,15 @@ pub fn auth_status(paths: &Paths, profile: Option<&str>) -> Result<AuthStatus> {
             api_key_masked: None,
             api_key_source: None,
             login_method: None,
+            issued: None,
             logged_in: false,
         });
     };
 
     let profile_cfg = config.profiles.get(&profile).cloned().unwrap_or_default();
     let (base_url, base_url_source) = resolve_base_url(None, profile_cfg.base_url.as_deref())?;
-    let login_method = credentials
-        .profiles
-        .get(&profile)
-        .map(|c| c.login_method.clone());
+    let stored = credentials.profiles.get(&profile);
+    let login_method = stored.map(|c| c.login_method.clone());
 
     let overrides = ResolveOverrides {
         profile: requested,
@@ -617,6 +695,11 @@ pub fn auth_status(paths: &Paths, profile: Option<&str>) -> Result<AuthStatus> {
             base_url: runtime.base_url,
             base_url_source: runtime.base_url_source,
             api_key_masked: Some(mask_api_key(&runtime.api_key)),
+            // Only when the stored key is the one in use: a description of it
+            // says nothing about a key taken from the environment instead.
+            issued: stored
+                .filter(|_| runtime.api_key_source == ApiKeySource::Profile)
+                .and_then(|c| c.issued.clone()),
             api_key_source: Some(runtime.api_key_source),
             login_method: Some(runtime.login_method),
             logged_in: true,
@@ -629,6 +712,7 @@ pub fn auth_status(paths: &Paths, profile: Option<&str>) -> Result<AuthStatus> {
             api_key_masked: None,
             api_key_source: None,
             login_method,
+            issued: None,
             logged_in: false,
         }),
         Err(err) => Err(err),
@@ -676,19 +760,83 @@ where
     })
 }
 
-fn write_toml<T>(path: &Path, value: &T) -> Result<()>
+/// Who may read a state file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Visibility {
+    /// Whatever the user's umask gives new files.
+    Shared,
+    /// The owner alone (`0600`), from the first byte written.
+    Private,
+}
+
+/// Replace `path` with `value` in one step.
+///
+/// Written to a sibling file and renamed into place. Several `memorylake`
+/// processes read these files at once (an agent's hooks start them side by
+/// side), and one that reads while another writes in place can see an empty or
+/// half-written file and conclude nobody is logged in. A rename swaps the whole
+/// file, so a reader gets the old contents or the new ones.
+fn write_toml<T>(path: &Path, value: &T, visibility: Visibility) -> Result<()>
 where
     T: Serialize,
 {
+    use std::io::Write;
+
     let text = toml::to_string_pretty(value).map_err(|source| Error::Toml {
         path: path.to_path_buf(),
         source: Box::new(source),
     })?;
-    fs::write(path, text).map_err(|source| Error::Io {
-        action: "write",
-        path: path.to_path_buf(),
-        source,
-    })
+    let io_error = |action: &'static str, path: &Path| {
+        let path = path.to_path_buf();
+        move |source| Error::Io {
+            action,
+            path,
+            source,
+        }
+    };
+
+    // Named per process, so two writers never share a scratch file.
+    let mut scratch = path.as_os_str().to_owned();
+    scratch.push(format!(".{}.tmp", std::process::id()));
+    let scratch = PathBuf::from(scratch);
+
+    // Only Unix has a mode to set; elsewhere the user's profile directory is
+    // what keeps the file private.
+    #[cfg(not(unix))]
+    let _ = visibility;
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if visibility == Visibility::Private {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Set at creation: narrowing the mode afterwards leaves a moment in
+        // which a new credentials file is readable by whoever the umask lets.
+        options.mode(0o600);
+    }
+
+    let written = (|| {
+        let mut file = options
+            .open(&scratch)
+            .map_err(io_error("write", &scratch))?;
+        #[cfg(unix)]
+        if visibility == Visibility::Private {
+            use std::os::unix::fs::PermissionsExt;
+            // The mode above only applies to a file this call created; a
+            // scratch file left by a crashed run keeps whatever it had.
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(io_error("chmod", &scratch))?;
+        }
+        file.write_all(text.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(io_error("write", &scratch))?;
+        drop(file);
+        fs::rename(&scratch, path).map_err(io_error("write", path))
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&scratch);
+    }
+    written
 }
 
 #[cfg(test)]
@@ -1212,6 +1360,174 @@ mod tests {
                 .profiles
                 .contains_key("other")
         );
+
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    fn issued_key() -> IssuedKey {
+        IssuedKey {
+            id: "123".into(),
+            name: "memorylake CLI · my-mac".into(),
+            expires_at: Some(1_786_953_600),
+            tenant_id: Some("team-1".into()),
+        }
+    }
+
+    #[test]
+    fn a_key_from_a_browser_login_is_used_like_any_other() {
+        let _guard = env_lock().lock().unwrap();
+        let paths = temp_paths();
+        login_issued_key(
+            &paths,
+            "default",
+            "sk_issued9876",
+            "https://app.memorylake.cn/openapi/memorylake/",
+            issued_key(),
+        )
+        .unwrap();
+
+        // Every command resolves credentials through here, and must not be
+        // able to tell this key from a pasted one.
+        let runtime = resolve(&paths, &ResolveOverrides::default()).unwrap();
+        assert_eq!(runtime.api_key, "sk_issued9876");
+        assert_eq!(runtime.login_method, LOGIN_METHOD_API_KEY);
+        assert_eq!(
+            runtime.base_url,
+            "https://app.memorylake.cn/openapi/memorylake"
+        );
+
+        let status = auth_status(&paths, None).unwrap();
+        assert!(status.logged_in);
+        assert_eq!(status.issued, Some(issued_key()));
+
+        let stored = stored_key(&paths, None).unwrap().expect("a stored key");
+        assert_eq!(stored.profile, "default");
+        assert_eq!(stored.api_key, "sk_issued9876");
+        assert_eq!(
+            stored.base_url,
+            "https://app.memorylake.cn/openapi/memorylake"
+        );
+        assert_eq!(stored.issued, Some(issued_key()));
+        assert!(
+            !format!("{stored:?}").contains("sk_issued9876"),
+            "a stored key must not print itself"
+        );
+
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    #[test]
+    fn a_pasted_key_replaces_an_issued_one_and_its_description() {
+        let paths = temp_paths();
+        login_issued_key(
+            &paths,
+            "default",
+            "sk_issued9876",
+            DEFAULT_BASE_URL,
+            issued_key(),
+        )
+        .unwrap();
+        login_api_key(&paths, "default", "sk_pasted1234", None).unwrap();
+
+        let stored = stored_key(&paths, None).unwrap().expect("a stored key");
+        assert_eq!(stored.api_key, "sk_pasted1234");
+        assert_eq!(
+            stored.issued, None,
+            "what the server said about the old key says nothing about this one"
+        );
+        assert_eq!(auth_status(&paths, None).unwrap().issued, None);
+
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    #[test]
+    fn there_is_no_stored_key_without_a_login() {
+        let paths = temp_paths();
+        assert_eq!(stored_key(&paths, None).unwrap(), None);
+        assert_eq!(stored_key(&paths, Some("nope")).unwrap(), None);
+
+        login_api_key(&paths, "default", "sk_testkey1234", None).unwrap();
+        assert_eq!(stored_key(&paths, Some("other")).unwrap(), None);
+        logout(&paths, None).unwrap();
+        assert_eq!(stored_key(&paths, None).unwrap(), None);
+
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    #[test]
+    fn a_key_from_the_environment_is_not_described_as_the_issued_one() {
+        let _guard = env_lock().lock().unwrap();
+        let paths = temp_paths();
+        login_issued_key(
+            &paths,
+            "default",
+            "sk_issued9876",
+            DEFAULT_BASE_URL,
+            issued_key(),
+        )
+        .unwrap();
+        // A profile whose own key was blanked falls back to the environment.
+        let mut credentials = load_credentials(&paths).unwrap();
+        credentials.profiles.get_mut("default").unwrap().api_key = String::new();
+        save_credentials(&paths, &credentials).unwrap();
+
+        unsafe {
+            std::env::set_var(ENV_API_KEY, "sk_from_env_4321");
+        }
+        let status = auth_status(&paths, None);
+        let stored = stored_key(&paths, None);
+        unsafe {
+            std::env::remove_var(ENV_API_KEY);
+        }
+
+        let status = status.unwrap();
+        assert_eq!(status.api_key_source, Some(ApiKeySource::Env));
+        assert_eq!(status.issued, None);
+        assert_eq!(stored.unwrap(), None, "nothing of ours to revoke");
+
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    #[test]
+    fn state_files_are_replaced_whole_and_leave_no_scratch_behind() {
+        let paths = temp_paths();
+        login_api_key(&paths, "default", "sk_first_1111", None).unwrap();
+        login_api_key(&paths, "default", "sk_second_2222", None).unwrap();
+
+        let credentials = fs::read_to_string(&paths.credentials).unwrap();
+        assert!(credentials.contains("sk_second_2222"));
+        assert!(!credentials.contains("sk_first_1111"));
+
+        let mut names: Vec<String> = fs::read_dir(&paths.root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["config.toml", "credentials.toml"]);
+
+        let _ = fs::remove_dir_all(&paths.root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credentials_are_private_and_stay_private_when_rewritten() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let paths = temp_paths();
+        login_api_key(&paths, "default", "sk_first_1111", None).unwrap();
+        assert_eq!(mode(&paths.credentials), 0o600);
+
+        // A scratch file left behind by a run that died, with loose
+        // permissions: the next write must not inherit them.
+        let mut scratch = paths.credentials.clone().into_os_string();
+        scratch.push(format!(".{}.tmp", std::process::id()));
+        fs::write(&scratch, "stale").unwrap();
+        fs::set_permissions(&scratch, fs::Permissions::from_mode(0o644)).unwrap();
+
+        login_api_key(&paths, "default", "sk_second_2222", None).unwrap();
+        assert_eq!(mode(&paths.credentials), 0o600);
+        assert!(!Path::new(&scratch).exists());
 
         let _ = fs::remove_dir_all(&paths.root);
     }

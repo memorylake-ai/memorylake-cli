@@ -171,7 +171,10 @@ pub fn run(home: &Path, args: &[&str]) -> Output {
 }
 
 /// The `memorylake` command for `args`, sandboxed to `home`.
-fn isolated(home: &Path, args: &[&str]) -> Command {
+///
+/// Public for the tests that have to talk to the command while it runs (a
+/// browser login waits for a callback); everything else goes through [`run`].
+pub fn isolated(home: &Path, args: &[&str]) -> Command {
     // Isolate CLI state through `MEMORYLAKE_CONFIG_DIR`, which points straight
     // at the directory holding config.toml / credentials.toml.
     //

@@ -10,6 +10,7 @@ repository = "https://github.com/memorylake/memorylake-cli"
 
 [workspace.dependencies]
 anyhow = "1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 ctrlc = "3"
 dialoguer = "0.11"
@@ -17,6 +18,7 @@ dirs = "6"
 libc = "0.2"
 dotenvy = "0.15"
 percent-encoding = "2"
+ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
