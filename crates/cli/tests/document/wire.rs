@@ -957,3 +957,161 @@ fn reload_of_a_healthy_document_reports_the_refusal() {
         stderr_of(&output)
     );
 }
+
+const TWO_PROJECTS: &str =
+    r#"{"success":true,"data":{"items":[{"id":"proj-1","name":"a"},{"id":"proj-2","name":"b"}]}}"#;
+
+fn documents_page(ids: &[&str], token: Option<&str>) -> String {
+    let items: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id, "name": format!("{id}.pdf"), "status": "okay",
+                "usage": {"files_process_tokens": 1}, "document_type": "drive_file",
+                "created_at": "2026-11-13T10:00:00Z"
+            })
+        })
+        .collect();
+    serde_json::json!({"success": true, "data": {"items": items, "continuation_token": token}})
+        .to_string()
+}
+
+#[test]
+fn list_without_project_pages_across_every_project() {
+    let p1 = documents_page(&["doc-a"], None);
+    let p2 = documents_page(&["doc-b"], Some("inner-2"));
+    let args = [
+        "proj",
+        "doc",
+        "list",
+        "--workspace",
+        "ws-1",
+        "--page-size",
+        "2",
+        "--name",
+        "rep",
+    ];
+    let (requests, output) = exchange(&[TWO_PROJECTS, &p1, &p2], &args);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    assert_eq!(
+        request_line(&requests[0]),
+        "GET /api/v3/workspaces/ws-1/projects?page_size=100 HTTP/1.1"
+    );
+    // Each project is asked only for what still fits on the page, and the
+    // name filter goes to every one of them.
+    assert_eq!(
+        request_line(&requests[1]),
+        "GET /api/v3/workspaces/ws-1/projects/proj-1/memories/documents?page_size=2&name_fuzzy=rep HTTP/1.1"
+    );
+    assert_eq!(
+        request_line(&requests[2]),
+        "GET /api/v3/workspaces/ws-1/projects/proj-2/memories/documents?page_size=1&name_fuzzy=rep HTTP/1.1"
+    );
+    let printed: serde_json::Value = serde_json::from_str(&stdout_of(&output)).expect("JSON");
+    assert_eq!(printed["items"][0]["id"], "doc-a");
+    assert_eq!(printed["items"][0]["project_id"], "proj-1");
+    assert_eq!(printed["items"][1]["id"], "doc-b");
+    assert_eq!(printed["items"][1]["project_id"], "proj-2");
+    assert_eq!(printed["continuation_token"], "ws1:proj-2:inner-2");
+}
+
+#[test]
+fn list_without_project_resumes_from_its_own_token() {
+    let p2 = documents_page(&["doc-c"], None);
+    let args = [
+        "proj",
+        "doc",
+        "list",
+        "--workspace",
+        "ws-1",
+        "--continuation-token",
+        "ws1:proj-2:inner-2",
+    ];
+    let (requests, output) = exchange(&[TWO_PROJECTS, &p2], &args);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert_eq!(
+        request_line(&requests[1]),
+        "GET /api/v3/workspaces/ws-1/projects/proj-2/memories/documents?page_size=20&continuation_token=inner-2 HTTP/1.1"
+    );
+    let printed: serde_json::Value = serde_json::from_str(&stdout_of(&output)).expect("JSON");
+    assert_eq!(printed["continuation_token"], serde_json::Value::Null);
+}
+
+#[test]
+fn list_without_project_in_a_missing_workspace_fails() {
+    // `exchange_in` serves raw responses, so the 200 is spelled out too.
+    let body = r#"{"success":true,"data":{"items":[]}}"#;
+    let no_projects = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let missing = http_404(
+        r#"{"success":false,"message":"Workspace not found with id: ws-1","error_code":"NOT_FOUND"}"#,
+    );
+    let args = ["proj", "doc", "list", "--workspace", "ws-1"];
+    let directory = temp_home();
+    let (requests, output) = exchange_in(&directory, &[&no_projects, &missing], &args);
+    let _ = fs::remove_dir_all(&directory);
+    assert!(!output.status.success(), "a missing workspace must fail");
+    assert_eq!(
+        request_line(&requests[1]),
+        "GET /api/v3/workspaces/ws-1 HTTP/1.1"
+    );
+    assert!(
+        stderr_of(&output).contains("[WORKSPACE_NOT_FOUND]"),
+        "{}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
+fn list_compact_keeps_only_what_picks_a_document() {
+    let page = documents_page(&["doc-a"], None);
+    let args = [
+        "proj",
+        "doc",
+        "list",
+        "--workspace",
+        "ws-1",
+        "--project",
+        "proj-1",
+        "--compact",
+    ];
+    let (_, output) = exchange(&[&page], &args);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let printed: serde_json::Value = serde_json::from_str(&stdout_of(&output)).expect("JSON");
+    assert_eq!(
+        printed,
+        serde_json::json!({
+            "items": [{
+                "id": "doc-a",
+                "name": "doc-a.pdf",
+                "project_id": "proj-1",
+                "status": "okay",
+                "document_type": "drive_file",
+                "created_at": "2026-11-13T10:00:00Z"
+            }],
+            "continuation_token": null
+        })
+    );
+}
+
+#[test]
+fn list_with_project_adds_the_project_id_to_each_item() {
+    let page = documents_page(&["doc-a"], None);
+    let args = [
+        "proj",
+        "doc",
+        "list",
+        "--workspace",
+        "ws-1",
+        "--project",
+        "proj-1",
+    ];
+    let (_, output) = exchange(&[&page], &args);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let printed: serde_json::Value = serde_json::from_str(&stdout_of(&output)).expect("JSON");
+    assert_eq!(printed["items"][0]["project_id"], "proj-1");
+    assert_eq!(printed["items"][0]["usage"]["files_process_tokens"], 1);
+}

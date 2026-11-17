@@ -237,7 +237,7 @@ removes every tag. Leaving both out keeps the actor's tags as they are.
 A project holds documents, conversations and the facts extracted from them.
 
 ```bash
-memorylake proj list [--name FUZZY] [--page-size N] [--continuation-token TOKEN]
+memorylake proj list [--name FUZZY] [--page-size N] [--continuation-token TOKEN] [--compact]
 memorylake proj create --name "My Project" --custom-id my-proj-001 [--description D] \
   [--opendata-ids research/academic,financial/markets]
 memorylake proj get <id> [--by-custom-id]
@@ -289,13 +289,17 @@ Documents are Library files imported into a project and indexed for search.
 memorylake proj doc import --project <id> <item-id>... \
   [--recursive] [--max-files 500] [--wait] [--timeout 600]
 
-memorylake proj doc list   --project <id> [--name FUZZY] [--page-size N]
+memorylake proj doc list   [--project <id>] [--name FUZZY] [--page-size N] [--compact]
 memorylake proj doc get      --project <id> <doc-id>
 memorylake proj doc download --project <id> <doc-id> [-o PATH] [--force]
 memorylake proj doc delete   --project <id> <doc-id>...
 memorylake proj doc inspect  --project <id> <doc-id>...   # up to 100
 memorylake proj doc reload   --project <id> <doc-id>
 ```
+
+`list` without `--project` lists every project's documents, one project after
+another; each item carries its `project_id`, and `--continuation-token` pages
+across projects.
 
 Upload files with `lib upload` first. A folder id needs `--recursive`, and
 `--max-files` caps how many files one command may import.
@@ -720,14 +724,20 @@ entry carries a `rank` that is unique across the three, so sorting by it
 restores the overall order. The `score` on fact hits is exactly `1 / rank`, so
 it says nothing `rank` does not: a threshold such as `score >= 0.3` keeps the top
 three hits whatever they are, not the relevant ones. Filters take one comma-separated value each
-(`--projects a,b`). Omitting `--projects` or `--types` searches all of them, but
-omitting `--actors` searches only your own actor's memories. `--top-k` (1-1000,
+(`--projects a,b`). Omitting `--projects` or `--types` searches all of them (the
+CLI names every project of the workspace, since the API itself searches no
+project's documents unless told which), but omitting `--actors` searches only
+your own actor's memories. `--top-k` (1-1000,
 default 10) caps the total across all types, not each type. `--effort`
 (`max`, `high`, `low`) trades result quality for speed: `max` is the full
 search, `high` skips query expansion from stored facts and uses a lighter final
 ranking, `low` also skips model-based query understanding and narrows recall.
 Lower levels may return fewer or different results; omit it for the server's
 default. There is no pagination.
+
+`--compact` on `search`, `proj list` and `proj doc list` prints only what is
+needed to pick a result: ids, name, `project_id`, status, and for a search hit
+its first matched snippet (200 characters at most) instead of every block.
 
 ### MemoryRouter
 

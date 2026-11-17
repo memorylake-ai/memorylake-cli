@@ -12,16 +12,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+use super::all_projects;
+use crate::commands::compact::{self, COMPACT_HELP};
 use crate::commands::download::{SaveTo, save_download};
-use crate::commands::require_workspace;
+use crate::commands::{ensure_workspace_if_empty, require_workspace};
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::api::documents::{
-    DOCUMENT_STATUS_ERROR, DeleteDocumentsRequest, DocumentInspection, INSPECT_MAX_DOCUMENTS,
-    ImportDocumentsRequest, ImportOutcome, InspectDocumentsRequest, ListDocumentsParams,
-    ListGraphChildrenParams, delete_documents, download_document, get_document, get_document_graph,
-    get_graph_node, get_graph_schema, import_documents, inspect_documents, is_terminal_status,
-    list_documents, list_graph_children, reload_document,
+    DOCUMENT_STATUS_ERROR, DeleteDocumentsRequest, Document, DocumentInspection, DocumentList,
+    INSPECT_MAX_DOCUMENTS, ImportDocumentsRequest, ImportOutcome, InspectDocumentsRequest,
+    ListDocumentsParams, ListGraphChildrenParams, delete_documents, download_document,
+    get_document, get_document_graph, get_graph_node, get_graph_schema, import_documents,
+    inspect_documents, is_terminal_status, list_documents, list_graph_children, reload_document,
 };
 use memorylake_core::api::library::{Item, ItemList, ListChildrenParams, get_item, list_children};
 use memorylake_core::{Client, Paths};
@@ -81,17 +83,22 @@ pub enum DocumentCommand {
         timeout: u64,
     },
     /// List the documents in a project.
+    ///
+    /// Without `--project`, lists the documents of every project in the
+    /// workspace, project by project. Every item carries its `project_id`, and
+    /// `--continuation-token` pages across projects the same way.
     List {
         /// Workspace id that owns the project.
         ///
         /// Defaults to the workspace remembered by `workspace use`.
         #[arg(long)]
         workspace: Option<String>,
-        /// Project whose documents to list.
+        /// Project whose documents to list. Defaults to every project in the
+        /// workspace.
         #[arg(long)]
-        project: String,
-        /// Number of items per page.
-        #[arg(long)]
+        project: Option<String>,
+        /// Number of items per page (1-100). The server defaults to 20.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         page_size: Option<u32>,
         /// Continuation token from a previous response.
         #[arg(long)]
@@ -99,6 +106,8 @@ pub enum DocumentCommand {
         /// Fuzzy filter by document name (partial match).
         #[arg(long = "name")]
         name_fuzzy: Option<String>,
+        #[arg(long, help = COMPACT_HELP)]
+        compact: bool,
     },
     /// Get a single document, including its processing status.
     Get {
@@ -284,6 +293,109 @@ pub enum GraphCommand {
     Schema,
 }
 
+/// Page size of a workspace-wide listing when `--page-size` is left out; the
+/// same as the server's default for one project.
+const DEFAULT_DOCUMENT_PAGE_SIZE: u32 = 20;
+
+/// Marks a continuation token that pages across projects, so a token from a
+/// single-project listing is refused instead of misread.
+const WORKSPACE_TOKEN_PREFIX: &str = "ws1:";
+
+/// A document as the API returns it, plus the project it belongs to.
+fn with_project_id(document: &Document, project: &str) -> Result<Value> {
+    let mut value = serde_json::to_value(document).context("serialize document")?;
+    if let Value::Object(map) = &mut value {
+        map.insert("project_id".into(), project.into());
+    }
+    Ok(value)
+}
+
+/// Token resuming a workspace-wide listing at `project`, inside it at `inner`
+/// (that project's own token), or at its start when `inner` is `None`.
+fn workspace_token(project: &str, inner: Option<&str>) -> String {
+    format!("{WORKSPACE_TOKEN_PREFIX}{project}:{}", inner.unwrap_or(""))
+}
+
+/// Split a token made by [`workspace_token`] into its project and inner token.
+fn parse_workspace_token(token: &str) -> Result<(&str, Option<&str>)> {
+    let Some((project, inner)) = token
+        .strip_prefix(WORKSPACE_TOKEN_PREFIX)
+        .and_then(|rest| rest.split_once(':'))
+        .filter(|(project, _)| !project.is_empty())
+    else {
+        bail!(
+            "--continuation-token `{token}` did not come from a listing without --project; \
+             pass the token printed by the previous page of this same listing"
+        );
+    };
+    Ok((project, (!inner.is_empty()).then_some(inner)))
+}
+
+/// Documents paired with their project id, and the token for the next page.
+type DocumentPage = (Vec<(String, Document)>, Option<String>);
+
+/// One page of documents across `projects`, in order, at most `page_size`.
+///
+/// Each project's own pages are read through `fetch(project, page_size,
+/// token)`, asking only for what still fits on this page. The returned token
+/// names the project to resume in and, when the page ended inside one, that
+/// project's token. Kept apart from the client so the paging rules are tested
+/// without a network.
+fn page_across_projects(
+    projects: &[String],
+    page_size: u32,
+    token: Option<&str>,
+    mut fetch: impl FnMut(&str, u32, Option<String>) -> Result<DocumentList>,
+) -> Result<DocumentPage> {
+    let (mut index, mut inner) = match token {
+        None => (0, None),
+        Some(token) => {
+            let (project, inner) = parse_workspace_token(token)?;
+            let Some(index) = projects.iter().position(|id| id == project) else {
+                bail!(
+                    "project `{project}` from --continuation-token is no longer in the workspace; \
+                     list again without --continuation-token"
+                );
+            };
+            (index, inner.map(str::to_string))
+        }
+    };
+    let page_size = page_size.max(1) as usize;
+    let mut items = Vec::new();
+    while index < projects.len() {
+        let project = &projects[index];
+        let remaining = (page_size - items.len()) as u32;
+        let page = fetch(project, remaining, inner.take())?;
+        let got_any = !page.items.is_empty();
+        items.extend(
+            page.items
+                .into_iter()
+                .map(|document| (project.clone(), document)),
+        );
+        let next = page.continuation_token.filter(|next| !next.is_empty());
+        match next {
+            // More in this project, and an empty page with a token is not
+            // trusted to ever end.
+            Some(next) if got_any => {
+                if items.len() >= page_size {
+                    return Ok((items, Some(workspace_token(project, Some(&next)))));
+                }
+                inner = Some(next);
+            }
+            _ => {
+                index += 1;
+                if items.len() >= page_size {
+                    let token = projects
+                        .get(index)
+                        .map(|project| workspace_token(project, None));
+                    return Ok((items, token));
+                }
+            }
+        }
+    }
+    Ok((items, None))
+}
+
 /// Execute a `project document` subcommand.
 pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentCommand) -> Result<()> {
     match command {
@@ -316,20 +428,73 @@ pub fn run(client: &Client, paths: &Paths, profile: &str, command: DocumentComma
             page_size,
             continuation_token,
             name_fuzzy,
+            compact,
         } => {
             let workspace = require_workspace(paths, profile, workspace)?;
-            let data = list_documents(
-                client,
-                &workspace,
-                &project,
-                &ListDocumentsParams {
-                    page_size,
-                    continuation_token,
-                    name_fuzzy,
-                },
-            )
-            .with_context(|| format!("list documents in project `{project}`"))?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
+            let (items, continuation_token) = match project {
+                Some(project) => {
+                    let data = list_documents(
+                        client,
+                        &workspace,
+                        &project,
+                        &ListDocumentsParams {
+                            page_size,
+                            continuation_token,
+                            name_fuzzy,
+                        },
+                    )
+                    .with_context(|| format!("list documents in project `{project}`"))?;
+                    let items = data
+                        .items
+                        .into_iter()
+                        .map(|document| (project.clone(), document))
+                        .collect();
+                    (items, data.continuation_token)
+                }
+                None => {
+                    let projects: Vec<String> = all_projects(client, &workspace)?
+                        .into_iter()
+                        .map(|project| project.id)
+                        .collect();
+                    ensure_workspace_if_empty(client, &workspace, projects.is_empty())
+                        .context("list documents")?;
+                    page_across_projects(
+                        &projects,
+                        page_size.unwrap_or(DEFAULT_DOCUMENT_PAGE_SIZE),
+                        continuation_token.as_deref(),
+                        |project, page_size, token| {
+                            list_documents(
+                                client,
+                                &workspace,
+                                project,
+                                &ListDocumentsParams {
+                                    page_size: Some(page_size),
+                                    continuation_token: token,
+                                    name_fuzzy: name_fuzzy.clone(),
+                                },
+                            )
+                            .with_context(|| format!("list documents in project `{project}`"))
+                        },
+                    )?
+                }
+            };
+            let items: Vec<Value> = items
+                .iter()
+                .map(|(project, document)| {
+                    if compact {
+                        Ok(compact::document(project, document))
+                    } else {
+                        with_project_id(document, project)
+                    }
+                })
+                .collect::<Result<_>>()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "items": items,
+                    "continuation_token": continuation_token,
+                }))?
+            );
             Ok(())
         }
         DocumentCommand::Get {
@@ -950,6 +1115,148 @@ mod tests {
 
     use memorylake_core::api::documents::ImportDetail;
     use memorylake_core::api::library::{ITEM_TYPE_DIRECTORY, ITEM_TYPE_FILE};
+
+    /// A fake document store: each project's documents, served `per_page` at
+    /// a time with the offset as the token, and every call recorded.
+    struct FakeProjects {
+        docs: BTreeMap<String, Vec<String>>,
+        per_page: usize,
+        calls: RefCell<Vec<(String, u32, Option<String>)>>,
+    }
+
+    impl FakeProjects {
+        fn new(per_page: usize, docs: &[(&str, usize)]) -> Self {
+            Self {
+                docs: docs
+                    .iter()
+                    .map(|(project, count)| {
+                        let ids = (0..*count).map(|n| format!("{project}-d{n}")).collect();
+                        (project.to_string(), ids)
+                    })
+                    .collect(),
+                per_page,
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn fetch(
+            &self,
+            project: &str,
+            page_size: u32,
+            token: Option<String>,
+        ) -> Result<DocumentList> {
+            self.calls
+                .borrow_mut()
+                .push((project.to_string(), page_size, token.clone()));
+            let all = &self.docs[project];
+            let start: usize = token.map_or(0, |token| token.parse().expect("offset token"));
+            let end = (start + self.per_page.min(page_size as usize)).min(all.len());
+            let items = all[start..end]
+                .iter()
+                .map(|id| {
+                    serde_json::from_value(json!({"id": id, "name": id, "status": "okay"}))
+                        .expect("document")
+                })
+                .collect();
+            let continuation_token = (end < all.len()).then(|| end.to_string());
+            Ok(DocumentList {
+                items,
+                continuation_token,
+            })
+        }
+
+        fn page(&self, page_size: u32, token: Option<&str>) -> (Vec<String>, Option<String>) {
+            let projects: Vec<String> = self.docs.keys().cloned().collect();
+            let (items, token) =
+                page_across_projects(&projects, page_size, token, |p, n, t| self.fetch(p, n, t))
+                    .expect("page");
+            let ids = items
+                .into_iter()
+                .map(|(project, document)| {
+                    assert!(
+                        document.id.starts_with(&project),
+                        "{project} owns {}",
+                        document.id
+                    );
+                    document.id
+                })
+                .collect();
+            (ids, token)
+        }
+    }
+
+    #[test]
+    fn workspace_listing_fills_a_page_from_several_projects() {
+        let fake = FakeProjects::new(100, &[("p1", 2), ("p2", 1), ("p3", 3)]);
+        let (ids, token) = fake.page(5, None);
+        assert_eq!(ids, ["p1-d0", "p1-d1", "p2-d0", "p3-d0", "p3-d1"]);
+        assert_eq!(token.as_deref(), Some("ws1:p3:2"));
+        // Each request asks only for what still fits on the page.
+        let sizes: Vec<u32> = fake.calls.borrow().iter().map(|call| call.1).collect();
+        assert_eq!(sizes, [5, 3, 2]);
+
+        let (ids, token) = fake.page(5, token.as_deref());
+        assert_eq!(ids, ["p3-d2"]);
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn workspace_listing_visits_every_document_once_whatever_the_page_size() {
+        for page_size in 1..=7 {
+            for per_page in 1..=4 {
+                let fake = FakeProjects::new(per_page, &[("p1", 3), ("p2", 0), ("p3", 4)]);
+                let mut seen = Vec::new();
+                let mut token = None;
+                loop {
+                    let (ids, next) = fake.page(page_size, token.as_deref());
+                    assert!(ids.len() <= page_size as usize);
+                    seen.extend(ids);
+                    match next {
+                        Some(next) => token = Some(next),
+                        None => break,
+                    }
+                }
+                let expected: Vec<String> = [
+                    "p1-d0", "p1-d1", "p1-d2", "p3-d0", "p3-d1", "p3-d2", "p3-d3",
+                ]
+                .map(String::from)
+                .to_vec();
+                assert_eq!(seen, expected, "page_size {page_size}, per_page {per_page}");
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_listing_ending_on_a_project_boundary_resumes_at_the_next_project() {
+        let fake = FakeProjects::new(100, &[("p1", 2), ("p2", 1)]);
+        let (ids, token) = fake.page(2, None);
+        assert_eq!(ids, ["p1-d0", "p1-d1"]);
+        assert_eq!(token.as_deref(), Some("ws1:p2:"));
+        // The last project ending the page exactly leaves nothing to resume.
+        let (_, token) = fake.page(1, token.as_deref());
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn workspace_listing_refuses_a_foreign_or_stale_token() {
+        let fake = FakeProjects::new(100, &[("p1", 1)]);
+        let projects = vec!["p1".to_string()];
+        let fetch = |p: &str, n: u32, t: Option<String>| fake.fetch(p, n, t);
+        let err = page_across_projects(&projects, 5, Some("opaque-server-token"), fetch)
+            .expect_err("a single-project token is refused");
+        assert!(err.to_string().contains("without --project"), "{err}");
+        let fetch = |p: &str, n: u32, t: Option<String>| fake.fetch(p, n, t);
+        let err = page_across_projects(&projects, 5, Some("ws1:p-gone:"), fetch)
+            .expect_err("a deleted project is refused");
+        assert!(
+            err.to_string().contains("no longer in the workspace"),
+            "{err}"
+        );
+        assert!(
+            fake.calls.borrow().is_empty(),
+            "nothing is fetched for a bad token"
+        );
+    }
 
     #[test]
     fn ids_left_out_of_an_inspection_are_named_once_in_request_order() {

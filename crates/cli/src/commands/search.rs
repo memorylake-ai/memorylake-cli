@@ -1,6 +1,8 @@
 //! `memorylake search` command.
 
-use super::require_workspace;
+use super::compact::{self, COMPACT_HELP};
+use super::project::all_projects;
+use super::{print_json, require_workspace};
 use anyhow::{Context, Result};
 use clap::Args;
 use memorylake_core::api::search::{
@@ -26,8 +28,9 @@ pub struct SearchArgs {
     /// Defaults to the workspace remembered by `workspace use`.
     #[arg(long)]
     workspace: Option<String>,
-    /// Projects whose documents are searched (comma-separated). Without it no
-    /// project is searched and no documents are returned.
+    /// Projects whose documents and databases are searched (comma-separated).
+    /// Defaults to every project in the workspace. Each document hit carries
+    /// its `project_id` for `project document get` / `download`.
     #[arg(long, value_name = "IDS", value_parser = parse_id_list)]
     projects: Option<IdList>,
     /// Search these actors' memories (comma-separated). Defaults to your own
@@ -45,6 +48,19 @@ pub struct SearchArgs {
     /// return fewer or different results. The server picks the default.
     #[arg(long, value_name = "LEVEL", value_parser = parse_effort)]
     effort: Option<SearchEffort>,
+    #[arg(long, help = COMPACT_HELP)]
+    compact: bool,
+}
+
+/// Whether a search with these `--types` reaches project-scoped memory
+/// (documents or databases), which the API searches only in the projects
+/// named in the request.
+fn wants_projects(types: Option<&[MemoryType]>) -> bool {
+    types.is_none_or(|types| {
+        types
+            .iter()
+            .any(|kind| matches!(kind, MemoryType::Document | MemoryType::Database))
+    })
 }
 
 /// Parse `--effort`, rejecting levels the API would answer with `400`.
@@ -143,16 +159,36 @@ pub fn run(args: SearchArgs, profile: Option<String>, base_url: Option<String>) 
     let client = Client::new(&runtime.base_url, &runtime.api_key).context("build API client")?;
 
     let workspace = require_workspace(&paths, &runtime.profile, args.workspace)?;
+    let types = args.types.map(|list| list.0);
+    // The API searches documents and databases only in the projects named in
+    // the request, and none when the list is left out. "Search my workspace"
+    // means all of them, so name every project unless the caller picked some
+    // or asked only for facts.
+    let project_ids = match args.projects {
+        Some(list) => Some(list.0),
+        None if wants_projects(types.as_deref()) => {
+            let ids: Vec<String> = all_projects(&client, &workspace)?
+                .into_iter()
+                .map(|project| project.id)
+                .collect();
+            (!ids.is_empty()).then_some(ids)
+        }
+        None => None,
+    };
     let request = SearchMemoriesRequest {
         query: args.query,
-        project_ids: args.projects.map(|list| list.0),
+        project_ids,
         actor_ids: args.actors.map(|list| list.0),
-        memory_types: args.types.map(|list| list.0),
+        memory_types: types,
         top_k: args.top_k,
         search_effort: args.effort,
     };
     let data = search_memories(&client, &workspace, &request).context("search memories")?;
-    println!("{}", serde_json::to_string_pretty(&data)?);
+    if args.compact {
+        print_json(&compact::search(&data))?;
+    } else {
+        print_json(&data)?;
+    }
 
     Ok(())
 }
@@ -167,6 +203,17 @@ mod tests {
 
     fn types(raw: &str) -> Vec<MemoryType> {
         parse_memory_types(raw).expect("should parse").0
+    }
+
+    #[test]
+    fn projects_are_needed_unless_only_facts_are_asked_for() {
+        assert!(wants_projects(None));
+        assert!(wants_projects(Some(&[MemoryType::Document])));
+        assert!(wants_projects(Some(&[
+            MemoryType::Fact,
+            MemoryType::Database
+        ])));
+        assert!(!wants_projects(Some(&[MemoryType::Fact])));
     }
 
     #[test]

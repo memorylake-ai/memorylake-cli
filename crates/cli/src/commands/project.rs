@@ -7,13 +7,15 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use memorylake_core::Error as CoreError;
 use memorylake_core::api::projects::{
-    CreateProjectRequest, ListProjectsParams, UpdateProjectRequest, create_project, delete_project,
-    get_project, get_project_by_custom_id, get_project_statistics, list_projects, update_project,
+    CreateProjectRequest, ListProjectsParams, Project, UpdateProjectRequest, create_project,
+    delete_project, get_project, get_project_by_custom_id, get_project_statistics, list_projects,
+    update_project,
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
+use super::compact::{self, COMPACT_HELP};
 use super::search::{IdList, parse_id_list};
-use super::{ensure_workspace_if_empty, require_workspace};
+use super::{ensure_workspace_if_empty, print_json, require_workspace};
 use database::{DatabaseCommand, run as run_database};
 use document::{DocumentCommand, run as run_document};
 
@@ -39,6 +41,8 @@ pub enum ProjectCommand {
         /// Fuzzy filter by project name (partial match).
         #[arg(long = "name")]
         name_fuzzy: Option<String>,
+        #[arg(long, help = COMPACT_HELP)]
+        compact: bool,
     },
     /// Create a project.
     Create {
@@ -166,6 +170,7 @@ pub fn run(
             page_size,
             continuation_token,
             name_fuzzy,
+            compact,
         } => {
             let workspace = require_workspace(&paths, &runtime.profile, workspace)?;
             let data = list_projects(
@@ -180,7 +185,14 @@ pub fn run(
             .context("list projects")?;
             ensure_workspace_if_empty(&client, &workspace, data.items.is_empty())
                 .context("list projects")?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
+            if compact {
+                print_json(&serde_json::json!({
+                    "items": data.items.iter().map(compact::project).collect::<Vec<_>>(),
+                    "continuation_token": data.continuation_token,
+                }))?;
+            } else {
+                println!("{}", serde_json::to_string_pretty(&data)?);
+            }
         }
         ProjectCommand::Create {
             workspace,
@@ -275,6 +287,39 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Largest page the project list endpoint serves.
+const PROJECT_PAGE_MAX: u32 = 100;
+
+/// Every project in `workspace`, in the order the server lists them.
+///
+/// Commands that act on "the whole workspace" (a search with no `--projects`,
+/// a document listing with no `--project`) start from this. A workspace holds
+/// a handful of projects, so this is usually one request.
+pub(crate) fn all_projects(client: &Client, workspace: &str) -> Result<Vec<Project>> {
+    let mut projects = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let page = list_projects(
+            client,
+            workspace,
+            &ListProjectsParams {
+                page_size: Some(PROJECT_PAGE_MAX),
+                continuation_token: token.clone(),
+                name_fuzzy: None,
+            },
+        )
+        .with_context(|| format!("list projects in workspace `{workspace}`"))?;
+        let empty = page.items.is_empty();
+        projects.extend(page.items);
+        match page.continuation_token.filter(|next| !next.is_empty()) {
+            // A token handed back unchanged, or one on an empty page, would
+            // loop forever; stop on either rather than trust it.
+            Some(next) if !empty && token.as_deref() != Some(next.as_str()) => token = Some(next),
+            _ => return Ok(projects),
+        }
+    }
 }
 
 /// Whether the server said the addressed resource does not exist.
