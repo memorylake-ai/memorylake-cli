@@ -18,7 +18,7 @@ use memorylake_core::api::db_datasources::{
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 use super::input::{parse_custom_id, parse_non_empty, read_file_or_stdin};
-use super::{print_json, require_workspace};
+use super::{ensure_workspace_if_empty, print_json, require_workspace};
 
 /// Datasource subcommands.
 ///
@@ -394,6 +394,8 @@ fn execute(
         Prepared::List { workspace, params } => {
             let workspace = workspace_of(workspace)?;
             let data = list_db_datasources(client, &workspace, &params)
+                .with_context(|| format!("list datasources in workspace `{workspace}`"))?;
+            ensure_workspace_if_empty(client, &workspace, data.items.is_empty())
                 .with_context(|| format!("list datasources in workspace `{workspace}`"))?;
             print_json(&data)
         }

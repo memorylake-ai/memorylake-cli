@@ -12,8 +12,8 @@ use memorylake_core::api::projects::{
 };
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
-use super::require_workspace;
 use super::search::{IdList, parse_id_list};
+use super::{ensure_workspace_if_empty, require_workspace};
 use database::{DatabaseCommand, run as run_database};
 use document::{DocumentCommand, run as run_document};
 
@@ -178,6 +178,8 @@ pub fn run(
                 },
             )
             .context("list projects")?;
+            ensure_workspace_if_empty(&client, &workspace, data.items.is_empty())
+                .context("list projects")?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
         ProjectCommand::Create {

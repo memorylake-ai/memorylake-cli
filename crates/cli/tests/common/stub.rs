@@ -55,6 +55,10 @@ impl StubServer {
             .iter()
             .map(|body| body.replace("{base_url}", &format!("http://{addr}")))
             .map(|body| {
+                // A whole response (see [`http_response`]) goes out as given.
+                if body.starts_with("HTTP/1.1 ") {
+                    return body;
+                }
                 format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{extra}connection: close\r\n\r\n{body}",
                     body.len()
@@ -192,6 +196,31 @@ impl Drop for StubServer {
         // sender whose receiver is going away with this struct.
         drop(self.handle.take());
     }
+}
+
+/// A whole HTTP response with a status other than `200`, for the response
+/// lists the `exchange*` helpers take: they send it as given instead of
+/// wrapping it in a `200 OK`.
+pub fn http_response(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// The `404` the API answers a lookup of a workspace that does not exist with.
+pub fn workspace_not_found(id: &str) -> String {
+    http_response(
+        "404 Not Found",
+        &format!(
+            r#"{{"success":false,"message":"Workspace not found with id: {id}","error_code":"NOT_FOUND"}}"#
+        ),
+    )
+}
+
+/// A workspace as `GET /api/v3/workspaces/{id}` returns it.
+pub fn workspace_found(id: &str) -> String {
+    format!(r#"{{"success":true,"data":{{"id":"{id}","name":"ws","metadata":{{}}}}}}"#)
 }
 
 /// Read one complete HTTP request (head plus `content-length` body).

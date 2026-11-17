@@ -34,6 +34,8 @@ pub mod usage;
 pub mod workspace;
 
 use anyhow::{Context, Result, bail};
+use memorylake_core::Error as CoreError;
+use memorylake_core::api::workspaces::get_workspace;
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve, resolve_profile_workspace};
 
 /// Resolve credentials and build the authenticated API client.
@@ -45,6 +47,41 @@ pub fn api_client(profile: Option<String>, base_url: Option<String>) -> Result<C
     let runtime = resolve(&paths, &ResolveOverrides { profile, base_url })
         .context("resolve API credentials")?;
     Client::new(&runtime.base_url, &runtime.api_key).context("build API client")
+}
+
+/// Error code a listing reports when the workspace it was asked about does not
+/// exist. Callers match on it, so it stays fixed.
+pub const WORKSPACE_NOT_FOUND: &str = "WORKSPACE_NOT_FOUND";
+
+/// Turn an empty listing of a missing workspace into an error.
+///
+/// Some workspace-scoped list endpoints answer an unknown workspace id with an
+/// empty page instead of `404`, which reads exactly like "this workspace holds
+/// nothing": a mistyped `--workspace` or a stale `workspace use` then tells an
+/// agent the user has no files. Only an empty page is checked, so a listing
+/// that found something costs no extra request.
+///
+/// Only a `NOT_FOUND` from the lookup fails the command. Any other lookup
+/// failure (a permission the listing did not need, a network blip) is logged
+/// and the empty listing printed as before, so this check never makes a listing
+/// fail that would have worked.
+pub fn ensure_workspace_if_empty(client: &Client, workspace: &str, is_empty: bool) -> Result<()> {
+    if !is_empty {
+        return Ok(());
+    }
+    match get_workspace(client, workspace) {
+        Ok(_) => Ok(()),
+        Err(CoreError::Api {
+            code: Some(code), ..
+        }) if code == "NOT_FOUND" => bail!(
+            "workspace `{workspace}` not found [{WORKSPACE_NOT_FOUND}]\n\
+             check --workspace, or the one remembered by `memorylake workspace use`"
+        ),
+        Err(err) => {
+            tracing::debug!(error = %err, "workspace lookup after an empty listing failed");
+            Ok(())
+        }
+    }
 }
 
 /// Print an API payload the way every command here does: pretty JSON.

@@ -202,6 +202,27 @@ fn get_with_unknown_project_id_fails() {
     let _ = fs::remove_dir_all(&home);
 }
 
+#[test]
+fn list_in_a_missing_workspace_fails_instead_of_printing_nothing() {
+    // Production answers this listing with an empty page (measured
+    // 2026-11-17), which reads as "no projects"; the CLI must say the
+    // workspace is not there. Either a `NOT_FOUND` from the API, should the
+    // endpoint start sending one, or the CLI's own code passes.
+    let api_key = require_api_key();
+    let home = temp_home();
+    login_default(&home, &api_key);
+
+    let missing = format!("ws-cli-live-missing-{}", nanos());
+    let args = ["project", "list", "--workspace", missing.as_str()];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("[WORKSPACE_NOT_FOUND]") || err.contains("[NOT_FOUND]"),
+        "a missing workspace should be reported as not found: {err}"
+    );
+
+    let _ = fs::remove_dir_all(&home);
+}
+
 /// Deletes the project when the test ends, including on an assertion panic.
 struct ProjectCleanup<'a> {
     home: &'a Path,

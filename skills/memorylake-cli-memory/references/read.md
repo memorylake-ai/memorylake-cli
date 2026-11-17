@@ -56,6 +56,9 @@ fill the gap from your own assumptions.
 An empty result has other causes worth ruling out before "nothing stored":
 the wrong workspace (`ws current`), another person's memory without
 `--actors`, or a conversation still being processed (`conv cook-status`).
+A workspace id that names no workspace is not one of them: listings fail with
+`[WORKSPACE_NOT_FOUND]` (or the API's `[NOT_FOUND]`) and a non-zero exit, so
+an empty list always means the workspace exists and holds nothing there.
 
 When facts disagree, prefer the most recent `updated_at`, mention the
 disagreement to the user, and consider whether it is a conflict worth
