@@ -4,7 +4,8 @@
 
 ```bash
 memorylake search "Alice Chen package manager preference"
-memorylake search "quarterly revenue 2026 Q3" --projects proj-1,proj-2 --types document,fact --top-k 20
+memorylake search "quarterly revenue 2026 Q3" --types document,fact --top-k 20 --compact
+memorylake search "quarterly revenue 2026 Q3" --projects proj-1,proj-2
 memorylake search "onboarding checklist" --actors act-123,act-456
 ```
 
@@ -14,12 +15,25 @@ restores the overall order.
 
 | Flag | Default | Note |
 | --- | --- | --- |
-| `--projects` | **none: no documents come back** | name the projects to search; each document carries its `project_id` |
+| `--projects` | every project in the workspace | narrow to some projects; each document carries its `project_id` |
 | `--actors` | **your own actor only** | name other people to include their memories |
 | `--types` | all | `document`, `fact`, `database` |
 | `--top-k` | 10 | 1-1000, shared across all types, not per type |
+| `--compact` | off | ids, name, `project_id` and one short snippet per hit |
 
 There is no paging: raise `--top-k` for more.
+
+A document hit is opened with the ids it carries (`project_id`,
+`document_id`):
+
+```bash
+memorylake proj doc get --project proj-123 doc-456
+memorylake proj doc download --project proj-123 doc-456 -o -
+```
+
+To browse rather than search, `proj doc list --compact` lists every project's
+documents (`id`, `name`, `project_id`, `status`), or one project's with
+`--project`. Page with the `continuation_token` it prints.
 
 Search facts carry `id`, `fact` (the text), `score` and `rank`, but not their
 owner. To change one, find its owner with `fact list` (see

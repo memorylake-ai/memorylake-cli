@@ -101,3 +101,19 @@ fn non_empty_list_costs_no_workspace_lookup() {
         "no workspace lookup after a non-empty page: {stderr}"
     );
 }
+
+#[test]
+fn list_compact_keeps_id_name_and_custom_id() {
+    let page = r#"{"success":true,"data":{"items":[{"id":"proj-1","name":"p","custom_id":"c-1","description":"long","opendata":[],"metadata":{"k":"v"},"workspace_id":"ws-1","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-02T00:00:00Z"}],"continuation_token":"next"}}"#;
+    let args = ["project", "list", "--compact"];
+    let (_, output, _) = exchange_sequence_with_remembered_workspace(&[page], "ws-1", &args);
+    let stdout = assert_success(&output, &args);
+    let printed: Value = serde_json::from_str(&stdout).expect("list JSON");
+    assert_eq!(
+        printed,
+        serde_json::json!({
+            "items": [{"id": "proj-1", "name": "p", "custom_id": "c-1", "updated_at": "2026-11-02T00:00:00Z"}],
+            "continuation_token": "next"
+        })
+    );
+}

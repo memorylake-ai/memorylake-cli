@@ -10,6 +10,7 @@ pub mod audit_log;
 pub mod auth;
 pub mod billing;
 pub mod boundary;
+mod compact;
 pub mod conversation;
 pub mod datasource;
 pub mod db_connection;

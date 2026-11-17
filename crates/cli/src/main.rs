@@ -157,6 +157,8 @@ enum Commands {
     /// on fact hits is `1 / rank`: it restates the order and is not a
     /// relevance measure, so a threshold on it keeps the top N hits, not the
     /// good ones.
+    ///
+    /// Without `--projects`, every project in the workspace is searched.
     Search(SearchArgs),
     /// Call OpenAI- and Anthropic-compatible models through MemoryRouter,
     /// with a Boundary's memory attached.

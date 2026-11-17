@@ -184,22 +184,13 @@ fn every_subcommand_without_login_fails() {
 #[test]
 fn missing_workspace_or_project_flag_is_rejected() {
     let home = temp_home();
-    for (args, missing) in [
-        (
-            ["project", "document", "list", "--workspace", "ws-1"].as_slice(),
-            "--project",
-        ),
-        (
-            ["project", "document", "get", "--workspace", "ws-1", "doc-1"].as_slice(),
-            "--project",
-        ),
-    ] {
-        let err = assert_failure(&run(&home, args), args);
-        assert!(
-            err.contains(missing),
-            "missing {missing} should be reported for {args:?}: {err}"
-        );
-    }
+    // `list` takes no `--project` to mean every project; `get` still needs one.
+    let args = ["project", "document", "get", "--workspace", "ws-1", "doc-1"];
+    let err = assert_failure(&run(&home, &args), &args);
+    assert!(
+        err.contains("--project"),
+        "missing --project should be reported: {err}"
+    );
     let _ = fs::remove_dir_all(&home);
 
     // `--workspace` is optional now that one can be remembered, so its absence
