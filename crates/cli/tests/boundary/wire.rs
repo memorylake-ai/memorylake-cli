@@ -2,10 +2,11 @@
 
 use serde_json::Value;
 
-use crate::common::assert_success;
 use crate::common::stub::{
-    exchange, exchange_with_remembered_workspace, request_body, request_line,
+    exchange, exchange_sequence_with_remembered_workspace, exchange_with_remembered_workspace,
+    request_body, request_line, workspace_found, workspace_not_found,
 };
+use crate::common::{assert_failure, assert_success};
 
 const BOUNDARY: &str = r#"{"success":true,"data":{"id":"bnd-1","name":"scope","workspace_id":"ws-1","agent_id":"agent-1","assistant_actor_id":"actor-9"}}"#;
 const EMPTY_PAGE: &str = r#"{"success":true,"data":{"items":[]}}"#;
@@ -17,12 +18,33 @@ fn body_json(request: &str) -> Value {
 #[test]
 fn list_uses_the_remembered_workspace_as_a_query_parameter() {
     let args = ["boundary", "list", "--page-size", "5", "--name", "scope"];
-    let (request, output) = exchange_with_remembered_workspace(EMPTY_PAGE, "ws-1", &args);
+    let (requests, output, _) = exchange_sequence_with_remembered_workspace(
+        &[EMPTY_PAGE, &workspace_found("ws-1")],
+        "ws-1",
+        &args,
+    );
     assert_success(&output, &args);
     assert_eq!(
-        request_line(&request),
+        request_line(&requests[0]),
         "GET /api/v3/boundaries?workspace_id=ws-1&page_size=5&name_fuzzy=scope HTTP/1.1"
     );
+    // An empty page is checked against the workspace itself.
+    assert_eq!(
+        request_line(&requests[1]),
+        "GET /api/v3/workspaces/ws-1 HTTP/1.1"
+    );
+}
+
+#[test]
+fn list_of_a_missing_workspace_fails_with_workspace_not_found() {
+    let args = ["boundary", "list", "--workspace", "ws-gone"];
+    let (_, output, _) = exchange_sequence_with_remembered_workspace(
+        &[EMPTY_PAGE, &workspace_not_found("ws-gone")],
+        "ws-1",
+        &args,
+    );
+    let printed = assert_failure(&output, &args);
+    assert!(printed.contains("[WORKSPACE_NOT_FOUND]"), "{printed}");
 }
 
 #[test]

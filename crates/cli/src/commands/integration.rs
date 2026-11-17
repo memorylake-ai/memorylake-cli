@@ -21,7 +21,7 @@ use memorylake_core::config::{ResolveOverrides, resolve};
 use memorylake_core::{Client, Paths};
 
 use super::input::{read_file_or_stdin, strip_one_line_ending};
-use super::{parse_non_blank, print_json, require_workspace};
+use super::{ensure_workspace_if_empty, parse_non_blank, print_json, require_workspace};
 use crate::interactive::prompt_secret_verbatim;
 
 /// How long `--wait` follows a pending connection by default.
@@ -432,11 +432,17 @@ pub fn run(
                 &ListIntegrationsParams {
                     page_size,
                     continuation_token,
-                    workspace_id: workspace,
+                    workspace_id: workspace.clone(),
                     agent_id: agent,
                 },
             )
             .context("list integrations")?;
+            // `--workspace` is a filter here; one naming no workspace would
+            // otherwise read as "no integrations".
+            if let Some(workspace) = &workspace {
+                ensure_workspace_if_empty(&client, workspace, data.items.is_empty())
+                    .context("list integrations")?;
+            }
             print_json(&data)
         }
         IntegrationCommand::Get { id } => print_json(

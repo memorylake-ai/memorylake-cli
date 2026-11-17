@@ -8,6 +8,7 @@ use std::fs;
 
 use crate::common::stub::{
     exchange, exchange_sequence, exchange_with_input, request_body, request_header, request_line,
+    workspace_found, workspace_not_found,
 };
 use crate::common::{assert_failure, assert_success};
 
@@ -54,12 +55,40 @@ fn list_filters_ride_the_query_string() {
         "--page-size",
         "5",
     ];
-    let (request, output) = exchange(page, &args);
+    let (requests, output) = exchange_sequence(&[page, &workspace_found("ws-1")], &args);
     assert_success(&output, &args);
 
     assert_eq!(
-        request_line(&request),
+        request_line(&requests[0]),
         "GET /admin/v1/integrations?page_size=5&workspace_id=ws-1&agent_id=ag-1 HTTP/1.1"
+    );
+    // An empty page filtered by workspace is checked against the workspace.
+    assert_eq!(
+        request_line(&requests[1]),
+        "GET /api/v3/workspaces/ws-1 HTTP/1.1"
+    );
+}
+
+#[test]
+fn list_filtered_by_a_missing_workspace_fails_with_workspace_not_found() {
+    let page = r#"{"success":true,"data":{"items":[],"total":0}}"#;
+    let args = ["integration", "list", "--workspace", "ws-gone"];
+    let (_, output) = exchange_sequence(&[page, &workspace_not_found("ws-gone")], &args);
+    let printed = assert_failure(&output, &args);
+    assert!(printed.contains("[WORKSPACE_NOT_FOUND]"), "{printed}");
+}
+
+#[test]
+fn unfiltered_empty_list_costs_no_workspace_lookup() {
+    let page = r#"{"success":true,"data":{"items":[],"total":0}}"#;
+    let args = ["integration", "list", "-vv"];
+    let (requests, output) = exchange_sequence(&[page], &args);
+    assert_success(&output, &args);
+    assert_eq!(requests.len(), 1);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("workspace lookup"),
+        "no workspace lookup without --workspace: {stderr}"
     );
 }
 

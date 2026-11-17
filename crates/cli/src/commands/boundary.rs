@@ -14,7 +14,7 @@ use memorylake_core::api::boundaries::{
 use memorylake_core::{Client, Paths, ResolveOverrides, resolve};
 
 use super::search::{IdList, parse_id_list};
-use super::{parse_non_blank, print_json, require_workspace};
+use super::{ensure_workspace_if_empty, parse_non_blank, print_json, require_workspace};
 
 /// Longest boundary name the API accepts.
 const MAX_NAME_CHARS: usize = 255;
@@ -169,6 +169,8 @@ pub fn run(
                 },
             )
             .with_context(|| format!("list boundaries in workspace `{workspace}`"))?;
+            ensure_workspace_if_empty(&client, &workspace, data.items.is_empty())
+                .with_context(|| format!("list boundaries in workspace `{workspace}`"))?;
             print_json(&data)?;
         }
         BoundaryCommand::Create {

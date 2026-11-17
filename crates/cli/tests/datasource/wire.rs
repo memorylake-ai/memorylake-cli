@@ -5,10 +5,14 @@
 
 use serde_json::{Value, json};
 
-use crate::common::assert_success;
-use crate::common::stub::{exchange_with_remembered_workspace, request_body, request_line};
+use crate::common::stub::{
+    exchange_sequence_with_remembered_workspace, exchange_with_remembered_workspace, request_body,
+    request_line, workspace_found, workspace_not_found,
+};
+use crate::common::{assert_failure, assert_success};
 
 const WS: &str = "ws-remembered";
+const EMPTY_PAGE: &str = r#"{"success":true,"data":{"items":[]}}"#;
 const DATASOURCE: &str = r#"{"success":true,"data":{"id":"ds-1","name":"sales","schemas":["public"],"db_connection_id":"conn-1","building_version":"20261009","build_version":""}}"#;
 const VOID: &str = r#"{"success":true,"data":{}}"#;
 
@@ -30,13 +34,30 @@ fn list_uses_the_remembered_workspace_and_every_filter() {
         "--continuation-token",
         "tok",
     ];
-    let (request, output) =
-        exchange_with_remembered_workspace(r#"{"success":true,"data":{"items":[]}}"#, WS, &args);
+    let (requests, output, _) =
+        exchange_sequence_with_remembered_workspace(&[EMPTY_PAGE, &workspace_found(WS)], WS, &args);
     assert_success(&output, &args);
     assert_eq!(
-        request_line(&request),
+        request_line(&requests[0]),
         "GET /api/v3/workspaces/ws-remembered/db-datasources?db_connection_id=conn-1&name_fuzzy=sal&page_size=3&continuation_token=tok HTTP/1.1"
     );
+    // An empty page is checked against the workspace itself.
+    assert_eq!(
+        request_line(&requests[1]),
+        "GET /api/v3/workspaces/ws-remembered HTTP/1.1"
+    );
+}
+
+#[test]
+fn list_of_a_missing_workspace_fails_with_workspace_not_found() {
+    let args = ["datasource", "list", "--workspace", "ws-gone"];
+    let (_, output, _) = exchange_sequence_with_remembered_workspace(
+        &[EMPTY_PAGE, &workspace_not_found("ws-gone")],
+        WS,
+        &args,
+    );
+    let printed = assert_failure(&output, &args);
+    assert!(printed.contains("[WORKSPACE_NOT_FOUND]"), "{printed}");
 }
 
 #[test]
