@@ -35,10 +35,15 @@ use commands::project::{ProjectCommand, run as run_project};
 use commands::role::{RoleCommand, run as run_role};
 use commands::router::{RouterCommand, run as run_router};
 use commands::search::{SearchArgs, run as run_search};
+use commands::self_manage::{SelfCommand, run as run_self};
 use commands::skill::{SkillCommand, run as run_skill};
 use commands::team::{TeamCommand, run as run_team};
 use commands::usage::{UsageArgs, run as run_usage};
 use commands::workspace::{WorkspaceCommand, run as run_workspace};
+
+/// The release tag this binary was built as, stamped by the release workflow;
+/// `None` for any other build.
+const RELEASE: Option<&str> = option_env!("MEMORYLAKE_RELEASE");
 
 /// What `--version` and `version` report.
 ///
@@ -47,7 +52,7 @@ use commands::workspace::{WorkspaceCommand, run as run_workspace};
 /// at 0.1.0 across every release, so it could not tell an upgraded install from
 /// a stale one. A build without the stamp says so rather than claiming a
 /// release it is not.
-const VERSION: &str = match option_env!("MEMORYLAKE_RELEASE") {
+const VERSION: &str = match RELEASE {
     Some(release) => release,
     None => concat!(env!("CARGO_PKG_VERSION"), " (dev build)"),
 };
@@ -238,6 +243,12 @@ enum Commands {
     },
     /// Print the CLI version.
     Version,
+    /// Manage this installation of the CLI: update it in place.
+    #[command(name = "self")]
+    SelfManage {
+        #[command(subcommand)]
+        command: SelfCommand,
+    },
 }
 
 fn main() -> Result<()> {
@@ -338,6 +349,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Version => {
             println!("{VERSION}");
         }
+        Commands::SelfManage { command } => run_self(command)?,
     }
 
     Ok(())

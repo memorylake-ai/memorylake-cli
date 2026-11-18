@@ -84,3 +84,4 @@ memorylake ws current       # which workspace commands default to, and why
 | Calling models with memory (MemoryRouter) | `router` |
 | Team | `team`, `key`, `member`, `invite`, `usage`, `billing`, `audit-log`, `integration` |
 | Access control | `role`, `perm`, `ag`, `access` |
+| This CLI itself | `self update` (`--check` only reports), `agent-skills`, `version` |

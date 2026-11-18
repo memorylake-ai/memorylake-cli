@@ -12,6 +12,7 @@
 //!   library/{offline,live}.rs
 //!   agent/{offline,live}.rs
 //!   agent_skills/offline.rs   # local only: installing the bundled skills
+//!   self_update/{offline,wire}.rs   # releases served from a loopback server
 //!   skill/{offline,wire,live}.rs
 //!   boundary/{offline,wire,live}.rs
 //!   auth/{offline,live}.rs
@@ -50,5 +51,6 @@ mod opendata;
 mod project;
 mod router;
 mod search;
+mod self_update;
 mod skill;
 mod workspace;
