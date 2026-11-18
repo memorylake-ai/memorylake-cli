@@ -128,7 +128,12 @@ impl Releases {
 
     /// A correct release whose binary reports `reported` for `version`.
     fn with_binary_reporting(reported: &str) -> (Self, Vec<u8>) {
-        let script = release_script(reported).into_bytes();
+        Self::with_script(release_script(reported))
+    }
+
+    /// A correct release whose binary is `script`.
+    fn with_script(script: String) -> (Self, Vec<u8>) {
+        let script = script.into_bytes();
         let archive = tar_gz(&format!("memorylake-{TAG}-{TARGET}/memorylake"), &script);
         let checksum = format!("{}  {}\n", sha256_hex(&archive), asset());
         (Self::serve(archive, checksum), script)
@@ -179,9 +184,10 @@ impl Install {
             .unwrap_or_else(|err| panic!("spawn memorylake {}: {err}", args.join(" ")))
     }
 
-    /// Mark a skill as installed by `agent-skills install` under `.claude`.
-    fn with_claude_skill(self) -> Self {
-        let skill = self.home.join(".claude/skills/memorylake-cli");
+    /// Mark a skill as installed by `agent-skills install` under `parent`
+    /// (`.claude` or `.agents`).
+    fn with_skill_in(self, parent: &str) -> Self {
+        let skill = self.home.join(parent).join("skills/memorylake-cli");
         fs::create_dir_all(&skill).expect("create skill dir");
         fs::write(
             skill.join(".memorylake-skill.toml"),
@@ -222,7 +228,7 @@ fn mode(path: &Path) -> u32 {
 #[test]
 fn update_replaces_the_binary_with_the_verified_latest_release() {
     let (releases, script) = Releases::with_binary_reporting(TAG);
-    let install = Install::new().with_claude_skill();
+    let install = Install::new().with_skill_in(".claude");
     let mode_before = mode(&install.exe);
 
     let args = ["self", "update", "--force"];
@@ -253,7 +259,7 @@ fn update_replaces_the_binary_with_the_verified_latest_release() {
 #[test]
 fn an_explicit_version_skips_the_latest_lookup_and_skills_can_be_left_alone() {
     let (releases, script) = Releases::with_binary_reporting(TAG);
-    let install = Install::new().with_claude_skill();
+    let install = Install::new().with_skill_in(".claude");
 
     // A bare date gains its `v`.
     let args = [
@@ -347,4 +353,45 @@ fn a_missing_release_names_the_tag_and_platform() {
     assert!(output.contains("v20000101"), "{output}");
     assert!(output.contains(TARGET), "{output}");
     install.assert_untouched();
+}
+
+#[test]
+fn skills_are_refreshed_in_every_target_that_had_them() {
+    let (releases, _) = Releases::with_binary_reporting(TAG);
+    let install = Install::new()
+        .with_skill_in(".claude")
+        .with_skill_in(".agents");
+
+    let args = ["self", "update", "--force"];
+    assert_success(&install.run(&releases, &args), &args);
+
+    let skills_args = fs::read_to_string(install.exe.with_file_name("skills-args"))
+        .expect("the new binary was asked to refresh skills");
+    assert_eq!(
+        skills_args.trim(),
+        "agent-skills install --target claude --target agents"
+    );
+}
+
+#[test]
+fn a_failed_skills_refresh_does_not_fail_the_update() {
+    // The binary is replaced by then; the skills can be retried on their own.
+    let script = format!(
+        "#!/bin/sh\ncase \"$1\" in\nversion) echo {TAG} ;;\n*) echo nope >&2; exit 1 ;;\nesac\n"
+    );
+    let (releases, installed) = Releases::with_script(script);
+    let install = Install::new().with_skill_in(".claude");
+
+    let args = ["self", "update", "--force"];
+    let output = install.run(&releases, &args);
+    let report = json(&assert_success(&output, &args));
+
+    assert_eq!(report["updated"], true);
+    assert!(report.get("agent_skills").is_none(), "{report}");
+    assert_eq!(fs::read(&install.exe).expect("read binary"), installed);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("agent-skills install` to retry"),
+        "{stderr}"
+    );
 }

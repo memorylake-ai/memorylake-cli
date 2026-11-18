@@ -70,34 +70,59 @@ pub struct UpdateArgs {
 
 /// What `self update` prints.
 #[derive(Debug, Serialize)]
-struct UpdateReport<'a> {
+struct UpdateReport {
     /// The version that was running.
-    from: &'a str,
+    from: String,
     /// The release asked for: the latest, or `--version`.
-    to: &'a str,
+    to: String,
     /// Whether `to` would replace `from`. Never true for an older release
     /// unless `--version` asked for it.
     update_available: bool,
     /// Whether the binary was replaced.
     updated: bool,
     /// The binary that was (or would be) replaced.
-    path: &'a Path,
+    path: PathBuf,
     /// What refreshing the coding-agent skills did, when that ran.
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_skills: Option<serde_json::Value>,
 }
 
+/// What an update works on: the binary installed, which build it is, and
+/// where releases come from. [`update`] describes this process; tests
+/// describe a copy served releases locally.
+struct Installation {
+    /// What `version` reports.
+    running: String,
+    /// The release tag the binary was built as; `None` for a dev build.
+    release: Option<String>,
+    /// The binary to replace.
+    exe: PathBuf,
+    /// The releases URL, without a trailing slash.
+    releases: String,
+}
+
 /// Execute a `self` subcommand.
 pub fn run(command: SelfCommand) -> Result<()> {
     match command {
-        SelfCommand::Update(args) => update(args),
+        SelfCommand::Update(args) => {
+            let installation = Installation {
+                running: crate::VERSION.to_string(),
+                release: crate::RELEASE.map(str::to_string),
+                exe: current_exe()?,
+                releases: releases_url(),
+            };
+            print_json(&update(&args, &installation)?)
+        }
     }
 }
 
-fn update(args: UpdateArgs) -> Result<()> {
-    let running = crate::VERSION;
-    let release = crate::RELEASE;
-    let exe = current_exe()?;
+fn update(args: &UpdateArgs, installation: &Installation) -> Result<UpdateReport> {
+    let Installation {
+        running,
+        release,
+        exe,
+        releases,
+    } = installation;
 
     // Decided before going to the network, so a dev build is turned away
     // without waiting on GitHub.
@@ -108,12 +133,11 @@ fn update(args: UpdateArgs) -> Result<()> {
         );
     }
 
-    let releases = releases_url();
     let tag = match &args.version {
         Some(tag) => tag.clone(),
         None => {
             eprintln!("checking for the latest release");
-            latest_tag(&releases)?
+            latest_tag(releases)?
         }
     };
     let update_available = match release {
@@ -121,15 +145,15 @@ fn update(args: UpdateArgs) -> Result<()> {
         // An explicit tag is wanted whatever its age; the latest only when
         // it is newer, so a build tagged after the last published release is
         // not "updated" backwards.
-        Some(current) if args.version.is_some() => current != tag,
+        Some(current) if args.version.is_some() => *current != tag,
         Some(current) => is_newer(&tag, current),
     };
     let mut report = UpdateReport {
-        from: running,
-        to: &tag,
+        from: running.clone(),
+        to: tag.clone(),
         update_available,
         updated: false,
-        path: &exe,
+        path: exe.clone(),
         agent_skills: None,
     };
 
@@ -139,24 +163,24 @@ fn update(args: UpdateArgs) -> Result<()> {
         } else {
             eprintln!("up to date ({running}; latest release: {tag})");
         }
-        return print_json(&report);
+        return Ok(report);
     }
     if !update_available && !args.force {
         eprintln!("already up to date ({running}); --force reinstalls {tag}");
-        return print_json(&report);
+        return Ok(report);
     }
 
-    let binary = download_release(&releases, &tag)?;
-    let staged = Staged::write(&exe, &binary)?;
+    let binary = download_release(releases, &tag)?;
+    let staged = Staged::write(exe, &binary)?;
     check_runs(&staged.0, &tag)?;
-    staged.swap_into(&exe)?;
+    staged.swap_into(exe)?;
     report.updated = true;
     eprintln!("updated {}: {running} -> {tag}", exe.display());
 
     if !args.no_skills {
-        report.agent_skills = refresh_agent_skills(&exe);
+        report.agent_skills = refresh_agent_skills(exe);
     }
-    print_json(&report)
+    Ok(report)
 }
 
 /// The releases URL, without a trailing slash.
@@ -267,20 +291,20 @@ fn tag_from_location(location: &str) -> Option<String> {
     parse_tag(tag).ok()
 }
 
-/// The archive name the release workflow gives this platform's build.
-fn asset_name(tag: &str) -> String {
-    let ext = if TARGET.contains("-windows-") {
+/// The archive name the release workflow gives the build for `target`.
+fn asset_name(tag: &str, target: &str) -> String {
+    let ext = if target.contains("-windows-") {
         "zip"
     } else {
         "tar.gz"
     };
-    format!("memorylake-{tag}-{TARGET}.{ext}")
+    format!("memorylake-{tag}-{target}.{ext}")
 }
 
 /// Download this platform's archive of `tag`, verify it, and return the
 /// binary inside.
 fn download_release(releases: &str, tag: &str) -> Result<Vec<u8>> {
-    let asset = asset_name(tag);
+    let asset = asset_name(tag, TARGET);
     let base = format!("{releases}/download/{tag}");
     let http = http_client(Policy::default())?;
 
@@ -524,6 +548,8 @@ fn refresh_agent_skills(exe: &Path) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
 
@@ -546,6 +572,10 @@ mod tests {
         // Unorderable tags never withhold an update, and never repeat one.
         assert!(is_newer("nightly", "v20261117"));
         assert!(!is_newer("nightly", "nightly"));
+        assert!(
+            is_newer("v2026", "v20261117"),
+            "a short date is not ordered"
+        );
     }
 
     #[test]
@@ -570,11 +600,14 @@ mod tests {
 
     #[test]
     fn assets_are_named_like_the_release_workflow_names_them() {
-        let asset = asset_name("v20261117");
-        assert!(asset.starts_with(&format!("memorylake-v20261117-{TARGET}.")));
-        let windows = TARGET.contains("-windows-");
-        assert_eq!(asset.ends_with(".zip"), windows, "{asset}");
-        assert_eq!(asset.ends_with(".tar.gz"), !windows, "{asset}");
+        assert_eq!(
+            asset_name("v20261117", "aarch64-apple-darwin"),
+            "memorylake-v20261117-aarch64-apple-darwin.tar.gz"
+        );
+        assert_eq!(
+            asset_name("v20261117", "x86_64-pc-windows-msvc"),
+            "memorylake-v20261117-x86_64-pc-windows-msvc.zip"
+        );
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
@@ -660,5 +693,185 @@ mod tests {
             let binary = extract_binary("memorylake-v1-x.zip", &archive).expect("extract");
             assert_eq!(binary, b"exe", "{path}");
         }
+        let archive = zip_of(&[("memorylake-v1-x/README.md", b"readme")]);
+        let err = extract_binary("memorylake-v1-x.zip", &archive).unwrap_err();
+        assert!(
+            err.to_string().contains("does not contain memorylake.exe"),
+            "{err}"
+        );
+    }
+
+    /// A loopback server answering GET by path with `(status line rest,
+    /// body)`; unknown paths get 404. Returns its base URL and the paths it
+    /// was asked for.
+    fn serve(routes: Vec<(String, String, Vec<u8>)>) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&requested);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let request = String::from_utf8_lossy(&request);
+                let path = request.split_whitespace().nth(1).unwrap_or("").to_string();
+                log.lock().expect("log").push(path.clone());
+                let (status, body) = routes
+                    .iter()
+                    .find(|(route, _, _)| *route == path)
+                    .map(|(_, status, body)| (status.clone(), body.clone()))
+                    .unwrap_or_else(|| ("404 Not Found".to_string(), Vec::new()));
+                let head = format!(
+                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        (base, requested)
+    }
+
+    /// Releases whose `/latest` redirects to `latest`; nothing to download.
+    fn releases_with_latest(latest: &str) -> (String, Arc<Mutex<Vec<String>>>) {
+        let (base, requested) = serve(vec![(
+            "/releases/latest".to_string(),
+            format!("302 Found\r\nlocation: /releases/tag/{latest}"),
+            Vec::new(),
+        )]);
+        (format!("{base}/releases"), requested)
+    }
+
+    fn args() -> UpdateArgs {
+        UpdateArgs {
+            version: None,
+            check: false,
+            force: false,
+            no_skills: true,
+        }
+    }
+
+    fn installed(release: &str, releases: String) -> Installation {
+        Installation {
+            running: release.to_string(),
+            release: Some(release.to_string()),
+            exe: PathBuf::from("/nonexistent/memorylake"),
+            releases,
+        }
+    }
+
+    #[test]
+    fn the_latest_release_installed_already_is_left_alone() {
+        let (releases, requested) = releases_with_latest("v20261117");
+        let installation = installed("v20261117", releases);
+
+        let report = update(&args(), &installation).expect("nothing to do");
+        assert!(!report.update_available && !report.updated, "{report:?}");
+        let check = UpdateArgs {
+            check: true,
+            ..args()
+        };
+        let report = update(&check, &installation).expect("check");
+        assert!(!report.update_available && !report.updated, "{report:?}");
+        // Nothing beyond the lookups: no download was attempted.
+        assert_eq!(
+            *requested.lock().expect("log"),
+            ["/releases/latest", "/releases/latest"]
+        );
+    }
+
+    #[test]
+    fn a_build_newer_than_the_latest_release_is_not_moved_back() {
+        let (releases, _) = releases_with_latest("v20261102");
+        let report = update(&args(), &installed("v20261117", releases)).expect("nothing to do");
+        assert_eq!(report.to, "v20261102");
+        assert!(!report.update_available && !report.updated, "{report:?}");
+    }
+
+    #[test]
+    fn an_explicit_version_already_installed_needs_no_lookup() {
+        let installation = installed("v20261117", "http://127.0.0.1:9/releases".to_string());
+        let explicit = UpdateArgs {
+            version: Some("v20261117".to_string()),
+            ..args()
+        };
+        let report = update(&explicit, &installation).expect("nothing to do");
+        assert!(!report.update_available && !report.updated, "{report:?}");
+    }
+
+    #[test]
+    fn latest_must_redirect_to_a_tag() {
+        let (base, _) = serve(vec![(
+            "/releases/latest".to_string(),
+            "200 OK".to_string(),
+            b"a page".to_vec(),
+        )]);
+        let err = latest_tag(&format!("{base}/releases")).unwrap_err();
+        assert!(err.to_string().contains("without a redirect"), "{err}");
+
+        // What GitHub answers for a repository with no release yet.
+        let (base, _) = serve(vec![(
+            "/releases/latest".to_string(),
+            "302 Found\r\nlocation: /releases".to_string(),
+            Vec::new(),
+        )]);
+        let err = latest_tag(&format!("{base}/releases")).unwrap_err();
+        assert!(err.to_string().contains("no release is published"), "{err}");
+    }
+
+    /// A fresh scratch directory.
+    #[cfg(unix)]
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "memorylake-self-update-{tag}-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        ));
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_binary_that_fails_to_run_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = scratch_dir("fails");
+        let binary = dir.join("memorylake");
+        fs::write(&binary, "#!/bin/sh\necho broken >&2\nexit 3\n").expect("write");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let err = check_runs(&binary, "v20261117").unwrap_err();
+        assert!(err.to_string().contains("does not run here"), "{err}");
+        assert!(err.to_string().contains("broken"), "{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unwritable_install_directory_is_explained() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = scratch_dir("readonly");
+        let exe = dir.join("memorylake");
+        fs::write(&exe, "old").expect("write");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).expect("chmod");
+        let result = Staged::write(&exe, b"new");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("chmod back");
+        // Root writes anywhere; there is nothing to refuse then.
+        if let Err(err) = result {
+            assert!(err.to_string().contains("permission denied"), "{err}");
+            assert!(
+                err.to_string().contains(&dir.display().to_string()),
+                "{err}"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }
