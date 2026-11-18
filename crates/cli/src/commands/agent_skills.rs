@@ -544,6 +544,22 @@ fn resolve_targets(args: &TargetArgs, default: DefaultTargets) -> Result<(PathBu
     Ok((base, targets))
 }
 
+/// The `--target` values whose home directory holds skills `install` wrote,
+/// so `self update` can refresh exactly those after replacing the binary.
+pub(crate) fn installed_targets() -> Result<Vec<&'static str>> {
+    let home = home_dir()?;
+    let mut found = Vec::new();
+    for target in Target::ALL {
+        if !managed_dirs(&target.dir(&home))?.is_empty() {
+            found.push(match target {
+                Target::Claude => "claude",
+                Target::Agents => "agents",
+            });
+        }
+    }
+    Ok(found)
+}
+
 fn home_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os(ENV_HOME).filter(|dir| !dir.is_empty()) {
         return Ok(PathBuf::from(dir));

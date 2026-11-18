@@ -29,6 +29,7 @@ pub mod project;
 pub mod role;
 pub mod router;
 pub mod search;
+pub mod self_manage;
 pub mod skill;
 pub mod team;
 pub mod usage;

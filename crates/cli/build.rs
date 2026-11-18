@@ -4,6 +4,9 @@
 //! coding agents read skills from. Embedding them, rather than downloading
 //! them at install time, keeps each skill describing exactly the commands of
 //! the binary that carries it, and works offline.
+//!
+//! Also records the target triple, which `self update` needs to pick the
+//! release archive built for this platform.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,6 +15,14 @@ use std::path::{Path, PathBuf};
 const IGNORED_NAMES: &[&str] = &[".DS_Store", "Thumbs.db"];
 
 fn main() {
+    // The target triple this binary is built for, which names the release
+    // archive `self update` downloads. Release builds pass `--target`, so it
+    // matches the asset names exactly.
+    println!(
+        "cargo:rustc-env=MEMORYLAKE_TARGET={}",
+        std::env::var("TARGET").expect("cargo sets it")
+    );
+
     let manifest_dir =
         PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets it"));
     let skills_dir = manifest_dir.join("..").join("..").join("skills");

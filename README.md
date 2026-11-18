@@ -80,9 +80,28 @@ it against its `.sha256`, and put `memorylake` on your `PATH`.
 
 ### Upgrading
 
-Re-run the same install command. It replaces the binary in place and leaves your
-credentials and workspace alone — an install that is already logged in is not
-asked to set anything up again.
+```bash
+memorylake self update                      # install the latest release in place
+memorylake self update --check              # only report whether one is available
+memorylake self update --version v20261117  # install that release, older ones included
+```
+
+`self update` downloads the archive for this platform from the
+[releases page](https://github.com/memorylake-ai/memorylake-cli/releases),
+refuses it unless it matches its published SHA-256, runs the new binary to
+confirm it is the release asked for, and only then swaps it in for the one you
+ran. Credentials and workspace are left alone. Skills that `agent-skills
+install` put into coding agents are refreshed from the new binary — only in the
+agents that already had them; `--no-skills` leaves them as they are.
+
+It prints a JSON report (`from`, `to`, `update_available`, `updated`, `path`)
+and does nothing when the latest release is the one installed; `--force`
+reinstalls it. A dev build is not replaced unless `--force` says so. If the
+binary sits in a directory you cannot write to, run it as a user who can.
+`MEMORYLAKE_RELEASES_URL` points it at a mirror laid out like the releases page.
+
+Re-running the install command works too, and is the way back if the binary
+itself will not start.
 
 ```bash
 memorylake version    # v20260818.1 — which release this is
@@ -682,7 +701,8 @@ machine (`~/.claude` for the first; `~/.agents`, `~/.codex`, `~/.gemini` or
 `.agents/skills/` instead, for skills committed with a repository.
 
 The skills come from the binary itself, so they always describe the commands
-of the version installed; re-run `install` after upgrading. Each installed
+of the version installed; `self update` and the installers refresh them, and
+after any other upgrade re-run `install`. Each installed
 directory records what was written to it. A directory `install` did not write
 is never touched, and one edited since it was written is kept until `--force`
 says otherwise — for `uninstall` as well. Skills a newer release no longer
