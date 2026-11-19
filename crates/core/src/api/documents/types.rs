@@ -41,6 +41,17 @@ pub struct DocumentUsage {
     pub files_process_tokens: u64,
 }
 
+/// The Library item a document was imported from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveItem {
+    /// Library item id; pass it to the Library download to fetch the original file.
+    pub id: String,
+    /// Resource URI (`drive://...`). The server leaves it out when it cannot
+    /// resolve where the item lives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+}
+
 /// A Library file imported into a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
@@ -65,6 +76,9 @@ pub struct Document {
     /// Source classification. `drive_file` for Library imports.
     #[serde(default)]
     pub document_type: Option<String>,
+    /// The Library item this document was imported from.
+    #[serde(default)]
+    pub drive_item: Option<DriveItem>,
     /// Import timestamp (ISO 8601).
     #[serde(default)]
     pub created_at: Option<String>,
@@ -178,6 +192,7 @@ mod tests {
                 "error": null,
                 "usage": {"files_process_tokens": 1024},
                 "document_type": "drive_file",
+                "drive_item": {"id": "sc-a:inode-1", "uri": "drive://drive-1/sc-a:inode-1"},
                 "created_at": "2026-03-15T09:00:00Z"
             }"#,
         )
@@ -193,6 +208,18 @@ mod tests {
             })
         );
         assert_eq!(document.document_type.as_deref(), Some("drive_file"));
+        let item = document.drive_item.expect("drive_item");
+        assert_eq!(item.id, "sc-a:inode-1");
+        assert_eq!(item.uri.as_deref(), Some("drive://drive-1/sc-a:inode-1"));
+    }
+
+    #[test]
+    fn drive_item_may_omit_its_uri() {
+        let document: Document = serde_json::from_str(
+            r#"{"id":"doc-1","name":"a.pdf","status":"okay","drive_item":{"id":"sc-a:inode-1"}}"#,
+        )
+        .expect("deserialize");
+        assert_eq!(document.drive_item.expect("item").uri, None);
     }
 
     #[test]

@@ -38,6 +38,6 @@ pub use list::{DocumentList, ListDocumentsParams, list_documents};
 pub use reload::reload_document;
 pub use types::{
     DOCUMENT_STATUS_ERROR, DOCUMENT_STATUS_OKAY, DOCUMENT_STATUS_PENDING, DOCUMENT_STATUS_RUNNING,
-    Document, DocumentUsage, IMPORT_RESULT_DUPLICATE, IMPORT_RESULT_FAILED, IMPORT_RESULT_SUCCESS,
-    ImportDetail, ImportOutcome, is_terminal_status,
+    Document, DocumentUsage, DriveItem, IMPORT_RESULT_DUPLICATE, IMPORT_RESULT_FAILED,
+    IMPORT_RESULT_SUCCESS, ImportDetail, ImportOutcome, is_terminal_status,
 };
