@@ -1,0 +1,19 @@
+{
+  "name": "@memorylake/cli",
+  "version": "0.0.0",
+  "description": "MemoryLake CLI: drive the MemoryLake API from the terminal or a coding agent.",
+  "keywords": ["memorylake", "cli", "memory", "agent"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/memorylake-ai/memorylake-cli.git"
+  },
+  "homepage": "https://github.com/memorylake-ai/memorylake-cli#readme",
+  "bin": {
+    "memorylake": "bin/memorylake.js"
+  },
+  "files": ["bin", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=18"
+  }
+}
