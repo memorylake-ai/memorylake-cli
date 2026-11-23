@@ -85,6 +85,13 @@ Pushing a `v*` tag triggers the release workflow, which builds macOS
 attaches them with SHA-256 checksums to the GitHub Release. Unix ships
 `.tar.gz`, Windows `.zip`.
 
+The same workflow publishes the binaries to npm as `@memorylake/cli`, with
+one package per platform that npm picks from (`npm/build-packages.mjs`). The npm
+version follows the tag: `v20260818` is `20260818.0.0` and `v20260818.1` is
+`20260818.1.0`. Publishing needs the `NPM_TOKEN` repository secret, a token
+allowed to publish to the `@memorylake` scope; without it the job warns and
+publishes nothing.
+
 The installers in `scripts/` download whatever `latest` resolves to, so a
 release that adds a command the scripts guide people through should be tagged
 promptly after merging.

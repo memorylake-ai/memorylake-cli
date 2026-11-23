@@ -37,8 +37,19 @@ curl -fsSL https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/s
 irm https://raw.githubusercontent.com/memorylake-ai/memorylake-cli/main/scripts/install.ps1 | iex
 ```
 
-Both verify the download against its published SHA-256 and refuse to install on a
-mismatch. Re-running upgrades in place. On a first install they walk you through
+**npm (any of the above, with Node.js 18 or newer)**
+
+```bash
+npm install -g @memorylake/cli
+```
+
+npm downloads only the binary for your machine, from whichever registry or
+mirror npm is set to use, so this also works where GitHub is slow or blocked. It
+installs the binary and nothing else: log in with `memorylake auth login`, and
+upgrade with `npm install -g @memorylake/cli@latest`.
+
+The two install scripts verify the download against its published SHA-256 and
+refuse to install on a mismatch. Re-running upgrades in place. On a first install they walk you through
 logging in and picking a workspace; `MEMORYLAKE_VERSION`,
 `MEMORYLAKE_INSTALL_DIR`, `MEMORYLAKE_INSTALL_NAME` and `MEMORYLAKE_NO_SETUP`
 override the details — see the comments at the top of either script.
