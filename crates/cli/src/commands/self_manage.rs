@@ -250,8 +250,8 @@ fn current_exe() -> Result<PathBuf> {
     Ok(exe)
 }
 
-fn http_client(redirects: Policy) -> Result<Client> {
-    Client::builder()
+fn http_client(releases: &str, redirects: Policy) -> Result<Client> {
+    memorylake_core::http::client_builder(releases)
         .user_agent(format!("memorylake-cli/{}", crate::VERSION))
         .redirect(redirects)
         .connect_timeout(Duration::from_secs(30))
@@ -265,7 +265,7 @@ fn http_client(redirects: Policy) -> Result<Client> {
 /// installers make.
 fn latest_tag(releases: &str) -> Result<String> {
     let url = format!("{releases}/latest");
-    let response = http_client(Policy::none())?
+    let response = http_client(releases, Policy::none())?
         .get(&url)
         .send()
         .with_context(|| format!("look up the latest release at {url}"))?;
@@ -306,7 +306,7 @@ fn asset_name(tag: &str, target: &str) -> String {
 fn download_release(releases: &str, tag: &str) -> Result<Vec<u8>> {
     let asset = asset_name(tag, TARGET);
     let base = format!("{releases}/download/{tag}");
-    let http = http_client(Policy::default())?;
+    let http = http_client(releases, Policy::default())?;
 
     eprintln!("downloading {asset}");
     let archive = download(&http, &format!("{base}/{asset}")).with_context(|| {

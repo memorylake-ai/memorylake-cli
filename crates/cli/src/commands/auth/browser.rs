@@ -171,22 +171,32 @@ where
             continue;
         };
         if method != "GET" {
-            respond(&mut stream, "405 Method Not Allowed", &Page::NOT_THE_LOGIN);
+            respond(
+                &mut stream,
+                "405 Method Not Allowed",
+                &Page::NOT_THE_LOGIN,
+                None,
+            );
             continue;
         }
         match parse_callback(&target, state) {
-            Callback::NotCallback => respond(&mut stream, "404 Not Found", &Page::NOT_THE_LOGIN),
-            Callback::WrongState => respond(&mut stream, "400 Bad Request", &Page::NOT_THE_LOGIN),
+            Callback::NotCallback => {
+                respond(&mut stream, "404 Not Found", &Page::NOT_THE_LOGIN, None);
+            }
+            Callback::WrongState => {
+                respond(&mut stream, "400 Bad Request", &Page::NOT_THE_LOGIN, None);
+            }
             Callback::Denied => {
-                respond(&mut stream, "200 OK", &Page::CANCELLED);
+                respond(&mut stream, "200 OK", &Page::CANCELLED, None);
                 bail!("the login was cancelled in the browser");
             }
             Callback::Refused { error, description } => {
-                respond(&mut stream, "200 OK", &Page::FAILED);
-                match description {
-                    Some(description) => bail!("the login was refused: {description} [{error}]"),
-                    None => bail!("the login was refused [{error}]"),
-                }
+                let reason = match description {
+                    Some(description) => format!("the login was refused: {description} [{error}]"),
+                    None => format!("the login was refused [{error}]"),
+                };
+                respond(&mut stream, "200 OK", &Page::FAILED, Some(&reason));
+                bail!(reason);
             }
             Callback::Code(code) => break code,
         }
@@ -195,12 +205,20 @@ where
     // The browser is kept waiting for this, so the page it ends on is true.
     match finish(&code) {
         Ok(issued) => {
-            respond(&mut stream, "200 OK", &Page::DONE);
+            respond(&mut stream, "200 OK", &Page::DONE, None);
             Ok(issued)
         }
         Err(err) => {
-            respond(&mut stream, "200 OK", &Page::FAILED);
-            Err(err.into())
+            // The whole chain: the cause that matters, such as a certificate
+            // the system trusts and this program did not, is often the last.
+            let err = anyhow::Error::from(err);
+            respond(
+                &mut stream,
+                "200 OK",
+                &Page::FAILED,
+                Some(&format!("{err:#}")),
+            );
+            Err(err)
         }
     }
 }
@@ -231,8 +249,12 @@ fn read_request_line(stream: &mut TcpStream) -> Option<(String, String)> {
     Some((method, target))
 }
 
-/// A page shown in the browser. Fixed text only: nothing a request or the
-/// server said is ever echoed into one.
+/// A page shown in the browser.
+///
+/// Fixed text, except for why a login failed: the program that started the
+/// login may have no terminal anyone can see (an app runs it in the
+/// background), so the browser is the one place the reason is sure to reach.
+/// That reason is escaped, and nothing from the request itself is ever echoed.
 struct Page {
     title: &'static str,
     english: &'static str,
@@ -252,8 +274,8 @@ impl Page {
     };
     const FAILED: Self = Self {
         title: "Login failed",
-        english: "Login failed. The terminal that started it says why.",
-        chinese: "登录失败，原因见发起登录的终端。",
+        english: "Login failed.",
+        chinese: "登录失败。",
     };
     const NOT_THE_LOGIN: Self = Self {
         title: "Not a login page",
@@ -262,15 +284,23 @@ impl Page {
         chinese: "此地址仅用于完成一次正在等待的 MemoryLake 登录，请从登录命令打印的链接重新开始。",
     };
 
-    fn html(&self) -> String {
+    fn html(&self, detail: Option<&str>) -> String {
+        let detail = detail.map_or_else(String::new, |detail| {
+            format!(
+                "<pre>{}</pre>",
+                escape_html(&truncate_chars(detail.trim(), MAX_DETAIL_CHARS))
+            )
+        });
         format!(
             "<!doctype html><html><head><meta charset=\"utf-8\">\
              <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
              <title>{title} · MemoryLake</title>\
              <style>body{{font:16px/1.6 system-ui,sans-serif;margin:18vh auto;max-width:32em;\
              padding:0 1.5em;color:#1f2328;background:#fff}}h1{{font-size:1.3em}}\
+             pre{{white-space:pre-wrap;word-break:break-word;font-size:.85em;padding:.8em 1em;\
+             border-radius:6px;background:rgba(127,127,127,.12)}}\
              @media(prefers-color-scheme:dark){{body{{color:#e6edf3;background:#0d1117}}}}</style>\
-             </head><body><h1>MemoryLake</h1><p>{english}</p><p lang=\"zh\">{chinese}</p>\
+             </head><body><h1>MemoryLake</h1><p>{english}</p><p lang=\"zh\">{chinese}</p>{detail}\
              </body></html>",
             title = self.title,
             english = self.english,
@@ -282,8 +312,8 @@ impl Page {
 /// Answer the browser and close the connection. Best effort: by now the login
 /// has succeeded or failed on its own account, and a tab that was closed early
 /// must not change that.
-fn respond(stream: &mut TcpStream, status: &str, page: &Page) {
-    let body = page.html();
+fn respond(stream: &mut TcpStream, status: &str, page: &Page, detail: Option<&str>) {
+    let body = page.html(detail);
     let head = format!(
         "HTTP/1.1 {status}\r\n\
          Content-Type: text/html; charset=utf-8\r\n\
@@ -298,6 +328,31 @@ fn respond(stream: &mut TcpStream, status: &str, page: &Page) {
         .and_then(|()| stream.write_all(body.as_bytes()))
         .and_then(|()| stream.flush());
     let _ = stream.shutdown(std::net::Shutdown::Write);
+}
+
+/// Longest failure reason shown in the browser, in characters.
+const MAX_DETAIL_CHARS: usize = 1000;
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
+    }
+}
+
+fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 /// The name the new key is created under.
@@ -475,6 +530,10 @@ mod tests {
 
         assert!(response.contains("Login failed"), "{response}");
         assert!(!response.contains("Login complete"), "{response}");
+        assert!(
+            response.contains("you are not allowed to create API keys"),
+            "the browser is told why: {response}"
+        );
         let (result, _) = done.recv().expect("login thread");
         assert!(
             result
@@ -482,6 +541,38 @@ mod tests {
                 .to_string()
                 .contains("not allowed")
         );
+    }
+
+    #[test]
+    fn a_refusal_shows_its_reason_escaped() {
+        let (port, done) = waiting(Duration::from_secs(10), Ok(issued()));
+        let response = browser_get(
+            port,
+            "/callback?error=server_error&error_description=%3Cscript%3Ex%3C%2Fscript%3E&state=the-state",
+        );
+
+        assert!(response.contains("Login failed"), "{response}");
+        assert!(
+            response.contains("&lt;script&gt;x&lt;/script&gt; [server_error]"),
+            "{response}"
+        );
+        assert!(!response.contains("<script>"), "{response}");
+        let (result, _) = done.recv().expect("login thread");
+        assert!(
+            result
+                .expect_err("refused")
+                .to_string()
+                .contains("server_error")
+        );
+    }
+
+    #[test]
+    fn a_long_reason_is_cut_short() {
+        let long = "x".repeat(MAX_DETAIL_CHARS + 50);
+        let cut = truncate_chars(&long, MAX_DETAIL_CHARS);
+        assert_eq!(cut.chars().count(), MAX_DETAIL_CHARS + 1);
+        assert!(cut.ends_with('…'));
+        assert_eq!(truncate_chars("名字", 5), "名字");
     }
 
     #[test]
