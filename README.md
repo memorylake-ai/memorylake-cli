@@ -1081,6 +1081,13 @@ there.
   closes before the task settles.
 - **Ids are checked before anything is sent.** An empty id, `.` or `..` is
   refused locally, so a stray argument cannot address a parent resource.
+- **The network is the browser's.** HTTPS certificates are checked against the
+  system's certificate store as well as the bundled Mozilla roots, so a company
+  gateway or antivirus that inspects HTTPS with a root of its own is trusted
+  here too. The proxy is `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`, or when
+  those are unset the system settings (macOS network settings, Windows Internet
+  Options; a PAC file is not read). Addresses on this machine are always
+  reached directly.
 - `-v` / `-vv` raise log verbosity, and `RUST_LOG` is honoured.
 
 ## Learn more

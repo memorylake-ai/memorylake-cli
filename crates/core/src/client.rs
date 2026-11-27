@@ -177,11 +177,14 @@ impl Client {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-        let http = HttpClient::builder().default_headers(headers).build()?;
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        let http = crate::http::client_builder(&base_url)
+            .default_headers(headers)
+            .build()?;
 
         Ok(Self {
             http,
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            base_url,
             api_key: api_key.into(),
         })
     }

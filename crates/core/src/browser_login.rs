@@ -252,7 +252,7 @@ impl LoginClient {
     /// hosted ones.
     pub fn new(base_url: &str) -> Result<Self> {
         let origin = authorization_origin(base_url)?;
-        let http = HttpClient::builder()
+        let http = crate::http::client_builder(&origin)
             .timeout(REQUEST_TIMEOUT)
             // The login endpoints answer directly. A redirect would send a
             // code, a token or a key somewhere this client was not pointed at.
