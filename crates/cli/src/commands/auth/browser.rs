@@ -567,6 +567,30 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_without_a_description_still_names_the_error() {
+        let (port, done) = waiting(Duration::from_secs(10), Ok(issued()));
+        let response = browser_get(port, "/callback?error=server_error&state=the-state");
+
+        assert!(
+            response.contains("the login was refused [server_error]"),
+            "{response}"
+        );
+        let (result, _) = done.recv().expect("login thread");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn every_character_html_reads_as_markup_is_escaped() {
+        assert_eq!(
+            escape_html(r#"<a href="x" title='y'>&</a>"#),
+            "&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp;&lt;/a&gt;"
+        );
+        let page = Page::FAILED.html(Some("  a < b  "));
+        assert!(page.contains("<pre>a &lt; b</pre>"), "{page}");
+        assert!(!Page::DONE.html(None).contains("<pre>"));
+    }
+
+    #[test]
     fn a_long_reason_is_cut_short() {
         let long = "x".repeat(MAX_DETAIL_CHARS + 50);
         let cut = truncate_chars(&long, MAX_DETAIL_CHARS);

@@ -60,8 +60,19 @@ mod tests {
             "https://localhost.example.com",
             "http://10.0.0.1",
             "not a url",
+            "mailto:someone@example.com",
         ] {
             assert!(!is_loopback(target), "{target}");
+        }
+    }
+
+    #[test]
+    fn a_client_builds_for_either_kind_of_target() {
+        for target in [
+            "http://127.0.0.1:8080",
+            "https://app.memorylake.cn/openapi/memorylake",
+        ] {
+            client_builder(target).build().expect(target);
         }
     }
 }
